@@ -65,11 +65,21 @@ std::string format_timestamp(std::time_t mtime)
 {
     char buf[64];
     std::tm tm_buf{};
-    std::tm *tm_info = localtime_r(&mtime, &tm_buf);
-    if (!tm_info)
+    bool tm_ok = false;
+    {
+        static std::mutex s_scanner_time_mutex;
+        std::lock_guard<std::mutex> lock(s_scanner_time_mutex);
+        std::tm *tm_info = std::localtime(&mtime);
+        if (tm_info)
+        {
+            tm_buf = *tm_info;
+            tm_ok = true;
+        }
+    }
+    if (!tm_ok)
         return "Fecha desconocida";
 
-    std::strftime(buf, sizeof(buf), "%d/%m/%Y, %I:%M %p", tm_info);
+    std::strftime(buf, sizeof(buf), "%d/%m/%Y, %I:%M %p", &tm_buf);
     return std::string(buf);
 }
 

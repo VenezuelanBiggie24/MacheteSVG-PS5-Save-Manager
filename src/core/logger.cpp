@@ -243,9 +243,18 @@ void vwrite(const char *tag, const char *fmt, va_list args)
     char time_str[32];
     std::time_t now = std::time(nullptr);
     std::tm tm_buf{};
-    std::tm *tm_info = localtime_r(&now, &tm_buf);
-    if (tm_info)
-        std::strftime(time_str, sizeof(time_str), "%H:%M:%S", tm_info);
+    bool tm_ok = false;
+    {
+        std::lock_guard<std::recursive_mutex> lock(s_log_mutex);
+        std::tm *tm_info = std::localtime(&now);
+        if (tm_info)
+        {
+            tm_buf = *tm_info;
+            tm_ok = true;
+        }
+    }
+    if (tm_ok)
+        std::strftime(time_str, sizeof(time_str), "%H:%M:%S", &tm_buf);
     else
         std::snprintf(time_str, sizeof(time_str), "00:00:00");
 

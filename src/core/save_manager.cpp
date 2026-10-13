@@ -968,11 +968,21 @@ std::vector<BackupItem> find_available_backups(const scanner::ScannedGame &game,
             item.title = game.title;
 
             std::tm tm_buf{};
-            std::tm *tm_info = localtime_r(&st.st_mtime, &tm_buf);
-            if (tm_info)
+            bool tm_ok = false;
+            {
+                static std::mutex s_backup_time_mutex;
+                std::lock_guard<std::mutex> lock(s_backup_time_mutex);
+                std::tm *tm_info = std::localtime(&st.st_mtime);
+                if (tm_info)
+                {
+                    tm_buf = *tm_info;
+                    tm_ok = true;
+                }
+            }
+            if (tm_ok)
             {
                 char time_buf[64];
-                std::strftime(time_buf, sizeof(time_buf), "%d/%m/%Y, %I:%M %p", tm_info);
+                std::strftime(time_buf, sizeof(time_buf), "%d/%m/%Y, %I:%M %p", &tm_buf);
                 item.timestamp_str = time_buf;
             }
             else
