@@ -168,39 +168,30 @@ bool copy_file_with_fsync(const std::string &src, const std::string &dst,
         return false;
     }
 
-    // Si el archivo de destino ya existe, asegurar permisos de escritura para evitar EACCES (archivos 0444)
-    if (access(dst.c_str(), F_OK) == 0)
-    {
-        (void)chmod(dst.c_str(), 0666);
-    }
+    const std::string tmp_dst = dst + ".mcht_tmp";
+    (void)unlink(tmp_dst.c_str());
 
-    std::FILE *out = std::fopen(dst.c_str(), "wb");
+    std::FILE *out = std::fopen(tmp_dst.c_str(), "wb");
     if (!out)
     {
-        // En caso de bloqueo del sistema de archivos, forzar desenlace (unlink) y reintentar
-        (void)unlink(dst.c_str());
-        out = std::fopen(dst.c_str(), "wb");
-        if (!out)
-        {
-            MACHETE_LOG("[COPY]", "Fallo al abrir archivo de destino para escritura: %s (errno=%d: %s)",
-                        dst.c_str(), errno, std::strerror(errno));
-            std::fclose(in);
-            return false;
-        }
+        MACHETE_LOG("[COPY]", "Fallo al abrir archivo temporal para escritura: %s (errno=%d: %s)",
+                    tmp_dst.c_str(), errno, std::strerror(errno));
+        std::fclose(in);
+        return false;
     }
 
-    std::vector<char> buffer(64 * 1024);
+    alignas(64) char buffer[64 * 1024];
     std::size_t n = 0;
-    bool ok = true;
+    bool write_ok = true;
     std::uint64_t last_cb_bytes = bytes_copied;
 
-    while ((n = std::fread(buffer.data(), 1, buffer.size(), in)) > 0)
+    while ((n = std::fread(buffer, 1, sizeof(buffer), in)) > 0)
     {
-        if (std::fwrite(buffer.data(), 1, n, out) != n)
+        if (std::fwrite(buffer, 1, n, out) != n)
         {
-            MACHETE_LOG("[COPY]", "Error escribiendo en destino %s (errno=%d: %s)",
-                        dst.c_str(), errno, std::strerror(errno));
-            ok = false;
+            MACHETE_LOG("[COPY]", "Error escribiendo en destino temporal %s (errno=%d: %s)",
+                        tmp_dst.c_str(), errno, std::strerror(errno));
+            write_ok = false;
             break;
         }
         bytes_copied += n;
@@ -221,14 +212,42 @@ bool copy_file_with_fsync(const std::string &src, const std::string &dst,
         }
     }
 
-    std::fflush(out);
+    std::fclose(in);
+
+    if (std::fflush(out) != 0)
+        write_ok = false;
+
     int fd = fileno(out);
     if (fd >= 0)
     {
-        fsync(fd);
+        if (::fsync(fd) != 0)
+        {
+            MACHETE_LOG("[COPY]", "fsync fallo en %s (errno=%d: %s)", tmp_dst.c_str(), errno, std::strerror(errno));
+            write_ok = false;
+        }
     }
-    std::fclose(out);
-    std::fclose(in);
+
+    if (std::fclose(out) != 0)
+        write_ok = false;
+
+    if (!write_ok)
+    {
+        (void)unlink(tmp_dst.c_str());
+        return false;
+    }
+
+    // Reemplazo atómico con rename
+    if (std::rename(tmp_dst.c_str(), dst.c_str()) != 0)
+    {
+        (void)unlink(dst.c_str());
+        if (std::rename(tmp_dst.c_str(), dst.c_str()) != 0)
+        {
+            MACHETE_LOG("[COPY]", "rename fallo de %s a %s (errno=%d: %s)",
+                        tmp_dst.c_str(), dst.c_str(), errno, std::strerror(errno));
+            (void)unlink(tmp_dst.c_str());
+            return false;
+        }
+    }
 
     // Otorgar permisos abiertos al destino para que Prospero y los juegos puedan leerlo libremente
     (void)chmod(dst.c_str(), 0666);
@@ -237,8 +256,7 @@ bool copy_file_with_fsync(const std::string &src, const std::string &dst,
         (void)chown(dst.c_str(), owner_uid, owner_gid);
     }
     MACHETE_LOG("[COPY]", "Archivo completado: %s", dst.c_str());
-    ::machete::log::flush();
-    return ok;
+    return true;
 }
 
 bool copy_directory_recursive(const std::string &src_dir, const std::string &dst_dir,
@@ -445,20 +463,14 @@ void post_process_restored_save(const scanner::ScannedGame &game,
 
     if (is_ps5)
     {
-        // 1. Resolver ruta de metadatos de PS5: /user/home/<user_id>/savedata_prospero_meta/<TitleID>
-        std::string meta_target = dst_target;
-        std::size_t p = meta_target.find("/savedata_prospero/");
-        if (p != std::string::npos)
-        {
-            meta_target.replace(p, 19, "/savedata_prospero_meta/");
-        }
-        else
-        {
-            std::uint32_t uid_val = extract_user_id_from_path(dst_target);
-            char uid_hex[32];
-            std::snprintf(uid_hex, sizeof(uid_hex), "%x", uid_val);
-            meta_target = std::string("/user/home/") + uid_hex + "/savedata_prospero_meta/" + game.title_id;
-        }
+        // 1. Resolver rutas de metadatos de PS5:
+        // Tanto /user/home/<uid>/savedata_prospero_meta/<TitleID> como /user/home/<uid>/savedata_prospero_meta/user/<TitleID>
+        std::uint32_t uid_val = extract_user_id_from_path(dst_target);
+        char uid_hex[32];
+        std::snprintf(uid_hex, sizeof(uid_hex), "%x", uid_val);
+
+        const std::string meta_target_direct = std::string("/user/home/") + uid_hex + "/savedata_prospero_meta/" + game.title_id;
+        const std::string meta_target_user = std::string("/user/home/") + uid_hex + "/savedata_prospero_meta/user/" + game.title_id;
 
         std::string backup_meta = backup_folder + "/.meta";
         if (access(backup_meta.c_str(), F_OK) != 0)
@@ -466,55 +478,72 @@ void post_process_restored_save(const scanner::ScannedGame &game,
             backup_meta = backup_folder + "/meta";
         }
 
-        if (access(backup_meta.c_str(), F_OK) == 0)
-        {
-            int m_files = 0;
-            std::uint64_t m_bytes = 0;
-            ensure_directories_recursive(meta_target, target_uid, target_gid);
-            (void)copy_directory_recursive(backup_meta, meta_target, m_files, m_bytes, 0, nullptr, target_uid, target_gid);
-            MACHETE_LOG("[RESTORE]", "Metadatos restaurados para PS5: %d archivos en %s", m_files, meta_target.c_str());
-        }
-        else
+        for (const auto &meta_target : {meta_target_direct, meta_target_user})
         {
             ensure_directories_recursive(meta_target, target_uid, target_gid);
-            // Verificar si meta_target ya tiene archivos legítimos generados por la consola (Dummy Save)
-            int existing_meta_count = 0;
-            DIR *dmeta = opendir(meta_target.c_str());
-            if (dmeta)
-            {
-                while (const dirent *me = readdir(dmeta))
-                {
-                    if (me->d_name[0] != '.')
-                        existing_meta_count++;
-                }
-                closedir(dmeta);
-            }
 
-            if (existing_meta_count > 0)
+            if (access(backup_meta.c_str(), F_OK) == 0)
             {
-                MACHETE_LOG("[RESTORE]", "Metadatos existentes preservados en %s (%d archivos - Dummy Save protegido)",
-                            meta_target.c_str(), existing_meta_count);
+                int m_files = 0;
+                std::uint64_t m_bytes = 0;
+                (void)copy_directory_recursive(backup_meta, meta_target, m_files, m_bytes, 0, nullptr, target_uid, target_gid);
+                MACHETE_LOG("[RESTORE]", "Metadatos restaurados para PS5: %d archivos en %s", m_files, meta_target.c_str());
             }
             else
             {
-                reconstruct_prospero_metadata(game.title_id, dst_target, meta_target, target_uid, target_gid);
+                // Verificar si meta_target ya tiene archivos legítimos generados por la consola (Dummy Save)
+                int existing_meta_count = 0;
+                DIR *dmeta = opendir(meta_target.c_str());
+                if (dmeta)
+                {
+                    while (const dirent *me = readdir(dmeta))
+                    {
+                        if (me->d_name[0] != '.')
+                            existing_meta_count++;
+                    }
+                    closedir(dmeta);
+                }
+
+                if (existing_meta_count > 0)
+                {
+                    MACHETE_LOG("[RESTORE]", "Metadatos existentes preservados en %s (%d archivos - Dummy Save protegido)",
+                                meta_target.c_str(), existing_meta_count);
+                }
+                else
+                {
+                    reconstruct_prospero_metadata(game.title_id, dst_target, meta_target, target_uid, target_gid);
+                }
             }
+            apply_permissions_recursive(meta_target, target_uid, target_gid);
         }
 
-        apply_permissions_recursive(meta_target, target_uid, target_gid);
+        // Limpiar directorio residual de cloud-sync para forzar al sistema a tratar la partida local como autoritativa
+        const std::string cloud_sync_dir = std::string("/user/home/") + uid_hex + "/savedata_prospero_for_cloud/" + game.title_id;
+        if (access(cloud_sync_dir.c_str(), F_OK) == 0)
+        {
+            (void)unlink((cloud_sync_dir + "/sync.dat").c_str());
+        }
     }
     else
     {
         // 2. Partidas PS4: Inyeccion de Keystone autentico y Resignado SFO para la cuenta activa
         MACHETE_LOG("[RESTORE]", "Procesando partida PS4 para cuenta actual: Keystone & param.sfo...");
-        (void)machete::keystone::inject_authentic_keystone(dst_target, game.title_id);
+        (void)machete::keystone::inject_authentic_keystone(dst_target, game.title_id, backup_folder);
 
         std::uint32_t user_id = extract_user_id_from_path(dst_target);
         std::uint64_t active_account_id = machete::account::detect_active_account_id(user_id);
 
+        std::uint8_t console_psid[16] = {0};
+        const bool has_psid = machete::vault::get_console_open_psid(console_psid);
+
         machete::sfo::ResignParams rp;
         rp.target_user_id = user_id;
         rp.target_account_id = active_account_id;
+        if (has_psid)
+        {
+            rp.psid = console_psid;
+            MACHETE_LOG("[RESTORE]", "OpenPSID obtenido de la consola fisica para recalculacion HMAC");
+        }
 
         for (const std::string &sfo_path : {
                  dst_target + "/param.sfo",
@@ -530,6 +559,13 @@ void post_process_restored_save(const scanner::ScannedGame &game,
                 }
             }
         }
+
+        // Replicar metadatos de PS4 en savedata_meta si existen
+        char uid_hex[32];
+        std::snprintf(uid_hex, sizeof(uid_hex), "%x", user_id);
+        const std::string meta_ps4_user = std::string("/user/home/") + uid_hex + "/savedata_meta/user/" + game.title_id;
+        ensure_directories_recursive(meta_ps4_user, target_uid, target_gid);
+        apply_permissions_recursive(meta_ps4_user, target_uid, target_gid);
     }
 
     // 3. Garantizar permisos 0777 (directorios) y 0666 (archivos) en todo el arbol restaurado
@@ -931,7 +967,8 @@ std::vector<BackupItem> find_available_backups(const scanner::ScannedGame &game,
             item.title_id = game.title_id;
             item.title = game.title;
 
-            std::tm *tm_info = std::localtime(&st.st_mtime);
+            std::tm tm_buf{};
+            std::tm *tm_info = localtime_r(&st.st_mtime, &tm_buf);
             if (tm_info)
             {
                 char time_buf[64];

@@ -64,7 +64,8 @@ std::string format_bytes(std::uint64_t bytes)
 std::string format_timestamp(std::time_t mtime)
 {
     char buf[64];
-    std::tm *tm_info = std::localtime(&mtime);
+    std::tm tm_buf{};
+    std::tm *tm_info = localtime_r(&mtime, &tm_buf);
     if (!tm_info)
         return "Fecha desconocida";
 

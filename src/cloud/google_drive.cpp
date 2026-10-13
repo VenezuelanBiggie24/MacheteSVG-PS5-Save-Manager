@@ -428,6 +428,7 @@ HttpResponse execute_http_request(const std::string &url, int method, const std:
             MACHETE_LOG("[CLOUD]", "%s", resp.error.c_str());
             return resp;
         }
+        SslHttpClient::set_ssl_context(s_ssl);
 
         s_http = sceHttp2Init(s_pool, s_ssl, 512 * 1024, 1);
         if (s_http < 0)
@@ -502,77 +503,27 @@ HttpResponse execute_http_request(const std::string &url, int method, const std:
                 {
                     MACHETE_LOG("[CLOUD]", "Bloqueo DNS detectado (%d). Resolviendo autonomamente para '%s'...",
                                 send_res, host.c_str());
-                    std::string ip = DnsResolver::instance().resolve(host);
-                    if (!ip.empty())
+                    auto candidate_ips = DnsResolver::instance().get_candidate_ips(host);
+                    for (const auto &ip : candidate_ips)
                     {
-                        // 1. Probar primero sceHttp2 con URL sobreescrita por IP para no activar DNS del sistema
-                        std::string ip_url = "https://" + ip + path;
-                        int ip_req = sceHttp2CreateRequestWithURL(tmpl, method_str, ip_url.c_str(), req_body_len);
-                        if (ip_req >= 0)
+                        MACHETE_LOG("[CLOUD]", "Probando transporte SSL autonomo: IP=%s, Host=%s, Path=%s...",
+                                    ip.c_str(), host.c_str(), path.c_str());
+                        auto sresp = SslHttpClient::request(
+                            ip, host, port, method_str, path, body_data, headers, 12);
+                        if (sresp.status > 0)
                         {
-                            (void)sceHttp2SslDisableOption(ip_req, 0x1F);
-                            (void)sceHttp2SetConnectTimeOut(ip_req, 8'000'000);
-                            (void)sceHttp2SetSendTimeOut(ip_req, 10'000'000);
-                            (void)sceHttp2SetRecvTimeOut(ip_req, 15'000'000);
-                            (void)sceHttp2SetAutoRedirect(ip_req, 1);
-                            sceHttp2AddRequestHeader(ip_req, "Host", host.c_str(), 0);
-                            for (const auto &h : headers)
-                            {
-                                if (strcasecmp(h.first.c_str(), "Host") != 0)
-                                    sceHttp2AddRequestHeader(ip_req, h.first.c_str(), h.second.c_str(), 0);
-                            }
-                            if (method == 1 && !body_data.empty())
-                            {
-                                const std::string clen = std::to_string(body_data.size());
-                                sceHttp2AddRequestHeader(ip_req, "Content-Length", clen.c_str(), 0);
-                            }
-                            int ip_send = sceHttp2SendRequest(
-                                ip_req, body_data.empty() ? nullptr : body_data.data(), body_data.size());
-                            if (ip_send >= 0)
-                            {
-                                int sc = 0;
-                                sceHttp2GetStatusCode(ip_req, &sc);
-                                resp.status = sc;
-                                char buffer[16384];
-                                for (;;)
-                                {
-                                    int rb = sceHttp2ReadData(ip_req, buffer, sizeof(buffer));
-                                    if (rb <= 0)
-                                        break;
-                                    resp.body.append(buffer, static_cast<std::size_t>(rb));
-                                    if (resp.body.size() > 256 * 1024 * 1024)
-                                        break;
-                                }
-                                resp.error.clear();
-                                autonomous_ok = true;
-                                MACHETE_LOG("[CLOUD]", "Transporte sceHttp2 IP-directo exitoso: status=%d, body=%zu bytes",
-                                            resp.status, resp.body.size());
-                            }
-                            else
-                            {
-                                MACHETE_LOG("[CLOUD]", "sceHttp2 IP-directo fallo (%d). Pasando a SslHttpClient directo...", ip_send);
-                            }
-                            sceHttp2DeleteRequest(ip_req);
+                            resp.status = sresp.status;
+                            resp.body = sresp.body;
+                            resp.error.clear();
+                            autonomous_ok = true;
+                            MACHETE_LOG("[CLOUD]", "Transporte SslHttpClient exitoso (via %s): status=%d, body=%zu bytes",
+                                        ip.c_str(), resp.status, resp.body.size());
+                            break;
                         }
-
-                        // 2. Si sceHttp2 IP-directo no respondio, usar SslHttpClient directo con bypass de certificados
-                        if (!autonomous_ok)
+                        else
                         {
-                            auto sresp = SslHttpClient::request(
-                                ip, host, port, method_str, path, body_data, headers, 15);
-                            if (sresp.status > 0)
-                            {
-                                resp.status = sresp.status;
-                                resp.body = sresp.body;
-                                resp.error.clear();
-                                autonomous_ok = true;
-                                MACHETE_LOG("[CLOUD]", "Transporte SslHttpClient exitoso: status=%d, body=%zu bytes",
-                                            resp.status, resp.body.size());
-                            }
-                            else
-                            {
-                                MACHETE_LOG("[CLOUD]", "Fallo transporte autonomo: %s", sresp.error.c_str());
-                            }
+                            MACHETE_LOG("[CLOUD]", "Fallo transporte autonomo con IP %s: %s",
+                                        ip.c_str(), sresp.error.c_str());
                         }
                     }
                 }

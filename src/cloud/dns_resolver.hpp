@@ -29,6 +29,9 @@ class DnsResolver
     // Bypassea completamente proxies o resolvers locales como NanoDNS en 127.0.0.1:53
     std::string resolve(const std::string &domain, int timeout_ms = 2000);
 
+    // Obtiene lista de IPs candidatas (IP resuelta + Anycast fallbacks para resiliencia ante bloqueo)
+    std::vector<std::string> get_candidate_ips(const std::string &domain);
+
     // Limpia la caché interna
     void clear_cache();
 

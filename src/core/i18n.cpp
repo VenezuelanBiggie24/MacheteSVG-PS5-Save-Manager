@@ -4,6 +4,7 @@
 
 #include "core/i18n.hpp"
 
+#include <atomic>
 #include <cstdlib>
 #include <cstring>
 #include <string>
@@ -21,7 +22,7 @@ namespace machete::i18n
 namespace
 {
 
-Language s_current_lang = Language::English;
+std::atomic<Language> s_current_lang{Language::English};
 
 // [Language][StringId] table
 const char *const s_strings[2][static_cast<std::size_t>(StringId::Count)] = {
@@ -239,17 +240,22 @@ void init()
 
 Language current_language()
 {
-    return s_current_lang;
+    return s_current_lang.load(std::memory_order_relaxed);
 }
 
 void set_language(Language lang)
 {
-    s_current_lang = lang;
+    s_current_lang.store(lang, std::memory_order_relaxed);
 }
 
 void toggle_language()
 {
-    s_current_lang = (s_current_lang == Language::English) ? Language::Spanish : Language::English;
+    Language expected = s_current_lang.load(std::memory_order_relaxed);
+    Language desired = (expected == Language::English) ? Language::Spanish : Language::English;
+    while (!s_current_lang.compare_exchange_weak(expected, desired, std::memory_order_relaxed))
+    {
+        desired = (expected == Language::English) ? Language::Spanish : Language::English;
+    }
 }
 
 const char *get(StringId id)
@@ -258,7 +264,7 @@ const char *get(StringId id)
     if (idx >= static_cast<std::size_t>(StringId::Count))
         return "";
 
-    const auto lang_idx = static_cast<std::size_t>(s_current_lang);
+    const auto lang_idx = static_cast<std::size_t>(s_current_lang.load(std::memory_order_relaxed));
     return s_strings[lang_idx][idx];
 }
 

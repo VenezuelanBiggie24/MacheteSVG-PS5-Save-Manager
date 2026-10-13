@@ -242,7 +242,8 @@ void vwrite(const char *tag, const char *fmt, va_list args)
 
     char time_str[32];
     std::time_t now = std::time(nullptr);
-    std::tm *tm_info = std::localtime(&now);
+    std::tm tm_buf{};
+    std::tm *tm_info = localtime_r(&now, &tm_buf);
     if (tm_info)
         std::strftime(time_str, sizeof(time_str), "%H:%M:%S", tm_info);
     else

@@ -22,6 +22,9 @@ struct SslHttpResponse
 class SslHttpClient
 {
   public:
+    static void set_ssl_context(int ctx);
+    static int get_ssl_context();
+
     // Realiza petición HTTPS conectando por IP directa pero transmitiendo SNI y Host: legítimos
     static SslHttpResponse request(
         const std::string &target_ip,

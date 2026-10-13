@@ -116,8 +116,9 @@ class Machete final : public app::Concept
 
     void load_app_icon() const
     {
-        if (app_icon_texture_ != 0)
+        if (app_icon_attempted_ || app_icon_texture_ != 0)
             return;
+        app_icon_attempted_ = true;
 
         const char *candidates[] = {
             "/app0/sce_sys/icon0.png",
@@ -1774,6 +1775,7 @@ class Machete final : public app::Concept
     char notification_text_[256] = "";
 
     // Textura del icono oficial de MacheteSVG (/app0/sce_sys/icon0.png)
+    mutable bool app_icon_attempted_{false};
     mutable unsigned int app_icon_texture_{0};
 
     // Operaciones Asíncronas en Segundo Plano (Worker Thread)

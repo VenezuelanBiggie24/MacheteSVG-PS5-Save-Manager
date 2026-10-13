@@ -35,6 +35,18 @@ extern "C"
 namespace machete::cloud
 {
 
+static int s_sharedSslCtx = -1;
+
+void SslHttpClient::set_ssl_context(int ctx)
+{
+    s_sharedSslCtx = ctx;
+}
+
+int SslHttpClient::get_ssl_context()
+{
+    return s_sharedSslCtx;
+}
+
 SslHttpResponse SslHttpClient::request(
     const std::string &target_ip,
     const std::string &hostname,
@@ -48,17 +60,27 @@ SslHttpResponse SslHttpClient::request(
     SslHttpResponse resp;
 
 #if defined(__PROSPERO__) || defined(__Prospero__) || defined(__PS5__)
-    static int s_sslCtx = -1;
-    if (s_sslCtx < 0)
+    int active_ctx = s_sharedSslCtx;
+    if (active_ctx < 0)
     {
         (void)sceNetInit();
-        s_sslCtx = sceSslInit(512 * 1024);
-        if (s_sslCtx < 0)
+        active_ctx = sceSslInit(512 * 1024);
+        if (active_ctx < 0)
         {
-            resp.error = "Error inicializando sceSslInit: " + std::to_string(s_sslCtx);
-            MACHETE_LOG("[SSL-HTTP]", "%s", resp.error.c_str());
-            return resp;
+            MACHETE_LOG("[SSL-HTTP]", "sceSslInit retorno: %d (0x%x)",
+                        active_ctx, static_cast<unsigned int>(active_ctx));
         }
+        else
+        {
+            s_sharedSslCtx = active_ctx;
+        }
+    }
+
+    if (active_ctx < 0)
+    {
+        resp.error = "Error: no hay contexto SSL valido (ctx=" + std::to_string(active_ctx) + ")";
+        MACHETE_LOG("[SSL-HTTP]", "%s", resp.error.c_str());
+        return resp;
     }
 
     // 1. Crear socket BSD TCP estándar
@@ -96,7 +118,7 @@ SslHttpResponse SslHttpClient::request(
     }
 
     // 3. Envolver el socket con libSceSsl pasando el nombre de host para TLS SNI legítimo
-    int sslConn = sceSslCreateConnection(s_sslCtx, sock, hostname.c_str());
+    int sslConn = sceSslCreateConnection(active_ctx, sock, hostname.c_str());
     if (sslConn < 0)
     {
         close(sock);

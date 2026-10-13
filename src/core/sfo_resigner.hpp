@@ -89,22 +89,52 @@ inline bool resign_param_sfo(const std::string &sfo_path, const ResignParams &pa
     if (header->magic != SFO_MAGIC)
         return false;
 
-    if (buffer.size() < sizeof(SfoHeader) + header->num_entries * sizeof(SfoIndexEntry))
+    const std::size_t total_buf_size = buffer.size();
+
+    // Verificación estricta de límites de tablas contra buffer.size()
+    if (header->key_table_offset >= total_buf_size ||
+        header->data_table_offset >= total_buf_size ||
+        header->data_table_offset < header->key_table_offset)
+        return false;
+
+    const std::size_t entries_bytes = static_cast<std::size_t>(header->num_entries) * sizeof(SfoIndexEntry);
+    if (sizeof(SfoHeader) + entries_bytes > header->key_table_offset)
         return false;
 
     auto *entries = reinterpret_cast<SfoIndexEntry *>(buffer.data() + sizeof(SfoHeader));
     const char *key_table = reinterpret_cast<const char *>(buffer.data() + header->key_table_offset);
+    const std::size_t key_table_size = header->data_table_offset - header->key_table_offset;
     std::uint8_t *data_table = buffer.data() + header->data_table_offset;
+    const std::size_t data_table_size = total_buf_size - header->data_table_offset;
 
     bool modified = false;
 
     for (std::uint32_t i = 0; i < header->num_entries; ++i)
     {
-        const char *key = key_table + entries[i].key_offset;
-        std::uint8_t *val_ptr = data_table + entries[i].data_offset;
+        // Validar que la clave no exceda la tabla de claves y esté terminada en nulo
+        if (entries[i].key_offset >= key_table_size)
+            continue;
 
-        // 1. Modificar ACCOUNT_ID (8 bytes uint64_t)
-        if (std::strcmp(key, "ACCOUNT_ID") == 0 && entries[i].param_max_length >= 8)
+        const char *key = key_table + entries[i].key_offset;
+        bool key_null_terminated = false;
+        for (std::size_t k = entries[i].key_offset; k < key_table_size; ++k)
+        {
+            if (key_table[k] == '\0') { key_null_terminated = true; break; }
+        }
+        if (!key_null_terminated)
+            continue;
+
+        // Validar que los datos apunten dentro del data_table
+        if (entries[i].data_offset >= data_table_size)
+            continue;
+
+        std::uint8_t *val_ptr = data_table + entries[i].data_offset;
+        const std::size_t remaining_data_space = data_table_size - entries[i].data_offset;
+
+        // 1. Modificar ACCOUNT_ID (8 bytes uint64_t) de forma segura
+        if (std::strcmp(key, "ACCOUNT_ID") == 0 &&
+            entries[i].param_max_length >= 8 &&
+            remaining_data_space >= 8)
         {
             if (params.target_account_id != 0)
             {
@@ -115,8 +145,10 @@ inline bool resign_param_sfo(const std::string &sfo_path, const ResignParams &pa
             }
         }
 
-        // 2. Modificar PARAMS (user_id, psid_hmac, title_id_2)
-        if (std::strcmp(key, "PARAMS") == 0 && entries[i].param_max_length >= sizeof(SfoParamsField))
+        // 2. Modificar PARAMS (user_id, psid_hmac, title_id_2) de forma segura
+        if (std::strcmp(key, "PARAMS") == 0 &&
+            entries[i].param_max_length >= sizeof(SfoParamsField) &&
+            remaining_data_space >= sizeof(SfoParamsField))
         {
             auto *p = reinterpret_cast<SfoParamsField *>(val_ptr);
             if (params.target_user_id != 0)
@@ -138,12 +170,7 @@ inline bool resign_param_sfo(const std::string &sfo_path, const ResignParams &pa
                                     p->psid_hmac);
                 modified = true;
             }
-            else
-            {
-                // Dejar en ceros o preservar firma neutral
-                std::memset(p->psid_hmac, 0, 32);
-                modified = true;
-            }
+            // Si no se suministra OpenPSID nuevo, NO borrar con ceros: preservar el hash existente
         }
     }
 

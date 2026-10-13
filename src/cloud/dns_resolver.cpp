@@ -231,8 +231,56 @@ std::string DnsResolver::resolve(const std::string &domain, int timeout_ms)
         }
     }
 
+    // 3. Fallback estático de Anycast IPs para dominios de Google (resiliencia si UDP port 53 está bloqueado)
+    static const std::unordered_map<std::string, std::string> kGoogleAnycastMap = {
+        {"oauth2.googleapis.com", "172.253.122.95"},
+        {"www.googleapis.com", "142.250.185.202"},
+        {"accounts.google.com", "172.217.16.202"},
+        {"www.google.com", "142.250.185.202"}
+    };
+
+    auto fit = kGoogleAnycastMap.find(domain);
+    if (fit != kGoogleAnycastMap.end())
+    {
+        MACHETE_LOG("[DNS]", "UDP bloqueado. Usando Anycast IP estatica para '%s': %s",
+                    domain.c_str(), fit->second.c_str());
+        std::lock_guard<std::mutex> lock(mutex_);
+        cache_[domain] = {fit->second, now + std::chrono::seconds(600)};
+        return fit->second;
+    }
+
     MACHETE_LOG("[DNS]", "Aviso: No se pudo resolver '%s' en servidores upstream.", domain.c_str());
     return "";
+}
+
+std::vector<std::string> DnsResolver::get_candidate_ips(const std::string &domain)
+{
+    std::vector<std::string> ips;
+    std::string primary = resolve(domain);
+    if (!primary.empty())
+    {
+        ips.push_back(primary);
+    }
+
+    static const std::unordered_map<std::string, std::vector<std::string>> kAnycastLists = {
+        {"oauth2.googleapis.com", {"172.253.122.95", "142.250.185.202", "172.217.16.202", "216.58.214.202"}},
+        {"www.googleapis.com", {"142.250.185.202", "172.217.16.202", "172.253.122.95", "216.58.214.202"}},
+        {"accounts.google.com", {"172.217.16.202", "142.250.185.202", "172.253.122.95"}},
+        {"www.google.com", {"142.250.185.202", "172.217.16.202"}}
+    };
+
+    auto it = kAnycastLists.find(domain);
+    if (it != kAnycastLists.end())
+    {
+        for (const auto &fb_ip : it->second)
+        {
+            if (fb_ip != primary)
+            {
+                ips.push_back(fb_ip);
+            }
+        }
+    }
+    return ips;
 }
 
 } // namespace machete::cloud

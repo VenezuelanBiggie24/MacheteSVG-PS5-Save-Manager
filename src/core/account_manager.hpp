@@ -123,12 +123,45 @@ inline std::uint64_t detect_active_account_id(std::uint32_t user_id)
         closedir(dir);
     }
 
-    // 3. Si no hay otra referencia, fallback seguro basado en el User ID
-    std::uint64_t fallback_acc = (static_cast<std::uint64_t>(user_id) << 32) | user_id;
+    // 3. Probar en las bases de datos del sistema si estan accesibles
+    for (const std::string &db_path : {
+             "/system_data/priv/mms/system.db",
+             "/system_data/priv/mms/user.db"})
+    {
+        if (access(db_path.c_str(), R_OK) == 0)
+        {
+            std::FILE *fdb = std::fopen(db_path.c_str(), "rb");
+            if (fdb)
+            {
+                std::vector<std::uint8_t> buf(65536);
+                std::size_t n = std::fread(buf.data(), 1, buf.size(), fdb);
+                std::fclose(fdb);
+                for (std::size_t i = 0; i + 12 <= n; ++i)
+                {
+                    std::uint32_t candidate_uid = 0;
+                    std::memcpy(&candidate_uid, buf.data() + i, 4);
+                    if (candidate_uid == user_id)
+                    {
+                        std::uint64_t acc = 0;
+                        std::memcpy(&acc, buf.data() + i + 4, 8);
+                        if (acc != 0 && acc != ~0ULL && acc > 0x000000000000FFFFULL)
+                        {
+                            MACHETE_LOG("[ACCOUNT]", "Account ID recuperado de %s: 0x%016llx",
+                                        db_path.c_str(), static_cast<unsigned long long>(acc));
+                            return acc;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // 4. Si no hay otra referencia, fallback seguro basado en el estándar offline de Apollo/PS5-Activator
+    std::uint64_t fallback_acc = 0x0100000000000000ULL | (static_cast<std::uint64_t>(user_id) & 0xFFFFFFFFULL);
     if (fallback_acc == 0)
         fallback_acc = 0x0100000000000001ULL;
 
-    MACHETE_LOG("[ACCOUNT]", "Usando Account ID calculado para UserID 0x%x: 0x%016llx",
+    MACHETE_LOG("[ACCOUNT]", "Usando Account ID estandar offline para UserID 0x%x: 0x%016llx",
                 user_id, static_cast<unsigned long long>(fallback_acc));
     return fallback_acc;
 }

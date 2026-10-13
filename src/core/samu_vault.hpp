@@ -85,6 +85,26 @@ inline bool decrypt_blob_via_pfsmgr(const std::uint8_t in_blob[96], std::uint8_t
 #endif
 }
 
+// Obtiene el OpenPSID de 16 bytes de la consola fisica
+inline bool get_console_open_psid(std::uint8_t out_psid[16])
+{
+    for (const char *psid_path : {
+             "/system_data/priv/cache/openpsid.dat",
+             "/system_data/priv/home/openpsid.dat",
+             "/system_data/priv/mms/openpsid.dat"})
+    {
+        std::FILE *fpsid = std::fopen(psid_path, "rb");
+        if (fpsid)
+        {
+            std::size_t r = std::fread(out_psid, 1, 16, fpsid);
+            std::fclose(fpsid);
+            if (r == 16)
+                return true;
+        }
+    }
+    return false;
+}
+
 // Genera y guarda el archivo crypto_vault.bin dentro de la carpeta de respaldo
 inline bool archive_crypto_vault(const std::string &dest_folder,
                                  const std::string &title_id,
@@ -97,16 +117,7 @@ inline bool archive_crypto_vault(const std::string &dest_folder,
     std::strncpy(record.title_id, title_id.c_str(), sizeof(record.title_id) - 1);
     std::strncpy(record.platform, platform.c_str(), sizeof(record.platform) - 1);
 
-    for (const char *psid_path : {"/system_data/priv/cache/openpsid.dat", "/system_data/priv/home/openpsid.dat"})
-    {
-        std::FILE *fpsid = std::fopen(psid_path, "rb");
-        if (fpsid)
-        {
-            (void)std::fread(record.open_psid, 1, 16, fpsid);
-            std::fclose(fpsid);
-            break;
-        }
-    }
+    (void)get_console_open_psid(record.open_psid);
 
     bool has_sealed = false;
 
