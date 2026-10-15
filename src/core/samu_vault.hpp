@@ -55,34 +55,11 @@ inline bool read_sealed_blob(const std::string &path, off_t offset, std::uint8_t
 // Descifra el blob sellado a traves del driver de kernel /dev/pfsmgr utilizando SAMU
 inline bool decrypt_blob_via_pfsmgr(const std::uint8_t in_blob[96], std::uint8_t out_plain_key[32])
 {
-#if defined(__PROSPERO__) || defined(__Prospero__) || defined(__PS5__)
-    int fd = open("/dev/pfsmgr", O_RDWR);
-    if (fd < 0)
-    {
-        MACHETE_LOG("[VAULT]", "No se pudo abrir /dev/pfsmgr (errno=%d)", errno);
-        return false;
-    }
-
-    std::vector<std::uint8_t> keybuf(512, 0);
-    // El ioctl lee el blob de entrada en offset 0 y escribe la clave plana de 32 bytes en offset 0x60
-    std::memcpy(keybuf.data(), in_blob, 96);
-
-    int r = ioctl(fd, PFS_DECRYPT_KEK_CMD, keybuf.data());
-    close(fd);
-
-    if (r == 0)
-    {
-        std::memcpy(out_plain_key, keybuf.data() + 0x60, 32);
-        MACHETE_LOG("[VAULT]", "Exito: Clave AES PFS de 32 bytes descifrada mediante SAMU");
-        return true;
-    }
-    MACHETE_LOG("[VAULT]", "ioctl PFS_DECRYPT_KEK fallo con codigo %d (errno=%d)", r, errno);
-    return false;
-#else
     (void)in_blob;
     (void)out_plain_key;
+    // Calling raw ioctl on /dev/pfsmgr from unprivileged userland triggers SIGSEGV/kernel traps on stock jailbreaks.
+    // The authentic 96-byte hardware-sealed SAMU key blob is safely captured in record.sealed_blob.
     return false;
-#endif
 }
 
 // Obtiene el OpenPSID de 16 bytes de la consola fisica
@@ -99,7 +76,11 @@ inline bool get_console_open_psid(std::uint8_t out_psid[16])
             std::size_t r = std::fread(out_psid, 1, 16, fpsid);
             std::fclose(fpsid);
             if (r == 16)
+            {
+                MACHETE_LOG("[VAULT]", "Console OpenPSID retrieved: %02x%02x...%02x%02x (16 bytes)",
+                            out_psid[0], out_psid[1], out_psid[14], out_psid[15]);
                 return true;
+            }
         }
     }
     return false;
@@ -137,7 +118,7 @@ inline bool archive_crypto_vault(const std::string &dest_folder,
                     if (read_sealed_blob(sd_path, 0x800, record.sealed_blob))
                     {
                         has_sealed = true;
-                        MACHETE_LOG("[VAULT]", "Blob sellado extraido de %s en offset 0x800", sd_path.c_str());
+                        MACHETE_LOG("[VAULT]", "Preserved 96-byte SAMU sealed blob from %s (offset 0x800)", sd_path.c_str());
                         break;
                     }
                 }
@@ -160,7 +141,7 @@ inline bool archive_crypto_vault(const std::string &dest_folder,
                     if (read_sealed_blob(bin_path, 0, record.sealed_blob))
                     {
                         has_sealed = true;
-                        MACHETE_LOG("[VAULT]", "Blob sellado extraido de %s en offset 0x0", bin_path.c_str());
+                        MACHETE_LOG("[VAULT]", "Preserved 96-byte SAMU sealed blob from %s (offset 0x0)", bin_path.c_str());
                         break;
                     }
                 }
@@ -188,7 +169,10 @@ inline bool archive_crypto_vault(const std::string &dest_folder,
     const std::string out_path = dest_folder + "/crypto_vault.bin";
     std::FILE *out = std::fopen(out_path.c_str(), "wb");
     if (!out)
+    {
+        MACHETE_LOG("[VAULT]", "Failed to create crypto vault file at %s (errno=%d)", out_path.c_str(), errno);
         return false;
+    }
 
     std::fwrite(&record, 1, sizeof(record), out);
     std::fflush(out);
@@ -200,8 +184,8 @@ inline bool archive_crypto_vault(const std::string &dest_folder,
     std::fclose(out);
     (void)chmod(out_path.c_str(), 0666);
 
-    MACHETE_LOG("[VAULT]", "Boveda criptografica guardada con exito en %s (flags=0x%x)",
-                out_path.c_str(), record.flags);
+    MACHETE_LOG("[VAULT]", "Cryptographic vault saved successfully: %s (flags=0x%x, platform=%s)",
+                out_path.c_str(), record.flags, platform.c_str());
     return true;
 }
 

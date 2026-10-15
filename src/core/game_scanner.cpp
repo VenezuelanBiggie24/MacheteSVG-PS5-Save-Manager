@@ -650,7 +650,7 @@ std::string extract_title_from_param_sfo(const std::string &sfo_path)
 std::vector<ScannedGame> scan_installed_games_and_saves()
 {
     MACHETE_BREADCRUMB("scanner:start");
-    MACHETE_LOG("[SCANNER]", "Iniciando escaneo de titulos y partidas instaladas...");
+    MACHETE_LOG("[SCANNER]", "Starting scan for installed titles and savedata...");
 
     std::vector<ScannedGame> games;
     std::unordered_map<std::string, std::time_t> latest_mtimes;
@@ -947,7 +947,7 @@ std::vector<ScannedGame> scan_installed_games_and_saves()
                                "01/09/2026", 2ULL * 1024ULL * 1024ULL, true, 0});
     }
 
-    MACHETE_LOG("[SCANNER]", "Escaneo finalizado. Titulos validos detectados: %zu", valid_games.size());
+    MACHETE_LOG("[SCANNER]", "Scan completed. Valid titles detected: %zu", valid_games.size());
     for (std::size_t i = 0; i < std::min<std::size_t>(10, valid_games.size()); ++i)
     {
         const auto &g = valid_games[i];
@@ -1028,7 +1028,7 @@ void load_game_icon_textures(std::vector<ScannedGame> &games)
             ++loaded;
         }
     }
-    MACHETE_LOG("[SCANNER]", "Texturas de iconos reales cargadas: %zu", loaded);
+    MACHETE_LOG("[SCANNER]", "Authentic icon textures loaded: %zu", loaded);
     MACHETE_BREADCRUMB("load_game_icon_textures: done");
 }
 

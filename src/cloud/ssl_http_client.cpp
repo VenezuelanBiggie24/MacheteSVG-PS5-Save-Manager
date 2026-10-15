@@ -67,7 +67,7 @@ SslHttpResponse SslHttpClient::request(
         active_ctx = sceSslInit(512 * 1024);
         if (active_ctx < 0)
         {
-            MACHETE_LOG("[SSL-HTTP]", "sceSslInit retorno: %d (0x%x)",
+            MACHETE_LOG("[SSL-HTTP]", "sceSslInit returned: %d (0x%x)",
                         active_ctx, static_cast<unsigned int>(active_ctx));
         }
         else
@@ -78,7 +78,7 @@ SslHttpResponse SslHttpClient::request(
 
     if (active_ctx < 0)
     {
-        resp.error = "Error: no hay contexto SSL valido (ctx=" + std::to_string(active_ctx) + ")";
+        resp.error = "Error: no valid SSL context (ctx=" + std::to_string(active_ctx) + ")";
         MACHETE_LOG("[SSL-HTTP]", "%s", resp.error.c_str());
         return resp;
     }
@@ -87,7 +87,7 @@ SslHttpResponse SslHttpClient::request(
     int sock = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
     if (sock < 0)
     {
-        resp.error = "Fallo socket() TCP nativo";
+        resp.error = "Native BSD TCP socket() failed";
         return resp;
     }
 
@@ -104,16 +104,16 @@ SslHttpResponse SslHttpClient::request(
     if (inet_pton(AF_INET, target_ip.c_str(), &sin.sin_addr) <= 0)
     {
         close(sock);
-        resp.error = "Direccion IP invalida: " + target_ip;
+        resp.error = "Invalid IP address: " + target_ip;
         return resp;
     }
 
-    MACHETE_LOG("[SSL-HTTP]", "Conectando TCP a %s:%d (Host: %s)...",
+    MACHETE_LOG("[SSL-HTTP]", "Connecting TCP to %s:%d (Host: %s)...",
                 target_ip.c_str(), port, hostname.c_str());
     if (connect(sock, reinterpret_cast<struct sockaddr *>(&sin), sizeof(sin)) < 0)
     {
         close(sock);
-        resp.error = "Fallo connect() TCP a " + target_ip;
+        resp.error = "TCP connect() failed to " + target_ip;
         return resp;
     }
 
@@ -122,7 +122,7 @@ SslHttpResponse SslHttpClient::request(
     if (sslConn < 0)
     {
         close(sock);
-        resp.error = "sceSslCreateConnection fallo (" + std::to_string(sslConn) + ")";
+        resp.error = "sceSslCreateConnection failed (" + std::to_string(sslConn) + ")";
         return resp;
     }
 
@@ -135,10 +135,10 @@ SslHttpResponse SslHttpClient::request(
     int sslRes = sceSslConnect(sslConn);
     if (sslRes < 0)
     {
-        MACHETE_LOG("[SSL-HTTP]", "sceSslConnect fallo: %d (0x%x)", sslRes, static_cast<unsigned int>(sslRes));
+        MACHETE_LOG("[SSL-HTTP]", "sceSslConnect handshake failed: %d (0x%x)", sslRes, static_cast<unsigned int>(sslRes));
         sceSslDeleteConnection(sslConn);
         close(sock);
-        resp.error = "Apreton TLS sceSslConnect fallo (" + std::to_string(sslRes) + ")";
+        resp.error = "TLS handshake sceSslConnect failed (" + std::to_string(sslRes) + ")";
         return resp;
     }
 

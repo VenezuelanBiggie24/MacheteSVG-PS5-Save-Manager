@@ -140,8 +140,10 @@ inline bool resign_param_sfo(const std::string &sfo_path, const ResignParams &pa
             {
                 std::memcpy(val_ptr, &params.target_account_id, 8);
                 modified = true;
-                MACHETE_LOG("[SFO]", "Patched ACCOUNT_ID -> 0x%016llx en %s",
-                            static_cast<unsigned long long>(params.target_account_id), sfo_path.c_str());
+                MACHETE_LOG("[SFO]", "Patched ACCOUNT_ID -> 0x%04llx...%04llx in %s",
+                            static_cast<unsigned long long>((params.target_account_id >> 48) & 0xffff),
+                            static_cast<unsigned long long>(params.target_account_id & 0xffff),
+                            sfo_path.c_str());
             }
         }
 
@@ -155,7 +157,7 @@ inline bool resign_param_sfo(const std::string &sfo_path, const ResignParams &pa
             {
                 p->user_id = params.target_user_id;
                 modified = true;
-                MACHETE_LOG("[SFO]", "Patched PARAMS.user_id -> 0x%08x en %s",
+                MACHETE_LOG("[SFO]", "Patched PARAMS.user_id -> 0x%08x in %s",
                             params.target_user_id, sfo_path.c_str());
             }
 

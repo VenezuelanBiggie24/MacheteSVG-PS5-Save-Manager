@@ -5,6 +5,7 @@
 #include "storage.hpp"
 #include "cloud/google_drive.hpp"
 #include "core/i18n.hpp"
+#include "core/logger.hpp"
 
 #include <algorithm>
 #include <cerrno>
@@ -281,6 +282,7 @@ bool poll_storage_changes(std::vector<StorageDevice> &out_devices, std::string &
                               machete::i18n::tr(machete::i18n::StringId::UsbConnectedFormat), i);
                 change_description = desc_buf;
                 previous_usb_mask = current_usb_mask;
+                MACHETE_LOG("[STORAGE]", "Storage device connected: USB port %d (/mnt/usb%d)", i, i);
                 return true;
             }
             else if (was_on && !is_on)
@@ -290,6 +292,7 @@ bool poll_storage_changes(std::vector<StorageDevice> &out_devices, std::string &
                               machete::i18n::tr(machete::i18n::StringId::UsbDisconnectedFormat), i);
                 change_description = desc_buf;
                 previous_usb_mask = current_usb_mask;
+                MACHETE_LOG("[STORAGE]", "Storage device disconnected: USB port %d (/mnt/usb%d)", i, i);
                 return true;
             }
         }

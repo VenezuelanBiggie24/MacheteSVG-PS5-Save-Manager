@@ -44,7 +44,7 @@ inline std::string find_authentic_game_keystone(const std::string &title_id, con
     {
         if (access(p.c_str(), R_OK) == 0)
         {
-            MACHETE_LOG("[KEYSTONE]", "Keystone autentico localizado en: %s", p.c_str());
+            MACHETE_LOG("[KEYSTONE]", "Authentic keystone located at: %s", p.c_str());
             return p;
         }
     }
@@ -55,7 +55,7 @@ inline std::string find_authentic_game_keystone(const std::string &title_id, con
         {
             if (access(bp.c_str(), R_OK) == 0)
             {
-                MACHETE_LOG("[KEYSTONE]", "Usando keystone preservado en el respaldo: %s", bp.c_str());
+                MACHETE_LOG("[KEYSTONE]", "Using preserved keystone from backup: %s", bp.c_str());
                 return bp;
             }
         }
@@ -70,7 +70,7 @@ inline bool inject_authentic_keystone(const std::string &save_dir, const std::st
     const std::string authentic_src = find_authentic_game_keystone(title_id, backup_folder);
     if (authentic_src.empty())
     {
-        MACHETE_LOG("[KEYSTONE]", "Aviso: No se localizo keystone autentico en appmeta ni app para %s", title_id.c_str());
+        MACHETE_LOG("[KEYSTONE]", "Notice: Authentic keystone not found in appmeta or app for %s", title_id.c_str());
         return false;
     }
 
@@ -118,7 +118,7 @@ inline bool inject_authentic_keystone(const std::string &save_dir, const std::st
         (void)chmod(cache_keystone.c_str(), 0666);
     }
 
-    MACHETE_LOG("[KEYSTONE]", "Keystone autentico inyectado con exito en %s (desde %s)",
+    MACHETE_LOG("[KEYSTONE]", "Authentic keystone injected successfully into %s (from %s)",
                 dest_keystone.c_str(), authentic_src.c_str());
     return true;
 }

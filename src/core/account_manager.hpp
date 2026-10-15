@@ -59,9 +59,10 @@ inline std::uint64_t detect_active_account_id(std::uint32_t user_id)
         std::uint64_t acc = read_account_id_from_file(sp.first, sp.second);
         if (acc != 0 && acc != ~0ULL)
         {
-            MACHETE_LOG("[ACCOUNT]", "Account ID detectado en %s (offset 0x%lx): 0x%016llx",
+            MACHETE_LOG("[ACCOUNT]", "Account ID detected in %s (offset 0x%lx): 0x%04llx...%04llx",
                         sp.first.c_str(), static_cast<unsigned long>(sp.second),
-                        static_cast<unsigned long long>(acc));
+                        static_cast<unsigned long long>((acc >> 48) & 0xffff),
+                        static_cast<unsigned long long>(acc & 0xffff));
             return acc;
         }
     }
@@ -108,8 +109,10 @@ inline std::uint64_t detect_active_account_id(std::uint32_t user_id)
                                     std::uint64_t acc = std::strtoull(hex_str.c_str(), nullptr, 16);
                                     if (acc != 0)
                                     {
-                                        MACHETE_LOG("[ACCOUNT]", "Account ID recuperado de SFO existente (%s): 0x%016llx",
-                                                    sfo.c_str(), static_cast<unsigned long long>(acc));
+                                        MACHETE_LOG("[ACCOUNT]", "Account ID recovered from existing SFO (%s): 0x%04llx...%04llx",
+                                                    sfo.c_str(),
+                                                    static_cast<unsigned long long>((acc >> 48) & 0xffff),
+                                                    static_cast<unsigned long long>(acc & 0xffff));
                                         closedir(dir);
                                         return acc;
                                     }
@@ -146,8 +149,10 @@ inline std::uint64_t detect_active_account_id(std::uint32_t user_id)
                         std::memcpy(&acc, buf.data() + i + 4, 8);
                         if (acc != 0 && acc != ~0ULL && acc > 0x000000000000FFFFULL)
                         {
-                            MACHETE_LOG("[ACCOUNT]", "Account ID recuperado de %s: 0x%016llx",
-                                        db_path.c_str(), static_cast<unsigned long long>(acc));
+                            MACHETE_LOG("[ACCOUNT]", "Account ID recovered from %s: 0x%04llx...%04llx",
+                                        db_path.c_str(),
+                                        static_cast<unsigned long long>((acc >> 48) & 0xffff),
+                                        static_cast<unsigned long long>(acc & 0xffff));
                             return acc;
                         }
                     }
@@ -161,8 +166,10 @@ inline std::uint64_t detect_active_account_id(std::uint32_t user_id)
     if (fallback_acc == 0)
         fallback_acc = 0x0100000000000001ULL;
 
-    MACHETE_LOG("[ACCOUNT]", "Usando Account ID estandar offline para UserID 0x%x: 0x%016llx",
-                user_id, static_cast<unsigned long long>(fallback_acc));
+    MACHETE_LOG("[ACCOUNT]", "Using offline fallback Account ID for UserID 0x%x: 0x%04llx...%04llx",
+                user_id,
+                static_cast<unsigned long long>((fallback_acc >> 48) & 0xffff),
+                static_cast<unsigned long long>(fallback_acc & 0xffff));
     return fallback_acc;
 }
 

@@ -219,11 +219,11 @@ std::string DnsResolver::resolve(const std::string &domain, int timeout_ms)
     // 2. Consulta directa en cascada a servidores públicos (bypasseando 127.0.0.1)
     for (const auto &server : upstream_servers_)
     {
-        MACHETE_LOG("[DNS]", "Consultando '%s' directamente en %s:53...", domain.c_str(), server.c_str());
+        MACHETE_LOG("[DNS]", "Querying '%s' directly at %s:53...", domain.c_str(), server.c_str());
         std::string ip = query_server_udp(server, domain, timeout_ms);
         if (!ip.empty())
         {
-            MACHETE_LOG("[DNS]", "Resuelto con exito: %s -> %s (via %s)", domain.c_str(), ip.c_str(), server.c_str());
+            MACHETE_LOG("[DNS]", "Successfully resolved: %s -> %s (via %s)", domain.c_str(), ip.c_str(), server.c_str());
 
             std::lock_guard<std::mutex> lock(mutex_);
             cache_[domain] = {ip, now + std::chrono::seconds(300)};
@@ -242,14 +242,14 @@ std::string DnsResolver::resolve(const std::string &domain, int timeout_ms)
     auto fit = kGoogleAnycastMap.find(domain);
     if (fit != kGoogleAnycastMap.end())
     {
-        MACHETE_LOG("[DNS]", "UDP bloqueado. Usando Anycast IP estatica para '%s': %s",
+        MACHETE_LOG("[DNS]", "UDP blocked or timeout. Using Anycast static IP for '%s': %s",
                     domain.c_str(), fit->second.c_str());
         std::lock_guard<std::mutex> lock(mutex_);
         cache_[domain] = {fit->second, now + std::chrono::seconds(600)};
         return fit->second;
     }
 
-    MACHETE_LOG("[DNS]", "Aviso: No se pudo resolver '%s' en servidores upstream.", domain.c_str());
+    MACHETE_LOG("[DNS]", "Warning: Could not resolve '%s' across upstream DNS servers", domain.c_str());
     return "";
 }
 

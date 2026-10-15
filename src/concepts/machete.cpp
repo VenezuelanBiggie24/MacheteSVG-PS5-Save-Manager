@@ -172,7 +172,7 @@ class Machete final : public app::Concept
             operation_result_ = {};
         }
 
-        MACHETE_LOG("[OPERATION]", "Iniciando respaldo en segundo plano: %s -> %s",
+        MACHETE_LOG("[OPERATION]", "Starting background backup: %s -> %s",
                     game.title_id.c_str(), dev.label.c_str());
 
         op_thread_ = std::thread([this, game, dev]() {
@@ -202,6 +202,9 @@ class Machete final : public app::Concept
                 std::lock_guard<std::mutex> lock(op_mutex_);
                 operation_result_ = res;
             }
+            MACHETE_LOG("[OPERATION]", "Background backup finished: success=%d, files=%d, bytes=%llu",
+                        res.success ? 1 : 0, res.files_transferred,
+                        static_cast<unsigned long long>(res.bytes_transferred));
             operation_progress_.store(1.0f);
             operation_result_ready_.store(true);
             is_operating_.store(false);
@@ -230,7 +233,7 @@ class Machete final : public app::Concept
             operation_result_ = {};
         }
 
-        MACHETE_LOG("[OPERATION]", "Iniciando restauracion en segundo plano: %s <- %s",
+        MACHETE_LOG("[OPERATION]", "Starting background restore: %s <- %s",
                     game.title_id.c_str(), backup.folder_path.c_str());
 
         op_thread_ = std::thread([this, game, backup]() {
@@ -260,6 +263,9 @@ class Machete final : public app::Concept
                 std::lock_guard<std::mutex> lock(op_mutex_);
                 operation_result_ = res;
             }
+            MACHETE_LOG("[OPERATION]", "Background restore finished: success=%d, files=%d, bytes=%llu",
+                        res.success ? 1 : 0, res.files_transferred,
+                        static_cast<unsigned long long>(res.bytes_transferred));
             operation_progress_.store(1.0f);
             operation_result_ready_.store(true);
             is_operating_.store(false);

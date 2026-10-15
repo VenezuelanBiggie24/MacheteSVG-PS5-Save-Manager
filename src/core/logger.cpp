@@ -76,13 +76,13 @@ void fatal_signal_handler(int sig, siginfo_t *info, void *ucontext)
     const char *sig_name = "UNKNOWN";
     switch (sig)
     {
-    case SIGSEGV: sig_name = "SIGSEGV (Segmentation Fault / Acceso de memoria invalido)"; break;
-    case SIGBUS:  sig_name = "SIGBUS (Bus Error / Alineacion no valida)"; break;
-    case SIGABRT: sig_name = "SIGABRT (Abort / Asercion fallida)"; break;
-    case SIGILL:  sig_name = "SIGILL (Instruccion Ilegal de CPU)"; break;
-    case SIGFPE:  sig_name = "SIGFPE (Excepcion de Punto Flotante / Division por Cero)"; break;
-    case SIGSYS:  sig_name = "SIGSYS (Llamada al Sistema No Soportada / Bad Syscall)"; break;
-    case SIGTRAP: sig_name = "SIGTRAP (Trampa de Depurador / Breakpoint)"; break;
+    case SIGSEGV: sig_name = "SIGSEGV (Segmentation Fault / Invalid Memory Access)"; break;
+    case SIGBUS:  sig_name = "SIGBUS (Bus Error / Invalid Alignment)"; break;
+    case SIGABRT: sig_name = "SIGABRT (Abort / Assertion Failed)"; break;
+    case SIGILL:  sig_name = "SIGILL (Illegal Instruction)"; break;
+    case SIGFPE:  sig_name = "SIGFPE (Floating Point Exception / Divide by Zero)"; break;
+    case SIGSYS:  sig_name = "SIGSYS (Unsupported System Call / Bad Syscall)"; break;
+    case SIGTRAP: sig_name = "SIGTRAP (Debugger Trap / Breakpoint)"; break;
     }
 
     std::uint64_t rip = 0, rsp = 0, rbp = 0, trapno = 0, err = 0;
@@ -116,15 +116,15 @@ void fatal_signal_handler(int sig, siginfo_t *info, void *ucontext)
                   "\n"
                   "====================================================\n"
                   "[FATAL CRASH DETECTED]\n"
-                  "Senal: %d - %s\n"
-                  "Direccion de memoria fallida (si_addr): %p\n"
-                  "Codigo de senal (si_code): %d\n"
-                  "Registros CPU:\n"
+                  "Signal: %d - %s\n"
+                  "Faulting Memory Address (si_addr): %p\n"
+                  "Signal Code (si_code): %d\n"
+                  "CPU Registers:\n"
                   "  RIP: 0x%016llx  RSP: 0x%016llx  RBP: 0x%016llx\n"
                   "  RAX: 0x%016llx  RBX: 0x%016llx  RCX: 0x%016llx\n"
                   "  RDX: 0x%016llx  RSI: 0x%016llx  RDI: 0x%016llx\n"
                   "  Trap: %llu  Err: %llu\n"
-                  "Ultima migaja registrada (Breadcrumb): [%s]\n"
+                  "Last Recorded Breadcrumb: [%s]\n"
                   "PID: %d | UID: %d | GID: %d\n"
                   "====================================================\n\n",
                   sig, sig_name, info ? info->si_addr : nullptr, info ? info->si_code : 0,
@@ -142,7 +142,7 @@ void fatal_signal_handler(int sig, siginfo_t *info, void *ucontext)
                   s_current_breadcrumb, static_cast<int>(getpid()),
                   static_cast<int>(getuid()), static_cast<int>(getgid()));
 
-    // Escribir directamente sin bloqueos de mutex ni malloc (Async-Signal-Safe)
+    // Write directly without mutex locks or malloc (Async-Signal-Safe)
     ::write(STDERR_FILENO, crash_msg, std::strlen(crash_msg));
     raw_signal_safe_write(s_fd_primary, crash_msg);
     raw_signal_safe_write(s_fd_sandbox, crash_msg);
@@ -152,7 +152,7 @@ void fatal_signal_handler(int sig, siginfo_t *info, void *ucontext)
     if (sceKernelDebugOutText)
         sceKernelDebugOutText(0, crash_msg);
 
-    // Breve pausa para asentar escrituras de disco en FreeBSD antes de finalizar
+    // Brief pause to allow disk buffers to settle on FreeBSD/Prospero before exit
     if (sceKernelUsleep)
         sceKernelUsleep(150000);
 
@@ -173,7 +173,7 @@ void fatal_signal_handler(int sig, siginfo_t *info, void *ucontext)
 
 void init()
 {
-    // 1. Instalar manejadores de señales para captura forense de fallos
+    // 1. Install signal handlers for forensic crash capture
     struct sigaction sa{};
     sa.sa_sigaction = fatal_signal_handler;
     sa.sa_flags = SA_SIGINFO | SA_NODEFER | SA_RESETHAND;
@@ -187,25 +187,25 @@ void init()
     sigaction(SIGSYS,  &sa, nullptr);
     sigaction(SIGTRAP, &sa, nullptr);
 
-    // 2. Abrir rutas de registro disponibles
+    // 2. Open active log paths
     reopen_paths();
 
-    // 3. Encabezado de inicio de sesión
+    // 3. Log session startup header with complete date and time
     char time_str[64];
     std::time_t now = std::time(nullptr);
     std::tm *tm_info = std::localtime(&now);
     if (tm_info)
         std::strftime(time_str, sizeof(time_str), "%Y-%m-%d %H:%M:%S", tm_info);
     else
-        std::snprintf(time_str, sizeof(time_str), "desconocida");
+        std::snprintf(time_str, sizeof(time_str), "unknown");
 
     write("[SYSTEM]", "====================================================");
-    write("[SYSTEM]", "MacheteSVG v1.0.0 - Registro de Eventos y Diagnostico");
-    write("[SYSTEM]", "Fecha y Hora: %s", time_str);
+    write("[SYSTEM]", "MacheteSVG v1.0.0 - Event Log & System Diagnostics");
+    write("[SYSTEM]", "Date & Time: %s", time_str);
     write("[SYSTEM]", "PID: %d | UID: %d | EUID: %d | GID: %d",
           static_cast<int>(getpid()), static_cast<int>(getuid()),
           static_cast<int>(geteuid()), static_cast<int>(getgid()));
-    write("[SYSTEM]", "Archivos de log abiertos: primary=%d, sandbox=%d, data=%d, userapp=%d",
+    write("[SYSTEM]", "Log Descriptors: primary=%d, sandbox=%d, data=%d, userapp=%d",
           (s_fd_primary >= 0) ? 1 : 0, (s_fd_sandbox >= 0) ? 1 : 0,
           (s_fd_data >= 0) ? 1 : 0, (s_fd_userapp >= 0) ? 1 : 0);
     write("[SYSTEM]", "====================================================");
@@ -240,7 +240,7 @@ void vwrite(const char *tag, const char *fmt, va_list args)
     char body[1024];
     vsnprintf(body, sizeof(body), fmt, args);
 
-    char time_str[32];
+    char time_str[64];
     std::time_t now = std::time(nullptr);
     std::tm tm_buf{};
     bool tm_ok = false;
@@ -254,11 +254,11 @@ void vwrite(const char *tag, const char *fmt, va_list args)
         }
     }
     if (tm_ok)
-        std::strftime(time_str, sizeof(time_str), "%H:%M:%S", &tm_buf);
+        std::strftime(time_str, sizeof(time_str), "%Y-%m-%d %H:%M:%S", &tm_buf);
     else
-        std::snprintf(time_str, sizeof(time_str), "00:00:00");
+        std::snprintf(time_str, sizeof(time_str), "1970-01-01 00:00:00");
 
-    char line[1280];
+    char line[1536];
     const int len = std::snprintf(line, sizeof(line), "[%s] %-12s %s\n",
                                   time_str, tag ? tag : "[INFO]", body);
     if (len <= 0)
@@ -266,21 +266,29 @@ void vwrite(const char *tag, const char *fmt, va_list args)
 
     std::lock_guard<std::recursive_mutex> lock(s_log_mutex);
 
-    // Escribir en consola estandar (stdout)
+    // Standard output
     std::fputs(line, stdout);
     std::fflush(stdout);
 
-    // Enviar a la salida de depuracion del kernel de PS5
+    // Prospero kernel debug output
     if (sceKernelDebugOutText)
         sceKernelDebugOutText(0, line);
 
-    // Escribir de forma no bloqueante en descriptores de disco (sin fsync por linea)
-    const auto write_log_fd = [](int fd, const char *text, std::size_t text_len)
+    // Check if message is error level to enforce disk sync
+    const bool is_error = (tag != nullptr) &&
+        (std::strstr(tag, "ERR") != nullptr || std::strstr(tag, "CRIT") != nullptr ||
+         std::strstr(tag, "FATAL") != nullptr || std::strstr(tag, "FAIL") != nullptr);
+
+    const auto write_log_fd = [is_error](int fd, const char *text, std::size_t text_len)
     {
         if (fd >= 0)
         {
             auto w = ::write(fd, text, text_len);
             (void)w;
+            if (is_error)
+            {
+                ::fsync(fd);
+            }
         }
     };
 
