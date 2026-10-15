@@ -210,6 +210,51 @@ SslHttpResponse SslHttpClient::request(
         {
             resp.status = std::atoi(head.substr(first_space + 1, 3).c_str());
         }
+
+        // Si la respuesta usa Transfer-Encoding: chunked, decodificar los chunks HTTP/1.1
+        std::string head_lower = head;
+        for (char &c : head_lower)
+            c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+
+        if (head_lower.find("transfer-encoding: chunked") != std::string::npos ||
+            head_lower.find("transfer-encoding:chunked") != std::string::npos)
+        {
+            std::string decoded;
+            std::size_t pos = 0;
+            const std::size_t bsize = resp.body.size();
+            while (pos < bsize)
+            {
+                std::size_t crlf = resp.body.find("\r\n", pos);
+                if (crlf == std::string::npos)
+                    break;
+                std::string len_str = resp.body.substr(pos, crlf - pos);
+                std::size_t semi = len_str.find(';');
+                if (semi != std::string::npos)
+                    len_str = len_str.substr(0, semi);
+
+                char *endp = nullptr;
+                unsigned long clen = std::strtoul(len_str.c_str(), &endp, 16);
+                if (endp == len_str.c_str())
+                    break;
+                if (clen == 0)
+                    break;
+
+                pos = crlf + 2;
+                if (pos + clen > bsize)
+                {
+                    decoded.append(resp.body.substr(pos));
+                    break;
+                }
+                decoded.append(resp.body.substr(pos, clen));
+                pos += clen;
+                if (pos + 2 <= bsize && resp.body.substr(pos, 2) == "\r\n")
+                    pos += 2;
+            }
+            if (!decoded.empty())
+            {
+                resp.body = std::move(decoded);
+            }
+        }
     }
     else
     {

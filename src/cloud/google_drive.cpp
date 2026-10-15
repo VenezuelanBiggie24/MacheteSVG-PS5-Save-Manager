@@ -130,7 +130,42 @@ std::string get_effective_client_id()
         }
     }
 
-    // 2. Verificar /data/MacheteSVG/credentials.json
+    // 2. Verificar pendrive USB (/mnt/usb0/client_id.txt .. /mnt/usb7/client_id.txt)
+    for (int u = 0; u < 8; ++u)
+    {
+        char usb_path[64];
+        std::snprintf(usb_path, sizeof(usb_path), "/mnt/usb%d/client_id.txt", u);
+        std::FILE *fu = std::fopen(usb_path, "r");
+        if (fu)
+        {
+            char buf[256] = {0};
+            if (std::fgets(buf, sizeof(buf), fu))
+            {
+                std::fclose(fu);
+                std::string id = buf;
+                while (!id.empty() && (id.back() == '\r' || id.back() == '\n' || id.back() == ' '))
+                    id.pop_back();
+                if (id.length() > 5)
+                {
+                    // Auto-instalar en /data/MacheteSVG/client_id.txt
+                    std::FILE *fout = std::fopen("/data/MacheteSVG/client_id.txt", "w");
+                    if (fout)
+                    {
+                        std::fputs(id.c_str(), fout);
+                        std::fclose(fout);
+                    }
+                    MACHETE_LOG("[CLOUD]", "Client ID cargado e instalado desde USB: %s", usb_path);
+                    return id;
+                }
+            }
+            else
+            {
+                std::fclose(fu);
+            }
+        }
+    }
+
+    // 3. Verificar /data/MacheteSVG/credentials.json
     std::FILE *fj = std::fopen("/data/MacheteSVG/credentials.json", "rb");
     if (fj)
     {
@@ -802,12 +837,12 @@ void GoogleDrive::start_device_auth(std::function<void(const DeviceCodeInfo &)> 
                 ::machete::log::flush();
 
                 if (err_str == "restricted_client" || err_str == "invalid_client" ||
-                    err_str == "unauthorized_client")
+                    err_str == "unauthorized_client" || resp.status == 401)
                 {
                     last_error_ = is_es
-                        ? "Google Drive requiere credenciales. Coloca client_id.txt en /data/MacheteSVG/"
-                        : "Google Drive requires setup. Place client_id.txt in /data/MacheteSVG/";
-                    user_code_ = is_es ? "CONFIGURAR" : "CONFIGURE";
+                        ? "Google OAuth: Client ID no valido. Coloca client_id.txt en tu USB o en /data/MacheteSVG/"
+                        : "Google OAuth: Invalid Client ID. Place client_id.txt on USB or /data/MacheteSVG/";
+                    user_code_ = is_es ? "ID INVALIDO" : "INVALID ID";
                 }
                 else if (resp.error.find("0x8041013D") != std::string::npos ||
                          resp.error.find("rechazada") != std::string::npos ||
