@@ -25,10 +25,9 @@ POSSIBILITY OF SUCH DAMAGE.
 3. TRADEMARKS & NON-AFFILIATION:
 "PlayStation", "PS5", "PS4", and "DualSense" are registered trademarks or
 trademarks of Sony Interactive Entertainment Inc.
-"Google Drive" is a trademark of Google LLC.
 MacheteSVG is an independent open-source homebrew software project.
 MacheteSVG is not affiliated with, endorsed by, or sponsored by Sony Interactive
-Entertainment Inc., Google LLC, or any of their subsidiaries or affiliates.
+Entertainment Inc. or any of its subsidiaries or affiliates.
 
 4. THIRD-PARTY NOTICES & ACKNOWLEDGMENTS:
 - ProsperoStore / ps5-homebrew-ui (Copyright (C) 2026 BlackBearReloaded) - GPL-3.0
@@ -62,10 +61,9 @@ DE ESTE SOFTWARE.
 3. MARCAS REGISTRADAS Y NO AFILIACION:
 "PlayStation", "PS5", "PS4" y "DualSense" son marcas registradas de Sony
 Interactive Entertainment Inc.
-"Google Drive" es una marca comercial de Google LLC.
 MacheteSVG es un proyecto independiente de software homebrew de código abierto.
 MacheteSVG no está afiliado, respaldado ni patrocinado por Sony Interactive
-Entertainment Inc., Google LLC ni ninguna de sus filiales.
+Entertainment Inc. ni ninguna de sus filiales.
 
 4. AVISOS DE TERCEROS Y RECONOCIMIENTOS:
 - ProsperoStore / ps5-homebrew-ui (Copyright (C) 2026 BlackBearReloaded) - GPL-3.0

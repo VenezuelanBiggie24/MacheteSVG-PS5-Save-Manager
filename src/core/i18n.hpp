@@ -23,8 +23,8 @@ enum class StringId
     AppSubtitle,
     JailbreakActiveRoot,
     SandboxRestricted,
-    CloudConnected,
-    CloudConnectPrompt,
+    WebServerActive,
+    WebServerPrompt,
 
     // Games List & Details
     GamesCount,
@@ -41,15 +41,15 @@ enum class StringId
     // Storage Details & Buttons
     LocalStorageInfo,
     UsbStorageInfo,
-    CloudStorageInfo,
+    WebServerStorageInfo,
     BtnBackup,
     BtnRestore,
-    BtnCloudSync,
+    BtnWebServer,
 
     // Footer Legend & DualSense Hints
     LegendSelect,
     LegendBack,
-    LegendCloud,
+    LegendWebServer,
     LegendBackup,
     LegendLanguage,
     HintTheme,
@@ -61,7 +61,7 @@ enum class StringId
     StorageInternal,
     StorageM2,
     StorageUsbFormat,
-    StorageCloud,
+    StorageWebServer,
     UsbConnectedFormat,
     UsbDisconnectedFormat,
 
@@ -69,31 +69,28 @@ enum class StringId
     LocInternal,
     LocM2,
     LocUsb,
-    LocCloud,
+    LocWebServer,
 
     // Action Modal Dialog
     DialogActionTitle,
     DialogBackupUsb,
     DialogRestoreUsb,
-    DialogSyncCloud,
+    DialogSyncWebServer,
     DialogCancel,
     DialogBackupHeading,
     DialogRestoreHeading,
     DialogStructureSubtitle,
 
-    // Google Drive Dialog
-    DriveDialogTitle,
-    DriveDialogSubtitle,
-    DriveDialogLinked,
-    DriveStep1,
-    DriveStep2,
-    DriveWaiting,
-    DriveRequestingCode,
-    DriveSyncCurrent,
-    DriveRestoreCurrent,
-    DriveSyncAll,
-    DriveSignOut,
-    DriveClose,
+    // Web Server Dialog
+    WebServerDialogTitle,
+    WebServerDialogSubtitle,
+    WebServerStatusRunning,
+    WebServerStatusStopped,
+    WebServerUrlLabel,
+    WebServerInstruction,
+    WebServerBtnStart,
+    WebServerBtnStop,
+    WebServerClose,
 
     // Notifications and Toasts
     ToastJailbreakGranted,
@@ -101,15 +98,10 @@ enum class StringId
     ToastBackupFailed,
     ToastRestoreSuccess,
     ToastRestoreFailed,
-    ToastCloudSuccess,
-    ToastCloudFailed,
+    ToastWebServerStarted,
+    ToastWebServerStopped,
     ToastScanUpdated,
     ToastLanguageSwitched,
-    ToastUploadingToCloud,
-    ToastStartingCloudSync,
-    ToastCloudLoggedOut,
-    ToastDownloadingFromCloud,
-    ToastUploadingGeneric,
 
     // Count marker
     Count

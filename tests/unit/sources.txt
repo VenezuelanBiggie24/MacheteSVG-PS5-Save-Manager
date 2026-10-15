@@ -16,9 +16,8 @@ src/core/game_scanner.cpp
 src/core/jailbreak.cpp
 src/core/save_manager.cpp
 src/core/logger.cpp
-src/cloud/google_drive.cpp
-src/cloud/dns_resolver.cpp
-src/cloud/ssl_http_client.cpp
+src/server/web_server.cpp
+src/server/zip_writer.cpp
 src/core/frame_stats.cpp
 src/core/input.cpp
 src/core/save_file.cpp

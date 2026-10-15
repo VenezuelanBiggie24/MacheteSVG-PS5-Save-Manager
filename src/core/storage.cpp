@@ -3,7 +3,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 #include "storage.hpp"
-#include "cloud/google_drive.hpp"
 #include "core/i18n.hpp"
 #include "core/logger.hpp"
 
@@ -37,9 +36,6 @@ std::uint64_t previous_usb_mask = 0;
 
 std::string StorageDevice::free_space_formatted() const
 {
-    if (type == StorageType::Cloud)
-        return "Espacio en Nube";
-
     if (!connected)
         return "No conectado";
 
@@ -68,8 +64,6 @@ std::string get_base_path(StorageType type)
         return std::string("/mnt/ext1/") + ROOT_DIR_NAME;
     case StorageType::USB:
         return std::string("/mnt/usb0/") + ROOT_DIR_NAME;
-    case StorageType::Cloud:
-        return "Cloud:/" + std::string(ROOT_DIR_NAME);
     default:
         return "";
     }
@@ -87,9 +81,6 @@ bool ensure_internal_storage()
 
 bool is_storage_available(StorageType type)
 {
-    if (type == StorageType::Cloud)
-        return true;
-
     if (type == StorageType::Internal)
     {
         const std::string root_dir = "/data/" + std::string(ROOT_DIR_NAME);
@@ -210,21 +201,6 @@ std::vector<StorageDevice> scan_storage_devices()
         }
     }
 
-    // 4. Google Drive (Nube)
-    {
-        StorageDevice dev;
-        dev.type = StorageType::Cloud;
-        dev.id = "cloud_gdrive";
-        const bool gdrive_ok = machete::cloud::GoogleDrive::instance().is_authorized();
-        const bool is_es = (machete::i18n::current_language() == machete::i18n::Language::Spanish);
-        dev.label = gdrive_ok ? machete::i18n::tr(machete::i18n::StringId::StorageCloud)
-                              : (is_es ? "Google Drive (No Vinculado)" : "Google Drive (Not Linked)");
-        dev.mount_path = "Cloud:";
-        dev.root_dir = "Cloud:/" + std::string(ROOT_DIR_NAME);
-        dev.connected = gdrive_ok;
-        devices.push_back(dev);
-    }
-
     return devices;
 }
 
@@ -325,9 +301,6 @@ bool ensure_directory_structure_at(const std::string &mount_path, const std::str
 bool ensure_directory_structure(StorageType type, const std::string &title_id,
                                 const std::string &game_name)
 {
-    if (type == StorageType::Cloud)
-        return true;
-
     std::string mount_point;
     switch (type)
     {

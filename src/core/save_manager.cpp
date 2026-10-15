@@ -10,7 +10,6 @@
 #include "core/logger.hpp"
 #include "core/samu_vault.hpp"
 #include "core/sfo_resigner.hpp"
-#include "cloud/google_drive.hpp"
 
 #include <cstdio>
 #include <cstdlib>
@@ -642,16 +641,6 @@ OperationResult backup_game_save(const scanner::ScannedGame &game,
         OperationResult res;
         const bool is_es = (machete::i18n::current_language() == machete::i18n::Language::Spanish);
 
-        if (dest_device.type == storage::StorageType::Cloud)
-        {
-            auto &drive = cloud::GoogleDrive::instance();
-            drive.backup_save(game.title_id, game.title, game.save_path, nullptr);
-            res.success = true;
-            res.message = is_es ? ("Enviando a Google Drive /MacheteSVG/" + game.title_id + "...")
-                                : ("Sending to Google Drive /MacheteSVG/" + game.title_id + "...");
-            return res;
-        }
-
         if (!jailbreak::verify_root_access(static_cast<int>(getpid())))
         {
             MACHETE_LOG("[BACKUP]", "Root privileges absent (UID=%d, EUID=%d). Requesting elevation...",
@@ -818,15 +807,6 @@ OperationResult restore_game_save(const scanner::ScannedGame &game,
             }
         }
 
-        if (source_device.type == storage::StorageType::Cloud)
-        {
-            auto &drive = cloud::GoogleDrive::instance();
-            drive.restore_save(game.title_id, game.save_path, nullptr);
-            res.success = true;
-            res.message = is_es ? "Descargando desde Google Drive..." : "Downloading from Google Drive...";
-            return res;
-        }
-
         // Buscar carpeta de respaldo existente (soporta coincidencia exacta o con nombre del juego)
         std::string backup_game_folder =
             source_device.root_dir + "/" + game.title_id + " - " + sanitize_name(game.title);
@@ -988,8 +968,6 @@ std::vector<BackupItem> find_available_backups(const scanner::ScannedGame &game,
     // 1. Agregar dispositivos provistos (verificando directamente su ruta física sin depender de flags stale)
     for (const auto &dev : devices)
     {
-        if (dev.type == storage::StorageType::Cloud)
-            continue;
         add_target(dev.id, dev.label, dev.type, dev.root_dir);
     }
 

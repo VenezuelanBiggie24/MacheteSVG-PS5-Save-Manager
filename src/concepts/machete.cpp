@@ -1,11 +1,10 @@
-// MacheteSVG - PS5 & PS4 Savegame Manager & Cloud Sync
+// MacheteSVG - PS5 & PS4 Savegame Manager & Web Save Station
 // Powered by ps5-homebrew-ui & PS5 Payload SDK
 // Copyright (C) 2026 MacheteSVG Team
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 #include "concepts/concepts.hpp"
 
-#include "cloud/google_drive.hpp"
 #include "core/game_scanner.hpp"
 #include "core/i18n.hpp"
 #include "core/jailbreak.hpp"
@@ -15,6 +14,7 @@
 #include "core/tween.hpp"
 #include "core/worker_thread.hpp"
 #include "demo/catalog.hpp"
+#include "server/web_server.hpp"
 #include "ui/glyphs.hpp"
 #include "ui/motion.hpp"
 #include "ui/theme.hpp"
@@ -54,10 +54,10 @@ enum Item : int
     // Panel Derecho: Botones de acción
     kBtnBackup,
     kBtnRestore,
-    kBtnCloud,
+    kBtnWebServer,
 
-    // Cabecera: Botón / Chip de Google Drive
-    kBtnCloudHeader,
+    // Cabecera: Botón / Chip de Servidor Web
+    kBtnWebServerHeader,
 
     kItemCount
 };
@@ -74,9 +74,9 @@ constexpr Rect kRects[kItemCount] = {
     // Botones de acción (panel derecho)
     {836, 780, 260, 64},  // Respaldar (Primary)
     {1112, 780, 260, 64}, // Restaurar (Secondary)
-    {836, 856, 536, 64},  // Sincronizar Google Drive
+    {836, 856, 536, 64},  // Estacion Web Local (Secondary)
 
-    // Chip Google Drive en Cabecera
+    // Chip Servidor Web en Cabecera
     {1540, 108, 284, 44},
 };
 
@@ -84,7 +84,7 @@ static constexpr std::array<const char *const, 4> kTechniques = {
     "Core-Shell Architecture: Complete decoupling between cryptographic engine and GUI",
     "Keystone Preservation: Protects /sce_sys/ to prevent error CE-108255-1",
     "Atomic POSIX Writes: Safe replacements with vnode memory synchronization",
-    "Cloud Synchronization: Google Drive API via Device Authorization Grant",
+    "Web Save Station: Embedded HTTP server with live ZIP streaming for PC/Mobile browser downloads",
 };
 
 class Machete final : public app::Concept
@@ -107,6 +107,7 @@ class Machete final : public app::Concept
             op_thread_.join();
         if (jb_thread_.joinable())
             jb_thread_.join();
+        machete::server::WebServer::instance().stop();
         machete::scanner::release_game_icon_textures(games_);
         if (app_icon_texture_ != 0)
         {
@@ -143,7 +144,7 @@ class Machete final : public app::Concept
         static const app::ConceptInfo kInfo{
             "machete",
             "MacheteSVG Save Manager",
-            "PS5 & PS4 Save Data Manager and Google Drive Sync",
+            "PS5 & PS4 Save Data Manager & Web Save Station",
             "src/concepts/machete.cpp",
             audio::SoundSet::glass,
             Color::rgb(0x76d6ff),
@@ -309,7 +310,7 @@ class Machete final : public app::Concept
         MACHETE_BREADCRUMB("MacheteConcept::enter start");
         age_ = 0.0f;
         dialog_ = false;
-        drive_dialog_ = false;
+        web_server_dialog_ = false;
         notification_timer_ = 0.0f;
         storage_poll_timer_ = 0.0f;
         jb_poll_timer_ = 0.0f;
@@ -353,6 +354,7 @@ class Machete final : public app::Concept
         games_ = machete::scanner::scan_installed_games_and_saves();
         MACHETE_BREADCRUMB("refresh_games: load_game_icon_textures");
         machete::scanner::load_game_icon_textures(games_);
+        machete::server::WebServer::instance().update_games(games_);
 
         if (games_.empty())
         {
@@ -489,17 +491,17 @@ class Machete final : public app::Concept
                 feedback.play(audio::Cue::error, 1.0f, 0.0f);
             }
         }
-        // Atajo Triangle: Abrir / alternar sincronización con Google Drive directamente
+        // Atajo Triangle: Abrir / alternar servidor web local directamente
         else if (input.is_pressed(Action::north))
         {
-            if (drive_dialog_)
+            if (web_server_dialog_)
             {
-                drive_dialog_ = false;
+                web_server_dialog_ = false;
                 feedback.play(audio::Cue::modal_close, 1.0f, 0.0f);
             }
             else
             {
-                open_google_drive_dialog(feedback);
+                open_web_server_dialog(feedback);
             }
         }
         // Atajo Square: Recargar lista de juegos y reintentar elevación si es necesario
@@ -524,9 +526,9 @@ class Machete final : public app::Concept
             notification_timer_ = 2.5f;
             feedback.play(audio::Cue::select, 1.0f, 0.0f);
         }
-        else if (drive_dialog_)
+        else if (web_server_dialog_)
         {
-            update_drive_dialog(input, feedback);
+            update_web_server_dialog(input, feedback);
         }
         else if (dialog_)
         {
@@ -545,7 +547,7 @@ class Machete final : public app::Concept
 
         for (int i = 0; i < kItemCount; ++i)
         {
-            const bool focused = (!dialog_ && !drive_dialog_ && i == focus_ && !operating &&
+            const bool focused = (!dialog_ && !web_server_dialog_ && i == focus_ && !operating &&
                                   op_overlay_show_.value <= 0.05f);
             focus_amount_[i].target = focused ? 1.0f : 0.0f;
             focus_amount_[i].update(dt, std::max(omega, 22.0f));
@@ -555,8 +557,8 @@ class Machete final : public app::Concept
         dialog_show_.target = dialog_ ? 1.0f : 0.0f;
         dialog_show_.update(dt, std::min(omega, 26.0f));
 
-        drive_dialog_show_.target = drive_dialog_ ? 1.0f : 0.0f;
-        drive_dialog_show_.update(dt, std::min(omega, 26.0f));
+        web_server_dialog_show_.target = web_server_dialog_ ? 1.0f : 0.0f;
+        web_server_dialog_show_.update(dt, std::min(omega, 26.0f));
 
         dialog_focus_value_.target = static_cast<float>(dialog_focus_);
         dialog_focus_value_.update(dt, std::max(omega, 20.0f));
@@ -638,8 +640,8 @@ class Machete final : public app::Concept
                 }
                 else
                 {
-                    // Subir a la cabecera (Google Drive)
-                    move_to(kBtnCloudHeader, feedback);
+                    // Subir a la cabecera (Servidor Web)
+                    move_to(kBtnWebServerHeader, feedback);
                 }
             }
             else if (input.nav == Direction::right)
@@ -651,8 +653,8 @@ class Machete final : public app::Concept
                 refuse(feedback, input);
             }
         }
-        // Navegación en la Cabecera (Google Drive Chip)
-        else if (focus_ == kBtnCloudHeader)
+        // Navegación en la Cabecera (Chip Servidor Web)
+        else if (focus_ == kBtnWebServerHeader)
         {
             if (input.nav == Direction::down)
             {
@@ -681,9 +683,9 @@ class Machete final : public app::Concept
                 if (input.nav == Direction::right)
                     move_to(kBtnRestore, feedback);
                 else if (input.nav == Direction::down)
-                    move_to(kBtnCloud, feedback);
+                    move_to(kBtnWebServer, feedback);
                 else if (input.nav == Direction::up)
-                    move_to(kBtnCloudHeader, feedback);
+                    move_to(kBtnWebServerHeader, feedback);
                 else
                     refuse(feedback, input);
             }
@@ -692,13 +694,13 @@ class Machete final : public app::Concept
                 if (input.nav == Direction::left)
                     move_to(kBtnBackup, feedback);
                 else if (input.nav == Direction::down)
-                    move_to(kBtnCloud, feedback);
+                    move_to(kBtnWebServer, feedback);
                 else if (input.nav == Direction::up)
-                    move_to(kBtnCloudHeader, feedback);
+                    move_to(kBtnWebServerHeader, feedback);
                 else
                     refuse(feedback, input);
             }
-            else if (focus_ == kBtnCloud)
+            else if (focus_ == kBtnWebServer)
             {
                 if (input.nav == Direction::up)
                     move_to(kBtnBackup, feedback);
@@ -764,117 +766,85 @@ class Machete final : public app::Concept
             dialog_focus_ = 0;
             feedback.play(audio::Cue::modal_open, 1.0f, ui::pan_for_x(kRects[focus_].cx()));
         }
-        else if (focus_ == kBtnCloud || focus_ == kBtnCloudHeader)
+        else if (focus_ == kBtnWebServer || focus_ == kBtnWebServerHeader)
         {
-            open_google_drive_dialog(feedback);
+            open_web_server_dialog(feedback);
         }
     }
 
-    void open_google_drive_dialog(app::Feedback &feedback)
+    void open_web_server_dialog(app::Feedback &feedback)
     {
-        drive_dialog_ = true;
-        drive_dialog_focus_ = 0;
-        auto &drive = machete::cloud::GoogleDrive::instance();
-
-        if (!drive.is_authorized())
-        {
-            drive.start_device_auth([](const machete::cloud::DeviceCodeInfo &) {
-                // Notificación o actualización de código en vivo
-            });
-        }
+        web_server_dialog_ = true;
+        web_server_dialog_focus_ = 0;
         feedback.play(audio::Cue::modal_open, 1.0f, 0.0f);
     }
 
-    void update_drive_dialog(const InputFrame &input, app::Feedback &feedback)
+    void update_web_server_dialog(const InputFrame &input, app::Feedback &feedback)
     {
-        auto &drive = machete::cloud::GoogleDrive::instance();
-        const bool authorized = drive.is_authorized();
-        const int max_focus = authorized ? 3 : 1;
+        auto &server = machete::server::WebServer::instance();
+        const bool is_running = server.is_running();
+        const int max_focus = 1;
 
         if (input.nav == Direction::down)
         {
-            if (drive_dialog_focus_ < max_focus)
+            if (web_server_dialog_focus_ < max_focus)
             {
-                drive_dialog_focus_++;
+                web_server_dialog_focus_++;
                 feedback.play(audio::Cue::focus, 1.0f, 0.0f);
             }
         }
         else if (input.nav == Direction::up)
         {
-            if (drive_dialog_focus_ > 0)
+            if (web_server_dialog_focus_ > 0)
             {
-                drive_dialog_focus_--;
+                web_server_dialog_focus_--;
                 feedback.play(audio::Cue::focus, 1.0f, 0.0f);
             }
         }
 
         if (input.is_pressed(Action::back))
         {
-            drive_dialog_ = false;
+            web_server_dialog_ = false;
             feedback.play(audio::Cue::modal_close, 1.0f, 0.0f);
         }
         else if (input.is_pressed(Action::confirm))
         {
-            if (!authorized)
+            if (web_server_dialog_focus_ == 0)
             {
-                if (drive.auth_state() == machete::cloud::AuthState::Error)
+                if (is_running)
                 {
-                    drive.start_device_auth([](const machete::cloud::DeviceCodeInfo &) {});
-                    feedback.play(audio::Cue::select, 1.0f, 0.0f);
+                    server.stop();
+                    std::snprintf(notification_text_, sizeof(notification_text_), "%s",
+                                  machete::i18n::tr(machete::i18n::StringId::ToastWebServerStopped));
+                    notification_timer_ = 3.5f;
+                    feedback.play(audio::Cue::modal_close, 1.0f, 0.0f);
                 }
                 else
                 {
-                    drive_dialog_ = false;
-                    feedback.play(audio::Cue::modal_close, 1.0f, 0.0f);
+                    server.update_games(games_);
+                    const bool ok = server.start(8080);
+                    if (ok)
+                    {
+                        std::snprintf(notification_text_, sizeof(notification_text_), "%s",
+                                      machete::i18n::tr(machete::i18n::StringId::ToastWebServerStarted));
+                        notification_timer_ = 4.0f;
+                        feedback.play(audio::Cue::saved, 1.0f, 0.0f);
+                    }
+                    else
+                    {
+                        const bool is_es = (machete::i18n::current_language() == machete::i18n::Language::Spanish);
+                        std::snprintf(notification_text_, sizeof(notification_text_), "%s",
+                                      is_es ? "Error al iniciar servidor en puerto 8080"
+                                            : "Failed to start server on port 8080");
+                        notification_timer_ = 4.0f;
+                        feedback.play(audio::Cue::error, 1.0f, 0.0f);
+                    }
                 }
             }
             else
             {
-                if (drive_dialog_focus_ == 0)
-                {
-                    // Sincronizar juego seleccionado
-                    if (!games_.empty())
-                    {
-                        const auto &game = games_[static_cast<std::size_t>(selected_game_)];
-                        drive.backup_save(game.title_id, game.title, game.save_path,
-                                          [this](bool /*ok*/, const std::string &msg) {
-                                              std::snprintf(notification_text_,
-                                                            sizeof(notification_text_), "%s",
-                                                            msg.c_str());
-                                              notification_timer_ = 4.0f;
-                                          });
-                        std::snprintf(notification_text_, sizeof(notification_text_),
-                                      machete::i18n::tr(machete::i18n::StringId::ToastUploadingToCloud),
-                                      game.title.c_str());
-                        notification_timer_ = 3.5f;
-                    }
-                    drive_dialog_ = false;
-                    feedback.play(audio::Cue::saved, 1.0f, 0.0f);
-                }
-                else if (drive_dialog_focus_ == 1)
-                {
-                    // Sincronizar todas las partidas
-                    std::snprintf(notification_text_, sizeof(notification_text_), "%s",
-                                  machete::i18n::tr(machete::i18n::StringId::ToastStartingCloudSync));
-                    notification_timer_ = 4.0f;
-                    drive_dialog_ = false;
-                    feedback.play(audio::Cue::saved, 1.0f, 0.0f);
-                }
-                else if (drive_dialog_focus_ == 2)
-                {
-                    // Cerrar sesión
-                    drive.logout();
-                    std::snprintf(notification_text_, sizeof(notification_text_), "%s",
-                                  machete::i18n::tr(machete::i18n::StringId::ToastCloudLoggedOut));
-                    notification_timer_ = 3.5f;
-                    drive_dialog_ = false;
-                    feedback.play(audio::Cue::modal_close, 1.0f, 0.0f);
-                }
-                else
-                {
-                    drive_dialog_ = false;
-                    feedback.play(audio::Cue::modal_close, 1.0f, 0.0f);
-                }
+                web_server_dialog_ = false;
+                feedback.play(audio::Cue::modal_close, 1.0f, 0.0f);
             }
         }
     }
@@ -918,49 +888,24 @@ class Machete final : public app::Concept
                 const auto &game = games_[static_cast<std::size_t>(selected_game_)];
                 auto &dev = active_devices_[static_cast<std::size_t>(dialog_focus_)];
 
-                if (dev.type == machete::storage::StorageType::Cloud)
+                if (is_operating_.load())
                 {
-                    auto &drive = machete::cloud::GoogleDrive::instance();
-                    if (!drive.is_authorized())
-                    {
-                        dialog_ = false;
-                        open_google_drive_dialog(feedback);
-                        return;
-                    }
-                    drive.backup_save(game.title_id, game.title, game.save_path,
-                                      [this](bool /*ok*/, const std::string &msg) {
-                                          std::snprintf(notification_text_,
-                                                        sizeof(notification_text_), "%s",
-                                                        msg.c_str());
-                                          notification_timer_ = 4.0f;
-                                      });
-                    std::snprintf(notification_text_, sizeof(notification_text_), "%s",
-                                  machete::i18n::tr(machete::i18n::StringId::ToastUploadingGeneric));
-                    notification_timer_ = 4.0f;
-                    dialog_ = false;
-                    feedback.play(audio::Cue::saved, 1.0f, 0.0f);
+                    feedback.play(audio::Cue::error, 1.0f, 0.0f);
+                    return;
                 }
-                else
+
+                if (dev.type == machete::storage::StorageType::Internal)
                 {
-                    if (is_operating_.load())
+                    machete::storage::ensure_internal_storage();
+                    if (!dev.connected && (access("/data", F_OK) == 0 || access(dev.root_dir.c_str(), F_OK) == 0))
                     {
-                        feedback.play(audio::Cue::error, 1.0f, 0.0f);
-                        return;
+                        dev.connected = true;
                     }
-
-                    if (dev.type == machete::storage::StorageType::Internal)
-                    {
-                        machete::storage::ensure_internal_storage();
-                        if (!dev.connected && (access("/data", F_OK) == 0 || access(dev.root_dir.c_str(), F_OK) == 0))
-                        {
-                            dev.connected = true;
-                        }
-                    }
-
-                    dialog_ = false;
-                    feedback.play(audio::Cue::select, 1.0f, 0.0f);
-                    start_async_backup(game, dev);
                 }
+
+                dialog_ = false;
+                feedback.play(audio::Cue::select, 1.0f, 0.0f);
+                start_async_backup(game, dev);
             }
         }
     }
@@ -1086,27 +1031,27 @@ class Machete final : public app::Concept
                            : machete::i18n::tr(machete::i18n::StringId::SandboxRestricted),
                    jb_chip.x + 36, jb_chip.cy() + 7, 18, Color::rgb(0xffffff));
 
-        // Botón / Chip de Google Drive (Navegable y Enfocable)
-        const Rect cloud_chip = kRects[kBtnCloudHeader];
-        const bool cloud_focused = (focus_ == kBtnCloudHeader);
-        const bool drive_auth = machete::cloud::GoogleDrive::instance().is_authorized();
+        // Botón / Chip de Servidor Web (Navegable y Enfocable)
+        const Rect web_chip = kRects[kBtnWebServerHeader];
+        const bool web_focused = (focus_ == kBtnWebServerHeader);
+        const bool server_running = machete::server::WebServer::instance().is_running();
 
-        list.rounded_rect(cloud_chip, 22.0f,
-                          cloud_focused ? Color::rgb(0x1d3b66).with_alpha(0.95f)
-                                        : Color::rgb(0x132242).with_alpha(0.8f));
-        paint.stroke(cloud_chip, 22.0f, cloud_focused ? 2.5f : 1.5f,
-                     cloud_focused ? theme.primary
-                                   : (drive_auth ? Color::rgb(0x38ef7d).with_alpha(0.5f)
-                                                 : Color::rgb(0x76d6ff).with_alpha(0.3f)));
-        if (cloud_focused)
-            paint.focus_ring(cloud_chip, 22.0f, focus_amount_[kBtnCloudHeader].value);
+        list.rounded_rect(web_chip, 22.0f,
+                          web_focused ? Color::rgb(0x1d3b66).with_alpha(0.95f)
+                                      : Color::rgb(0x132242).with_alpha(0.8f));
+        paint.stroke(web_chip, 22.0f, web_focused ? 2.5f : 1.5f,
+                     web_focused ? theme.primary
+                                 : (server_running ? Color::rgb(0x38ef7d).with_alpha(0.5f)
+                                                   : Color::rgb(0x76d6ff).with_alpha(0.3f)));
+        if (web_focused)
+            paint.focus_ring(web_chip, 22.0f, focus_amount_[kBtnWebServerHeader].value);
 
-        list.circle(cloud_chip.x + 22, cloud_chip.cy(), 5.0f,
-                    drive_auth ? Color::rgb(0x38ef7d) : Color::rgb(0x76d6ff));
-        paint.body(drive_auth ? machete::i18n::tr(machete::i18n::StringId::CloudConnected)
-                              : machete::i18n::tr(machete::i18n::StringId::CloudConnectPrompt),
-                   cloud_chip.x + 36, cloud_chip.cy() + 7, 18,
-                   cloud_focused ? theme.primary : Color::rgb(0xffffff));
+        list.circle(web_chip.x + 22, web_chip.cy(), 5.0f,
+                    server_running ? Color::rgb(0x38ef7d) : Color::rgb(0x76d6ff));
+        paint.body(server_running ? machete::i18n::tr(machete::i18n::StringId::WebServerActive)
+                                  : machete::i18n::tr(machete::i18n::StringId::WebServerPrompt),
+                   web_chip.x + 36, web_chip.cy() + 7, 18,
+                   web_focused ? theme.primary : Color::rgb(0xffffff));
 
         // ==========================================
         // 2. PANEL IZQUIERDO: LISTA DINAMICA DE JUEGOS
@@ -1281,7 +1226,7 @@ class Machete final : public app::Concept
                 machete::i18n::tr(machete::i18n::StringId::LocInternal),
                 machete::i18n::tr(machete::i18n::StringId::LocM2),
                 machete::i18n::tr(machete::i18n::StringId::LocUsb),
-                machete::i18n::tr(machete::i18n::StringId::LocCloud),
+                machete::i18n::tr(machete::i18n::StringId::LocWebServer),
             };
             for (int l = 0; l < 4; ++l)
             {
@@ -1298,8 +1243,8 @@ class Machete final : public app::Concept
                          ui::ButtonKind::primary, look(kBtnBackup));
             paint.button(kRects[kBtnRestore], machete::i18n::tr(machete::i18n::StringId::BtnRestore),
                          ui::ButtonKind::secondary, look(kBtnRestore));
-            paint.button(kRects[kBtnCloud], machete::i18n::tr(machete::i18n::StringId::BtnCloudSync),
-                         ui::ButtonKind::secondary, look(kBtnCloud));
+            paint.button(kRects[kBtnWebServer], machete::i18n::tr(machete::i18n::StringId::BtnWebServer),
+                         ui::ButtonKind::secondary, look(kBtnWebServer));
         }
         else
         {
@@ -1317,8 +1262,8 @@ class Machete final : public app::Concept
                       : "2. Detection: With root privileges, scans /user/home and /user/app automatically.",
                 is_es ? "3. Pendrive USB: Conecta un dispositivo exFAT para respaldos portables."
                       : "3. USB Drive: Connect an exFAT device for portable offline backups.",
-                is_es ? "4. Google Drive: Presiona Triangulo para sincronizacion en la nube."
-                      : "4. Google Drive: Press Triangle for cloud synchronization.",
+                is_es ? "4. Servidor Web: Presiona Triangulo para descargar partidas por Wi-Fi / LAN."
+                      : "4. Web Server: Press Triangle to download savegames over Wi-Fi / LAN.",
                 is_es ? "5. Reescanear: Presiona Cuadrado para refrescar los juegos y partidas."
                       : "5. Refresh: Press Square to re-scan games and save data.",
             };
@@ -1342,115 +1287,94 @@ class Machete final : public app::Concept
         }
 
         // ==========================================
-        // 4. DIALOGO MODAL: GOOGLE DRIVE (DEVICE FLOW)
+        // 4. DIALOGO MODAL: SERVIDOR WEB LOCAL
         // ==========================================
-        const float drive_show = drive_dialog_show_.value;
-        if (drive_show > 0.01f)
+        const float ws_show = web_server_dialog_show_.value;
+        if (ws_show > 0.01f)
         {
             list.rounded_rect({0, 0, gfx::kVirtualWidth, gfx::kVirtualHeight}, 0,
-                              Color::rgb(0x000000).with_alpha(0.7f * drive_show));
-            list.push_opacity(tween::clamp01(drive_show));
-            list.push_transform(0.94f + 0.06f * tween::clamp01(drive_show), 960, 540, 0, 0);
+                              Color::rgb(0x000000).with_alpha(0.7f * ws_show));
+            list.push_opacity(tween::clamp01(ws_show));
+            list.push_transform(0.94f + 0.06f * tween::clamp01(ws_show), 960, 540, 0, 0);
 
-            const Rect dlg{520, 210, 880, 640};
+            const Rect dlg{500, 190, 920, 680};
             paint.panel(dlg);
 
-            auto &drive = machete::cloud::GoogleDrive::instance();
-            const bool auth = drive.is_authorized();
+            auto &server = machete::server::WebServer::instance();
+            const bool is_running = server.is_running();
+            const bool is_es = (machete::i18n::current_language() == machete::i18n::Language::Spanish);
 
-            if (!auth)
-            {
-                paint.heading(machete::i18n::tr(machete::i18n::StringId::DriveDialogTitle),
-                              570, 275, 36, theme.text);
-                paint.body(machete::i18n::tr(machete::i18n::StringId::DriveDialogSubtitle),
-                           570, 315, 21, theme.text_muted);
+            paint.heading(machete::i18n::tr(machete::i18n::StringId::WebServerDialogTitle),
+                          550, 255, 34, theme.text);
+            paint.body(machete::i18n::tr(machete::i18n::StringId::WebServerDialogSubtitle),
+                       550, 295, 20, theme.text_muted);
 
-                // Paso 1: URL
-                paint.label(machete::i18n::tr(machete::i18n::StringId::DriveStep1), 570, 365, 19,
-                            theme.text_muted);
-                const Rect url_box{570, 380, 780, 50};
-                list.rounded_rect(url_box, 8.0f, Color::rgb(0x122744).with_alpha(0.85f));
-                paint.stroke(url_box, 8.0f, 1.5f, Color::rgb(0x76d6ff).with_alpha(0.4f));
-                paint.heading("https://www.google.com/device", url_box.cx(), url_box.cy() + 10, 24,
-                              Color::rgb(0x76d6ff), gfx::Align::center);
+            // Estado del servidor (Pildora / Badge de estado)
+            const Rect status_badge{550, 335, 820, 48};
+            list.rounded_rect(status_badge, 10.0f,
+                              is_running ? Color::rgb(0x0a2d1f).with_alpha(0.9f)
+                                         : Color::rgb(0x2a2412).with_alpha(0.9f));
+            paint.stroke(status_badge, 10.0f, 1.5f,
+                         is_running ? Color::rgb(0x38ef7d).with_alpha(0.7f)
+                                    : Color::rgb(0xffaa00).with_alpha(0.7f));
+            list.circle(status_badge.x + 24, status_badge.cy(), 6.0f,
+                        is_running ? Color::rgb(0x38ef7d) : Color::rgb(0xffaa00));
+            paint.body(is_running ? machete::i18n::tr(machete::i18n::StringId::WebServerStatusRunning)
+                                  : machete::i18n::tr(machete::i18n::StringId::WebServerStatusStopped),
+                       status_badge.x + 44, status_badge.cy() + 7, 20,
+                       is_running ? Color::rgb(0x38ef7d) : Color::rgb(0xffaa00));
 
-                // Paso 2: Código de usuario
-                paint.label(machete::i18n::tr(machete::i18n::StringId::DriveStep2), 570, 465, 19,
-                            theme.text_muted);
-                const Rect code_box{570, 480, 780, 66};
-                list.rounded_rect(code_box, 8.0f, Color::rgb(0x0e3629).with_alpha(0.9f));
-                paint.stroke(code_box, 8.0f, 2.0f, Color::rgb(0x38ef7d).with_alpha(0.7f));
-                const std::string ucode =
-                    drive.user_code().empty()
-                        ? machete::i18n::tr(machete::i18n::StringId::DriveRequestingCode)
-                        : drive.user_code();
-                paint.heading(ucode.c_str(), code_box.cx(), code_box.cy() + 14, 38,
-                              Color::rgb(0x38ef7d), gfx::Align::center);
+            // Caja con la Direccion URL para el navegador
+            paint.label(machete::i18n::tr(machete::i18n::StringId::WebServerUrlLabel),
+                        550, 420, 18, theme.text_muted);
+            const Rect url_box{550, 435, 820, 68};
+            list.rounded_rect(url_box, 10.0f,
+                              is_running ? Color::rgb(0x0e2744).with_alpha(0.95f)
+                                         : Color::rgb(0x1a2130).with_alpha(0.85f));
+            paint.stroke(url_box, 10.0f, 2.0f,
+                         is_running ? Color::rgb(0x76d6ff).with_alpha(0.8f)
+                                    : Color::rgb(0x556677).with_alpha(0.4f));
 
-                // Estado de espera o error de red
-                if (drive.auth_state() == machete::cloud::AuthState::Error)
-                {
-                    list.circle(580, 580, 6.0f, Color::rgb(0xff5555));
-                    const std::string err = drive.last_error().empty()
-                                                ? "Fallo al conectar con Google. Verifica Internet."
-                                                : drive.last_error();
-                    paint.body(err.c_str(), 600, 587, 18, Color::rgb(0xff8888));
-                }
-                else
-                {
-                    const float pulse = (std::sin(clock_ * 4.0f) + 1.0f) * 0.5f;
-                    list.circle(580, 580, 6.0f,
-                                Color::rgb(0x76d6ff).with_alpha(0.4f + 0.6f * pulse));
-                    paint.body(machete::i18n::tr(machete::i18n::StringId::DriveWaiting), 600, 587, 20,
-                               theme.text_muted);
-                }
+            const std::string s_url = is_running ? server.url() : "http://<IP-PS5>:8080";
+            paint.heading(s_url.c_str(), url_box.cx(), url_box.cy() + 14, 34,
+                          is_running ? Color::rgb(0x76d6ff) : Color::rgb(0x8899aa),
+                          gfx::Align::center);
 
-                const Rect close_btn{570, 620, 780, 54};
-                ui::Look close_look;
-                close_look.focus = 1.0f;
-                const bool is_es = (machete::i18n::current_language() == machete::i18n::Language::Spanish);
-                const char *btn_text = (drive.auth_state() == machete::cloud::AuthState::Error)
-                                           ? (is_es ? "Reintentar Conexion (X)" : "Retry Connection (X)")
-                                           : machete::i18n::tr(machete::i18n::StringId::DriveClose);
-                paint.button(close_btn, btn_text, ui::ButtonKind::secondary, close_look);
-            }
-            else
-            {
-                paint.heading(machete::i18n::tr(machete::i18n::StringId::CloudConnected),
-                              570, 280, 36, theme.text);
-                paint.body(machete::i18n::tr(machete::i18n::StringId::DriveDialogLinked),
-                           570, 320, 21, theme.text_muted);
+            // Instruccion descriptiva
+            const Rect info_box{550, 525, 820, 120};
+            list.rounded_rect(info_box, 10.0f, Color::rgb(0xffffff).with_alpha(0.04f));
+            paint.stroke(info_box, 10.0f, 1.0f, Color::rgb(0xffffff).with_alpha(0.08f));
 
-                const char *drive_opts[] = {
-                    machete::i18n::tr(machete::i18n::StringId::DriveSyncCurrent),
-                    machete::i18n::tr(machete::i18n::StringId::DriveSyncAll),
-                    machete::i18n::tr(machete::i18n::StringId::DriveSignOut),
-                    machete::i18n::tr(machete::i18n::StringId::DriveClose),
-                };
+            const char *line1 = is_es
+                ? "1. Abre el navegador de tu movil o PC conectado a la misma red Wi-Fi o cable."
+                : "1. Open the browser on your phone or PC connected to the same Wi-Fi or LAN.";
+            const char *line2 = is_es
+                ? "2. Ingresa la direccion web mostrada arriba para ver todas tus partidas."
+                : "2. Enter the web address shown above to view all your game saves.";
+            const char *line3 = is_es
+                ? "3. Descarga archivos individuales o el paquete ZIP completo con un solo clic."
+                : "3. Download individual save files or complete ZIP archives in one click.";
 
-                for (int s = 0; s < 4; ++s)
-                {
-                    const Rect opt_rect{570, 370.0f + static_cast<float>(s) * 62.0f, 780, 52};
-                    const bool is_focused = (drive_dialog_focus_ == s);
+            paint.body(line1, info_box.x + 24, info_box.y + 32, 17, theme.text);
+            paint.body(line2, info_box.x + 24, info_box.y + 64, 17, theme.text);
+            paint.body(line3, info_box.x + 24, info_box.y + 96, 17, theme.text_muted);
 
-                    if (is_focused)
-                    {
-                        paint.surface(opt_rect, theme.radius, theme.surface_high, theme.primary,
-                                      1.0f);
-                        paint.focus_ring(opt_rect, theme.radius, 1.0f);
-                    }
-                    else
-                    {
-                        list.rounded_rect(opt_rect, theme.radius,
-                                          Color::rgb(0xffffff).with_alpha(0.06f));
-                    }
+            // Botones interactivos (Iniciar/Detener y Cerrar)
+            const Rect btn_action{550, 675, 400, 54};
+            ui::Look action_look;
+            action_look.focus = (web_server_dialog_focus_ == 0) ? 1.0f : 0.0f;
+            const char *action_text = is_running
+                ? machete::i18n::tr(machete::i18n::StringId::WebServerBtnStop)
+                : machete::i18n::tr(machete::i18n::StringId::WebServerBtnStart);
+            paint.button(btn_action, action_text,
+                         is_running ? ui::ButtonKind::secondary : ui::ButtonKind::primary,
+                         action_look);
 
-                    list.circle(opt_rect.x + 24, opt_rect.cy(), 6.0f,
-                                is_focused ? theme.primary : Color::rgb(0x38ef7d));
-                    paint.body(drive_opts[s], opt_rect.x + 44, opt_rect.cy() + 7, 20,
-                               is_focused ? theme.text : theme.text_muted);
-                }
-            }
+            const Rect btn_close{970, 675, 400, 54};
+            ui::Look close_look;
+            close_look.focus = (web_server_dialog_focus_ == 1) ? 1.0f : 0.0f;
+            paint.button(btn_close, machete::i18n::tr(machete::i18n::StringId::WebServerClose),
+                         ui::ButtonKind::secondary, close_look);
 
             list.pop_transform();
             list.pop_opacity();
@@ -1513,7 +1437,7 @@ class Machete final : public app::Concept
                     paint.body(dev.label.c_str(), opt_rect.x + 44, opt_rect.cy() - 6, 21,
                                is_focused ? theme.text : theme.text.with_alpha(0.9f));
 
-                    const std::string path_desc = dev.root_dir.empty() ? "Google Drive Cloud Storage" : dev.root_dir;
+                    const std::string path_desc = dev.root_dir;
                     paint.label(path_desc.c_str(), opt_rect.x + 44, opt_rect.cy() + 18, 16,
                                 theme.text_muted);
 
@@ -1716,7 +1640,7 @@ class Machete final : public app::Concept
             {ui::Button::dpad, machete::i18n::tr(machete::i18n::StringId::HintNavigate)},
             {ui::Button::cross, machete::i18n::tr(machete::i18n::StringId::LegendSelect)},
             {ui::Button::circle, machete::i18n::tr(machete::i18n::StringId::LegendBack)},
-            {ui::Button::triangle, machete::i18n::tr(machete::i18n::StringId::LegendCloud)},
+            {ui::Button::triangle, machete::i18n::tr(machete::i18n::StringId::LegendWebServer)},
             {ui::Button::square, machete::i18n::tr(machete::i18n::StringId::HintRefresh)},
             {ui::Button::left_stick, machete::i18n::tr(machete::i18n::StringId::HintLanguage)},
         };
@@ -1760,9 +1684,9 @@ class Machete final : public app::Concept
     tween::Spring dialog_focus_value_;
     std::vector<machete::save::BackupItem> available_backups_;
 
-    bool drive_dialog_ = false;
-    int drive_dialog_focus_ = 0;
-    tween::Spring drive_dialog_show_;
+    bool web_server_dialog_ = false;
+    int web_server_dialog_focus_ = 0;
+    tween::Spring web_server_dialog_show_;
 
     // Almacenamiento dinámico y Hotplug
     std::vector<machete::storage::StorageDevice> active_devices_;

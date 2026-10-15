@@ -46,7 +46,7 @@ CONTROLLER SHORTCUTS:
 - D-Pad: Navigate game list and menus
 - Cross (X): Select / Confirm action
 - Circle (O): Cancel / Back
-- Triangle: Open Google Drive Cloud synchronization directly
+- Triangle: Open Web Save Station (LAN / Wi-Fi local HTTP server)
 - Square: Refresh games list and connected USB devices
 - L3 (Left Stick Click): Switch language (English / Spanish) in real-time
 
@@ -96,7 +96,7 @@ CONTROLES DEL MANDO DUALSENSE:
 - D-Pad: Navegar por la lista de juegos y opciones
 - Cruz (X): Seleccionar / Confirmar acción
 - Círculo (O): Cancelar / Volver
-- Triángulo: Abrir sincronización en la nube con Google Drive
+- Triángulo: Abrir Estacion Web Local (Servidor HTTP para descarga por Wi-Fi / LAN)
 - Cuadrado: Actualizar lista de juegos y dispositivos USB
 - L3 (Click Stick Izquierdo): Alternar idioma (Inglés / Español) en tiempo real
 =====================================================

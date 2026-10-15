@@ -19,8 +19,7 @@ enum class StorageType
 {
     Internal, // Memoria interna de la consola (/data)
     SSD,      // Expansión interna M.2 (/mnt/ext1 o /mnt/ext0)
-    USB,      // Unidades extraíbles (/mnt/usb0 .. /mnt/usb7)
-    Cloud     // Google Drive
+    USB       // Unidades extraíbles (/mnt/usb0 .. /mnt/usb7)
 };
 
 struct StorageDevice

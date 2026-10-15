@@ -9,14 +9,17 @@
 #include "core/jailbreak.hpp"
 #include "core/i18n.hpp"
 #include "core/save_manager.hpp"
-#include "cloud/google_drive.hpp"
-#include "cloud/dns_resolver.hpp"
-#include "cloud/ssl_http_client.hpp"
+#include "server/web_server.hpp"
+#include "server/zip_writer.hpp"
 #include "core/sha256_hmac.hpp"
 #include "core/sfo_resigner.hpp"
 #include "core/keystone_manager.hpp"
 #include "core/samu_vault.hpp"
 #include "core/account_manager.hpp"
+
+#include <fcntl.h>
+#include <sys/stat.h>
+#include <unistd.h>
 
 #include <chrono>
 #include <thread>
@@ -83,26 +86,29 @@ TEST_F(MacheteTest, StorageDetectionAndFormatting)
 {
     EXPECT_TRUE(machete::storage::ensure_internal_storage() || true);
     auto devices = machete::storage::scan_storage_devices();
-    EXPECT_GE(devices.size(), 2u); // Mínimo Internal y Cloud
+    EXPECT_GE(devices.size(), 1u); // Minimo Internal
 
     machete::storage::StorageDevice dev;
     dev.free_bytes = 1024ULL * 1024ULL * 1024ULL * 5ULL;
     EXPECT_FALSE(dev.free_space_formatted().empty());
 }
 
-TEST_F(MacheteTest, GoogleDriveInstance)
+TEST_F(MacheteTest, WebServerInstanceAndLifecycle)
 {
-    auto &drive = machete::cloud::GoogleDrive::instance();
-    EXPECT_GE(drive.sync_progress(), 0.0f);
+    auto &server = machete::server::WebServer::instance();
+    EXPECT_FALSE(server.is_running());
+    EXPECT_FALSE(server.local_ip().empty());
+    EXPECT_EQ(server.port(), 8080);
+    EXPECT_FALSE(server.url().empty());
 }
 
-TEST_F(MacheteTest, GoogleDriveHeaderShortcutAndDialog)
+TEST_F(MacheteTest, WebServerHeaderShortcutAndDialog)
 {
-    // Presionar Triangle (Action::north) abre/enfoca Google Drive
+    // Presionar Triangle (Action::north) abre/alterna dialogo de Servidor Web
     send(*machete_, press(Action::north), 0.1f);
     expect_drawable(*machete_);
 
-    // Presionar Confirm abre el modal de Device Flow de Google Drive
+    // Presionar Confirm activa la opcion de dialogo
     send(*machete_, press(Action::confirm), 0.1f);
     expect_drawable(*machete_);
 
@@ -527,12 +533,36 @@ TEST(MacheteVaultTest, ArchiveCreationAndIntegrity)
     rmdir(test_dir.c_str());
 }
 
-TEST(MacheteNetworkTest, DnsResolverClearCache)
+TEST(MacheteServerTest, ZipWriterStreamingAndCrc32)
 {
-    auto &resolver = machete::cloud::DnsResolver::instance();
-    resolver.clear_cache();
-    // Cache limpia sin excepciones
-    SUCCEED();
+    const std::string tmp_txt = "/tmp/machete_test_file.txt";
+    const std::string content = "Save file dummy data content for unit testing";
+    int src_fd = open(tmp_txt.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0644);
+    ASSERT_GE(src_fd, 0);
+    (void)write(src_fd, content.data(), content.size());
+    close(src_fd);
+
+    machete::server::ZipWriter zip;
+    zip.add_file(tmp_txt, "savedata/param.json");
+    zip.prepare();
+    const std::uint64_t expected_size = zip.total_zip_size();
+    EXPECT_GT(expected_size, content.size());
+
+    // Escribir a un archivo temporal para verificar el stream
+    const std::string tmp_zip = "/tmp/machete_test_zip.zip";
+    int fd = open(tmp_zip.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0644);
+    ASSERT_GE(fd, 0);
+
+    bool stream_ok = zip.stream_to_fd(fd);
+    close(fd);
+    EXPECT_TRUE(stream_ok);
+
+    struct stat st;
+    ASSERT_EQ(stat(tmp_zip.c_str(), &st), 0);
+    EXPECT_EQ(static_cast<std::uint64_t>(st.st_size), expected_size);
+
+    std::remove(tmp_zip.c_str());
+    std::remove(tmp_txt.c_str());
 }
 
 TEST(MacheteAccountTest, DetectActiveAccountIdFallback)

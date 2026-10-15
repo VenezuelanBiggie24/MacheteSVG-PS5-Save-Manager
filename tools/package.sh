@@ -105,7 +105,7 @@ CONTROLLER SHORTCUTS:
 - D-Pad: Navigate game list and menus
 - Cross (X): Select / Confirm action
 - Circle (O): Cancel / Back
-- Triangle: Open Google Drive Cloud synchronization directly
+- Triangle: Open Web Save Station (LAN / Wi-Fi local HTTP server)
 - Square: Refresh games list and connected USB devices
 - L3 (Left Stick Click): Switch language (English / Spanish) in real-time
 
@@ -155,7 +155,7 @@ CONTROLES DEL MANDO DUALSENSE:
 - D-Pad: Navegar por la lista de juegos y opciones
 - Cruz (X): Seleccionar / Confirmar acción
 - Círculo (O): Cancelar / Volver
-- Triángulo: Abrir sincronización en la nube con Google Drive
+- Triángulo: Abrir Estacion Web Local (Servidor HTTP para descarga por Wi-Fi / LAN)
 - Cuadrado: Actualizar lista de juegos y dispositivos USB
 - L3 (Click Stick Izquierdo): Alternar idioma (Inglés / Español) en tiempo real
 =====================================================
@@ -190,10 +190,9 @@ POSSIBILITY OF SUCH DAMAGE.
 3. TRADEMARKS & NON-AFFILIATION:
 "PlayStation", "PS5", "PS4", and "DualSense" are registered trademarks or
 trademarks of Sony Interactive Entertainment Inc.
-"Google Drive" is a trademark of Google LLC.
 MacheteSVG is an independent open-source homebrew software project.
 MacheteSVG is not affiliated with, endorsed by, or sponsored by Sony Interactive
-Entertainment Inc., Google LLC, or any of their subsidiaries or affiliates.
+Entertainment Inc. or any of its subsidiaries or affiliates.
 
 4. THIRD-PARTY NOTICES & ACKNOWLEDGMENTS:
 - ProsperoStore / ps5-homebrew-ui (Copyright (C) 2026 BlackBearReloaded) - GPL-3.0
@@ -227,10 +226,9 @@ DE ESTE SOFTWARE.
 3. MARCAS REGISTRADAS Y NO AFILIACION:
 "PlayStation", "PS5", "PS4" y "DualSense" son marcas registradas de Sony
 Interactive Entertainment Inc.
-"Google Drive" es una marca comercial de Google LLC.
 MacheteSVG es un proyecto independiente de software homebrew de código abierto.
 MacheteSVG no está afiliado, respaldado ni patrocinado por Sony Interactive
-Entertainment Inc., Google LLC ni ninguna de sus filiales.
+Entertainment Inc. ni ninguna de sus filiales.
 
 4. AVISOS DE TERCEROS Y RECONOCIMIENTOS:
 - ProsperoStore / ps5-homebrew-ui (Copyright (C) 2026 BlackBearReloaded) - GPL-3.0
