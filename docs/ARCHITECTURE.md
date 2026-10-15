@@ -21,6 +21,7 @@ flowchart TB
         gfx["gfx/<br/>draw list, batch, backdrops, renderer"]
         audio["audio/<br/>mixer, cues, sound bank, music"]
         core["core/<br/>input, tweens, settings, save files"]
+        server["server/<br/>embedded HTTP server, web UI, streaming ZIP"]
     end
     subgraph platform["Platform"]
         ps5["platform/ps5<br/>EGL display, pad, audio out, system"]
@@ -31,6 +32,7 @@ flowchart TB
     concepts --> ui --> gfx
     concepts --> audio
     concepts --> core
+    concepts --> server
     main --> ps5
     host --> shell
     gfx --> gl["OpenGL 4.6 (ps5-opengl on the console, Mesa on the PC)"]
@@ -116,6 +118,7 @@ src/
   gfx/                draw list, GL batch, fonts, backdrops, renderer, canvas
   audio/              mixer, cues and sound bank, music player, WAV decoder
   core/               input, tweens and springs, settings, save files, frame statistics
+  server/             embedded Web Save Station HTTP server, web UI, streaming ZIP writer
   demo/               invented sample content and its cover art
   platform/ps5/       EGL display, controller, audio output, system services
   runtime/            process heap and libc shims the OpenGL runtime needs

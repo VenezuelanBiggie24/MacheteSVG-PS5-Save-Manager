@@ -1,0 +1,179 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>MacheteSVG - Web Save Station</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      width: 1920px;
+      height: 1080px;
+      background: #060913 radial-gradient(circle at 85% 15%, rgba(68, 102, 242, 0.28) 0%, transparent 55%),
+                  radial-gradient(circle at 10% 90%, rgba(118, 214, 255, 0.22) 0%, transparent 45%),
+                  linear-gradient(135deg, #060914 0%, #0d132b 50%, #12193b 100%);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+      color: #ffffff;
+      overflow: hidden;
+      position: relative;
+    }
+
+    .modal-overlay {
+      position: absolute;
+      inset: 0;
+      background: rgba(0, 0, 0, 0.75);
+      backdrop-filter: blur(20px);
+      -webkit-backdrop-filter: blur(20px);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    .dialog-card {
+      width: 920px;
+      background: rgba(14, 20, 44, 0.88);
+      border: 1.5px solid rgba(118, 214, 255, 0.35);
+      box-shadow: 0 24px 64px 0 rgba(0, 0, 0, 0.75), 0 0 40px rgba(118, 214, 255, 0.15);
+      border-radius: 24px;
+      padding: 48px 56px;
+      display: flex;
+      flex-direction: column;
+      gap: 24px;
+    }
+
+    .dialog-header h2 {
+      font-size: 34px;
+      font-weight: 800;
+      letter-spacing: -0.5px;
+      margin-bottom: 8px;
+      color: #ffffff;
+    }
+    .dialog-header p {
+      font-size: 18px;
+      color: rgba(255, 255, 255, 0.65);
+      font-weight: 500;
+    }
+
+    .status-badge {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      background: rgba(10, 45, 31, 0.9);
+      border: 1.5px solid rgba(56, 239, 125, 0.7);
+      border-radius: 12px;
+      padding: 12px 20px;
+      font-size: 18px;
+      font-weight: 700;
+      color: #38ef7d;
+      box-shadow: 0 0 20px rgba(56, 239, 125, 0.15);
+    }
+    .status-dot {
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+      background: #38ef7d;
+      box-shadow: 0 0 10px #38ef7d;
+    }
+
+    .step-label {
+      font-size: 16px;
+      font-weight: 700;
+      letter-spacing: 0.8px;
+      color: rgba(255, 255, 255, 0.6);
+      text-transform: uppercase;
+      margin-bottom: 8px;
+    }
+
+    .url-box {
+      background: rgba(14, 39, 68, 0.95);
+      border: 2px solid rgba(118, 214, 255, 0.8);
+      border-radius: 14px;
+      padding: 18px 24px;
+      font-size: 34px;
+      font-weight: 900;
+      color: #76d6ff;
+      text-align: center;
+      letter-spacing: 1px;
+      box-shadow: 0 0 30px rgba(118, 214, 255, 0.25);
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+    }
+
+    .info-box {
+      background: rgba(255, 255, 255, 0.04);
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      border-radius: 14px;
+      padding: 20px 24px;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+    .info-line {
+      font-size: 16px;
+      font-weight: 500;
+      color: rgba(255, 255, 255, 0.85);
+      line-height: 1.4;
+    }
+    .info-line.muted {
+      color: rgba(255, 255, 255, 0.6);
+    }
+
+    .buttons-row {
+      display: flex;
+      gap: 20px;
+      margin-top: 8px;
+    }
+    .btn {
+      flex: 1;
+      padding: 16px 24px;
+      border-radius: 14px;
+      font-size: 18px;
+      font-weight: 700;
+      cursor: pointer;
+      text-align: center;
+    }
+    .btn-secondary {
+      background: rgba(255, 255, 255, 0.1);
+      border: 1px solid rgba(255, 255, 255, 0.2);
+      color: #ffffff;
+    }
+    .btn-danger {
+      background: rgba(239, 68, 68, 0.2);
+      border: 1.5px solid rgba(239, 68, 68, 0.6);
+      color: #fca5a5;
+    }
+  </style>
+</head>
+<body>
+
+  <div class="modal-overlay">
+    <div class="dialog-card">
+      <div class="dialog-header">
+        <h2>Web Save Station (LAN / Wi-Fi)</h2>
+        <p>Download savegame files directly from any phone or PC on your network</p>
+      </div>
+
+      <div class="status-badge">
+        <span class="status-dot"></span>
+        <span>Active - Listening on port 8080 (HTTP)</span>
+      </div>
+
+      <div>
+        <div class="step-label">Browser Connection URL</div>
+        <div class="url-box">http://192.168.1.50:8080</div>
+      </div>
+
+      <div class="info-box">
+        <div class="info-line">1. Open the browser on your phone or PC connected to the same Wi-Fi or LAN.</div>
+        <div class="info-line">2. Enter the web address shown above to view all your game saves.</div>
+        <div class="info-line muted">3. Download individual save files or complete ZIP archives in one click.</div>
+      </div>
+
+      <div class="buttons-row">
+        <button class="btn btn-danger">Stop Server (X)</button>
+        <button class="btn btn-secondary">Close (O / Circle)</button>
+      </div>
+    </div>
+  </div>
+
+</body>
+</html>

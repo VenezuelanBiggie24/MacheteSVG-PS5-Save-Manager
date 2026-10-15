@@ -34,7 +34,7 @@ Built with a hardware-accelerated OpenGL 4.6 SDF renderer, MacheteSVG delivers a
 
 | Web Save Station Dialog | Modal Location Selector (Real Console) |
 | :---: | :---: |
-| ![Web Save Station](https://raw.githubusercontent.com/VenezuelanBiggie24/MacheteSVG-PS5-Save-Manager/main/docs/screenshots/google_drive_dialog_1080p.png) | ![Real Hardware Modal](https://raw.githubusercontent.com/VenezuelanBiggie24/MacheteSVG-PS5-Save-Manager/main/docs/screenshots/ps5_real_hardware_modal.png) |
+| ![Web Save Station](https://raw.githubusercontent.com/VenezuelanBiggie24/MacheteSVG-PS5-Save-Manager/main/docs/screenshots/web_station_dialog_1080p.png) | ![Real Hardware Modal](https://raw.githubusercontent.com/VenezuelanBiggie24/MacheteSVG-PS5-Save-Manager/main/docs/screenshots/ps5_real_hardware_modal.png) |
 
 ---
 
@@ -129,7 +129,7 @@ Desarrollado con renderizado acelerado por hardware OpenGL 4.6 SDF, MacheteSVG o
 
 | Diálogo de Estación Web Local | Selector Modal de Ubicación (Consola Real) |
 | :---: | :---: |
-| ![Estación Web Local](https://raw.githubusercontent.com/VenezuelanBiggie24/MacheteSVG-PS5-Save-Manager/main/docs/screenshots/google_drive_dialog_1080p.png) | ![Selector Modal](https://raw.githubusercontent.com/VenezuelanBiggie24/MacheteSVG-PS5-Save-Manager/main/docs/screenshots/ps5_real_hardware_modal.png) |
+| ![Estación Web Local](https://raw.githubusercontent.com/VenezuelanBiggie24/MacheteSVG-PS5-Save-Manager/main/docs/screenshots/web_station_dialog_1080p.png) | ![Selector Modal](https://raw.githubusercontent.com/VenezuelanBiggie24/MacheteSVG-PS5-Save-Manager/main/docs/screenshots/ps5_real_hardware_modal.png) |
 
 ---
 

@@ -7,4 +7,3 @@
 # game, not caused by the front end.
 leak:new_mine_layout
 leak:__thread_struct
-leak:GoogleDrive

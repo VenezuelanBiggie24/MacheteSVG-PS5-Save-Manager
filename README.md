@@ -24,7 +24,7 @@ The user interface is powered by a custom hardware-accelerated OpenGL 4.6 SDF re
 
 | Web Save Station Dialog | Modal Location Selector (Real Console) |
 | :---: | :---: |
-| ![Web Save Station](docs/screenshots/google_drive_dialog_1080p.png) | ![Real Hardware Modal](docs/screenshots/ps5_real_hardware_modal.png) |
+| ![Web Save Station](docs/screenshots/web_station_dialog_1080p.png) | ![Real Hardware Modal](docs/screenshots/ps5_real_hardware_modal.png) |
 
 ---
 
@@ -90,7 +90,7 @@ La interfaz gráfica cuenta con un renderizador SDF sobre OpenGL 4.6 acelerado p
 
 | Diálogo de Estación Web Local | Selector Modal de Ubicación (Consola Real) |
 | :---: | :---: |
-| ![Estación Web Local](docs/screenshots/google_drive_dialog_1080p.png) | ![Selector Modal](docs/screenshots/ps5_real_hardware_modal.png) |
+| ![Estación Web Local](docs/screenshots/web_station_dialog_1080p.png) | ![Selector Modal](docs/screenshots/ps5_real_hardware_modal.png) |
 
 ---
 
