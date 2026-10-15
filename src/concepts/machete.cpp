@@ -13,6 +13,7 @@
 #include "core/save_manager.hpp"
 #include "core/storage.hpp"
 #include "core/tween.hpp"
+#include "core/worker_thread.hpp"
 #include "demo/catalog.hpp"
 #include "ui/glyphs.hpp"
 #include "ui/motion.hpp"
@@ -175,7 +176,7 @@ class Machete final : public app::Concept
         MACHETE_LOG("[OPERATION]", "Starting background backup: %s -> %s",
                     game.title_id.c_str(), dev.label.c_str());
 
-        op_thread_ = std::thread([this, game, dev]() {
+        op_thread_.start([this, game, dev]() {
             MACHETE_BREADCRUMB("op_thread: backup_game_save");
             const auto res = machete::save::backup_game_save(
                 game, dev, [this](const machete::save::OperationProgress &p) {
@@ -236,7 +237,7 @@ class Machete final : public app::Concept
         MACHETE_LOG("[OPERATION]", "Starting background restore: %s <- %s",
                     game.title_id.c_str(), backup.folder_path.c_str());
 
-        op_thread_ = std::thread([this, game, backup]() {
+        op_thread_.start([this, game, backup]() {
             MACHETE_BREADCRUMB("op_thread: restore_backup_item");
             const auto res = machete::save::restore_backup_item(
                 game, backup, [this](const machete::save::OperationProgress &p) {
@@ -282,7 +283,7 @@ class Machete final : public app::Concept
         if (jb_thread_.joinable())
             jb_thread_.join();
 
-        jb_thread_ = std::thread([this]() {
+        jb_thread_.start([this]() {
             MACHETE_BREADCRUMB("jb_thread running request_jailbreak");
             const auto result = machete::jailbreak::request_jailbreak();
             {
@@ -1770,7 +1771,7 @@ class Machete final : public app::Concept
     // Jailbreak Daemon y elevación en vivo
     machete::jailbreak::JailbreakInfo jb_info_;
     float jb_poll_timer_ = 0.0f;
-    std::thread jb_thread_;
+    machete::threading::WorkerThread jb_thread_;
     std::atomic<bool> jb_thread_running_{false};
     std::atomic<bool> jb_needs_refresh_{false};
     std::atomic<bool> root_active_{false};
@@ -1784,9 +1785,9 @@ class Machete final : public app::Concept
     mutable bool app_icon_attempted_{false};
     mutable unsigned int app_icon_texture_{0};
 
-    // Operaciones Asíncronas en Segundo Plano (Worker Thread)
+    // Operaciones Asíncronas en Segundo Plano (Worker Thread con 2MB de stack garantizados)
     enum class OperationType { None, Backup, Restore } op_type_ = OperationType::None;
-    std::thread op_thread_;
+    machete::threading::WorkerThread op_thread_;
     std::atomic<bool> is_operating_{false};
     std::atomic<float> operation_progress_{0.0f};
     std::atomic<bool> operation_result_ready_{false};

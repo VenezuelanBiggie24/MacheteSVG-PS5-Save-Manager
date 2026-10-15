@@ -173,10 +173,18 @@ void fatal_signal_handler(int sig, siginfo_t *info, void *ucontext)
 
 void init()
 {
+    // 0. Dedicated alternate signal stack to guarantee crash handling during stack overflow
+    alignas(16) static char s_alt_signal_stack[65536];
+    stack_t ss{};
+    ss.ss_sp = s_alt_signal_stack;
+    ss.ss_size = sizeof(s_alt_signal_stack);
+    ss.ss_flags = 0;
+    (void)sigaltstack(&ss, nullptr);
+
     // 1. Install signal handlers for forensic crash capture
     struct sigaction sa{};
     sa.sa_sigaction = fatal_signal_handler;
-    sa.sa_flags = SA_SIGINFO | SA_NODEFER | SA_RESETHAND;
+    sa.sa_flags = SA_SIGINFO | SA_NODEFER | SA_RESETHAND | SA_ONSTACK;
     sigemptyset(&sa.sa_mask);
 
     sigaction(SIGSEGV, &sa, nullptr);

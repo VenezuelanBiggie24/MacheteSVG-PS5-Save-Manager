@@ -14,6 +14,7 @@
 #include <cstdio>
 #include <cstring>
 #include <dirent.h>
+#include <memory>
 #include <sys/stat.h>
 #include <thread>
 #include <unistd.h>
@@ -628,13 +629,14 @@ HttpResponse execute_http_request(const std::string &url, int method, const std:
                 sceHttp2GetStatusCode(req, &status_code);
                 resp.status = status_code;
 
-                char buffer[16384];
+                constexpr std::size_t kHttpReadBufSize = 16384;
+                auto buffer = std::make_unique<char[]>(kHttpReadBufSize);
                 for (;;)
                 {
-                    int read_bytes = sceHttp2ReadData(req, buffer, sizeof(buffer));
+                    int read_bytes = sceHttp2ReadData(req, buffer.get(), kHttpReadBufSize);
                     if (read_bytes <= 0)
                         break;
-                    resp.body.append(buffer, static_cast<std::size_t>(read_bytes));
+                    resp.body.append(buffer.get(), static_cast<std::size_t>(read_bytes));
                     if (resp.body.size() > 256 * 1024 * 1024)
                         break; // Limite amplio de 256MB para respaldos grandes
                 }

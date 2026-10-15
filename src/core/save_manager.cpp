@@ -16,6 +16,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <dirent.h>
+#include <memory>
 #include <sys/stat.h>
 #include <unistd.h>
 #include <vector>
@@ -180,14 +181,15 @@ bool copy_file_with_fsync(const std::string &src, const std::string &dst,
         return false;
     }
 
-    alignas(64) char buffer[64 * 1024];
+    constexpr std::size_t kCopyBufferSize = 64 * 1024;
+    auto buffer = std::make_unique<char[]>(kCopyBufferSize);
     std::size_t n = 0;
     bool write_ok = true;
     std::uint64_t last_cb_bytes = bytes_copied;
 
-    while ((n = std::fread(buffer, 1, sizeof(buffer), in)) > 0)
+    while ((n = std::fread(buffer.get(), 1, kCopyBufferSize, in)) > 0)
     {
-        if (std::fwrite(buffer, 1, n, out) != n)
+        if (std::fwrite(buffer.get(), 1, n, out) != n)
         {
             MACHETE_LOG("[COPY]", "Write failure to temp file %s (errno=%d: %s)",
                         tmp_dst.c_str(), errno, std::strerror(errno));
@@ -316,6 +318,7 @@ bool copy_directory_recursive(const std::string &src_dir, const std::string &dst
             }
             else
             {
+                MACHETE_LOG("[COPY]", "Copying file: %s -> %s", src_path.c_str(), dst_path.c_str());
                 if (copy_file_with_fsync(src_path, dst_path, bytes_copied, total_bytes, files_count, progress_cb, owner_uid, owner_gid))
                 {
                     files_count++;
@@ -632,278 +635,324 @@ OperationResult backup_game_save(const scanner::ScannedGame &game,
                                  const storage::StorageDevice &dest_device,
                                  ProgressCallback progress_cb)
 {
-    OperationResult res;
-    const bool is_es = (machete::i18n::current_language() == machete::i18n::Language::Spanish);
-
-    if (dest_device.type == storage::StorageType::Cloud)
+#if defined(__cpp_exceptions) || defined(__EXCEPTIONS) || defined(_CPPUNWIND)
+    try
     {
-        auto &drive = cloud::GoogleDrive::instance();
-        drive.backup_save(game.title_id, game.title, game.save_path, nullptr);
-        res.success = true;
-        res.message = is_es ? ("Enviando a Google Drive /MacheteSVG/" + game.title_id + "...")
-                            : ("Sending to Google Drive /MacheteSVG/" + game.title_id + "...");
-        return res;
-    }
+#endif
+        OperationResult res;
+        const bool is_es = (machete::i18n::current_language() == machete::i18n::Language::Spanish);
 
-    if (!jailbreak::verify_root_access(static_cast<int>(getpid())))
-    {
-        MACHETE_LOG("[BACKUP]", "Root privileges absent (UID=%d, EUID=%d). Requesting elevation...",
-                    static_cast<int>(getuid()), static_cast<int>(geteuid()));
-        const auto jb = jailbreak::request_jailbreak();
-        if (!jb.root_access)
+        if (dest_device.type == storage::StorageType::Cloud)
+        {
+            auto &drive = cloud::GoogleDrive::instance();
+            drive.backup_save(game.title_id, game.title, game.save_path, nullptr);
+            res.success = true;
+            res.message = is_es ? ("Enviando a Google Drive /MacheteSVG/" + game.title_id + "...")
+                                : ("Sending to Google Drive /MacheteSVG/" + game.title_id + "...");
+            return res;
+        }
+
+        if (!jailbreak::verify_root_access(static_cast<int>(getpid())))
+        {
+            MACHETE_LOG("[BACKUP]", "Root privileges absent (UID=%d, EUID=%d). Requesting elevation...",
+                        static_cast<int>(getuid()), static_cast<int>(geteuid()));
+            const auto jb = jailbreak::request_jailbreak();
+            if (!jb.root_access)
+            {
+                res.success = false;
+                res.message = is_es
+                    ? "Fallo de privilegios: se requiere jailbreak (UID 0) para acceder a los datos de guardado"
+                    : "Privilege failure: jailbreak (UID 0) required to access save data";
+                MACHETE_LOG("[BACKUP]", "Elevation failed. Safe operation aborted.");
+                return res;
+            }
+        }
+
+        std::string root_dir = dest_device.root_dir;
+        if (root_dir.empty())
+        {
+            if (dest_device.type == storage::StorageType::Internal)
+                root_dir = "/data/" + std::string(storage::ROOT_DIR_NAME);
+            else if (dest_device.type == storage::StorageType::SSD)
+                root_dir = "/mnt/ext1/" + std::string(storage::ROOT_DIR_NAME);
+            else if (dest_device.type == storage::StorageType::USB)
+                root_dir = "/mnt/usb0/" + std::string(storage::ROOT_DIR_NAME);
+        }
+
+        if (game.save_path.empty() || access(game.save_path.c_str(), F_OK) != 0)
         {
             res.success = false;
             res.message = is_es
-                ? "Fallo de privilegios: se requiere jailbreak (UID 0) para acceder a los datos de guardado"
-                : "Privilege failure: jailbreak (UID 0) required to access save data";
-            MACHETE_LOG("[BACKUP]", "Elevation failed. Safe operation aborted.");
+                ? ("No se encontraron datos de guardado en consola para " + game.title_id)
+                : ("No save data found on console for " + game.title_id);
+            MACHETE_LOG("[BACKUP]", "Error: save_path '%s' inaccessible for %s",
+                        game.save_path.c_str(), game.title_id.c_str());
             return res;
         }
-    }
 
-    std::string root_dir = dest_device.root_dir;
-    if (root_dir.empty())
-    {
-        if (dest_device.type == storage::StorageType::Internal)
-            root_dir = "/data/" + std::string(storage::ROOT_DIR_NAME);
-        else if (dest_device.type == storage::StorageType::SSD)
-            root_dir = "/mnt/ext1/" + std::string(storage::ROOT_DIR_NAME);
-        else if (dest_device.type == storage::StorageType::USB)
-            root_dir = "/mnt/usb0/" + std::string(storage::ROOT_DIR_NAME);
-    }
+        // Ruta destino: <root_dir>/<title_id> - <title>/
+        const std::string dest_game_folder =
+            root_dir + "/" + game.title_id + " - " + sanitize_name(game.title);
 
-    if (game.save_path.empty() || access(game.save_path.c_str(), F_OK) != 0)
-    {
-        res.success = false;
-        res.message = is_es
-            ? ("No se encontraron datos de guardado en consola para " + game.title_id)
-            : ("No save data found on console for " + game.title_id);
-        MACHETE_LOG("[BACKUP]", "Error: save_path '%s' inaccessible for %s",
-                    game.save_path.c_str(), game.title_id.c_str());
-        return res;
-    }
+        ensure_directories_recursive(root_dir);
+        ensure_directories_recursive(dest_game_folder);
 
-    // Ruta destino: <root_dir>/<title_id> - <title>/
-    const std::string dest_game_folder =
-        root_dir + "/" + game.title_id + " - " + sanitize_name(game.title);
+        std::uint64_t total_bytes = game.total_bytes;
+        if (total_bytes == 0)
+            total_bytes = calculate_directory_size(game.save_path);
 
-    ensure_directories_recursive(root_dir);
-    ensure_directories_recursive(dest_game_folder);
+        int files_count = 0;
+        std::uint64_t bytes_copied = 0;
+        MACHETE_LOG("[BACKUP]", "Starting backup of %s -> %s",
+                    game.save_path.c_str(), dest_game_folder.c_str());
+        const bool ok = copy_directory_recursive(game.save_path, dest_game_folder, files_count,
+                                                 bytes_copied, total_bytes, progress_cb);
 
-    std::uint64_t total_bytes = game.total_bytes;
-    if (total_bytes == 0)
-        total_bytes = calculate_directory_size(game.save_path);
-
-    int files_count = 0;
-    std::uint64_t bytes_copied = 0;
-    MACHETE_LOG("[BACKUP]", "Starting backup of %s -> %s",
-                game.save_path.c_str(), dest_game_folder.c_str());
-    const bool ok = copy_directory_recursive(game.save_path, dest_game_folder, files_count,
-                                             bytes_copied, total_bytes, progress_cb);
-
-    const bool is_ps5 = (game.platform == "PS5" || game.title_id.rfind("PPSA", 0) == 0);
-    if (is_ps5)
-    {
-        std::string meta_path = game.save_path;
-        std::size_t pos = meta_path.find("/savedata_prospero/");
-        if (pos != std::string::npos)
+        const bool is_ps5 = (game.platform == "PS5" || game.title_id.rfind("PPSA", 0) == 0);
+        if (is_ps5)
         {
-            meta_path.replace(pos, 19, "/savedata_prospero_meta/");
-            if (access(meta_path.c_str(), F_OK) == 0)
+            std::string meta_path = game.save_path;
+            std::size_t pos = meta_path.find("/savedata_prospero/");
+            if (pos != std::string::npos)
             {
-                int meta_files = 0;
-                std::uint64_t meta_bytes = 0;
-                std::string dest_meta = dest_game_folder + "/.meta";
-                ensure_directories_recursive(dest_meta);
-                copy_directory_recursive(meta_path, dest_meta, meta_files, meta_bytes, 0, nullptr);
-                files_count += meta_files;
-                bytes_copied += meta_bytes;
-                MACHETE_LOG("[BACKUP]", "Metadata backed up for PS5: %d files in %s",
-                            meta_files, dest_meta.c_str());
+                meta_path.replace(pos, 19, "/savedata_prospero_meta/");
+                if (access(meta_path.c_str(), F_OK) == 0)
+                {
+                    int meta_files = 0;
+                    std::uint64_t meta_bytes = 0;
+                    std::string dest_meta = dest_game_folder + "/.meta";
+                    ensure_directories_recursive(dest_meta);
+                    copy_directory_recursive(meta_path, dest_meta, meta_files, meta_bytes, 0, nullptr);
+                    files_count += meta_files;
+                    bytes_copied += meta_bytes;
+                    MACHETE_LOG("[BACKUP]", "Metadata backed up for PS5: %d files in %s",
+                                meta_files, dest_meta.c_str());
+                }
             }
         }
+
+        std::uint32_t active_user_id = extract_user_id_from_path(game.save_path);
+        (void)machete::vault::archive_crypto_vault(dest_game_folder, game.title_id, game.platform,
+                                                   game.save_path, active_user_id);
+        ::sync();
+
+        if (progress_cb)
+        {
+            OperationProgress p;
+            p.bytes_transferred = bytes_copied;
+            p.total_bytes = total_bytes > 0 ? total_bytes : bytes_copied;
+            p.files_transferred = files_count;
+            p.progress = 1.0f;
+            p.current_file = is_es ? "Completado" : "Completed";
+            progress_cb(p);
+        }
+
+        res.success = ok && (files_count > 0);
+        res.files_transferred = files_count;
+        res.bytes_transferred = bytes_copied;
+
+        if (res.success)
+        {
+            res.message = is_es
+                              ? ("Respaldo completado (" + std::to_string(files_count) +
+                                 " archivos) en " + dest_game_folder)
+                              : ("Backup completed (" + std::to_string(files_count) +
+                                 " files) at " + dest_game_folder);
+            MACHETE_LOG("[BACKUP]", "Backup successful: %d files, %llu bytes",
+                        files_count, static_cast<unsigned long long>(bytes_copied));
+        }
+        else
+        {
+            res.message = is_es
+                              ? ("Aviso: Copia fallida o 0 archivos copiados. Revisa permisos de unidad.")
+                              : ("Warning: Copy failed or 0 files copied. Check storage permissions.");
+            MACHETE_LOG("[BACKUP]", "Failed to backup %s -> %s", game.title_id.c_str(), dest_game_folder.c_str());
+        }
+
+        return res;
+#if defined(__cpp_exceptions) || defined(__EXCEPTIONS) || defined(_CPPUNWIND)
     }
-
-    std::uint32_t active_user_id = extract_user_id_from_path(game.save_path);
-    (void)machete::vault::archive_crypto_vault(dest_game_folder, game.title_id, game.platform,
-                                               game.save_path, active_user_id);
-    ::sync();
-
-    if (progress_cb)
+    catch (const std::exception &e)
     {
-        OperationProgress p;
-        p.bytes_transferred = bytes_copied;
-        p.total_bytes = total_bytes > 0 ? total_bytes : bytes_copied;
-        p.files_transferred = files_count;
-        p.progress = 1.0f;
-        p.current_file = is_es ? "Completado" : "Completed";
-        progress_cb(p);
+        MACHETE_LOG("[BACKUP]", "Exception during backup of %s: %s", game.title_id.c_str(), e.what());
+        OperationResult res;
+        res.success = false;
+        res.message = std::string("Error inesperado en copia: ") + e.what();
+        return res;
     }
-
-    res.success = ok && (files_count > 0);
-    res.files_transferred = files_count;
-    res.bytes_transferred = bytes_copied;
-
-    if (res.success)
+    catch (...)
     {
-        res.message = is_es
-                          ? ("Respaldo completado (" + std::to_string(files_count) +
-                             " archivos) en " + dest_game_folder)
-                          : ("Backup completed (" + std::to_string(files_count) +
-                             " files) at " + dest_game_folder);
-        MACHETE_LOG("[BACKUP]", "Backup successful: %d files, %llu bytes",
-                    files_count, static_cast<unsigned long long>(bytes_copied));
+        MACHETE_LOG("[BACKUP]", "Fatal unknown exception during backup of %s", game.title_id.c_str());
+        OperationResult res;
+        res.success = false;
+        res.message = "Error crítico desconocido durante el respaldo";
+        return res;
     }
-    else
-    {
-        res.message = is_es
-                          ? ("Aviso: Copia fallida o 0 archivos copiados. Revisa permisos de unidad.")
-                          : ("Warning: Copy failed or 0 files copied. Check storage permissions.");
-        MACHETE_LOG("[BACKUP]", "Failed to backup %s -> %s", game.title_id.c_str(), dest_game_folder.c_str());
-    }
-
-    return res;
+#endif
 }
 
 OperationResult restore_game_save(const scanner::ScannedGame &game,
                                   const storage::StorageDevice &source_device,
                                   ProgressCallback progress_cb)
 {
-    OperationResult res;
-    const bool is_es = (machete::i18n::current_language() == machete::i18n::Language::Spanish);
-
-    if (!jailbreak::verify_root_access(static_cast<int>(getpid())))
+#if defined(__cpp_exceptions) || defined(__EXCEPTIONS) || defined(_CPPUNWIND)
+    try
     {
-        MACHETE_LOG("[RESTORE]", "Root privileges absent (UID=%d, EUID=%d). Requesting elevation...",
-                    static_cast<int>(getuid()), static_cast<int>(geteuid()));
-        const auto jb = jailbreak::request_jailbreak();
-        if (!jb.root_access)
+#endif
+        OperationResult res;
+        const bool is_es = (machete::i18n::current_language() == machete::i18n::Language::Spanish);
+
+        if (!jailbreak::verify_root_access(static_cast<int>(getpid())))
         {
-            res.success = false;
-            res.message = is_es
-                ? "Fallo de privilegios: se requiere jailbreak (UID 0) para restaurar en /user/home"
-                : "Privilege failure: jailbreak (UID 0) required to restore to /user/home";
-            MACHETE_LOG("[RESTORE]", "Elevation failed. Safe operation aborted.");
+            MACHETE_LOG("[RESTORE]", "Root privileges absent (UID=%d, EUID=%d). Requesting elevation...",
+                        static_cast<int>(getuid()), static_cast<int>(geteuid()));
+            const auto jb = jailbreak::request_jailbreak();
+            if (!jb.root_access)
+            {
+                res.success = false;
+                res.message = is_es
+                    ? "Fallo de privilegios: se requiere jailbreak (UID 0) para restaurar en /user/home"
+                    : "Privilege failure: jailbreak (UID 0) required to restore to /user/home";
+                MACHETE_LOG("[RESTORE]", "Elevation failed. Safe operation aborted.");
+                return res;
+            }
+        }
+
+        if (source_device.type == storage::StorageType::Cloud)
+        {
+            auto &drive = cloud::GoogleDrive::instance();
+            drive.restore_save(game.title_id, game.save_path, nullptr);
+            res.success = true;
+            res.message = is_es ? "Descargando desde Google Drive..." : "Downloading from Google Drive...";
             return res;
         }
-    }
 
-    if (source_device.type == storage::StorageType::Cloud)
-    {
-        auto &drive = cloud::GoogleDrive::instance();
-        drive.restore_save(game.title_id, game.save_path, nullptr);
-        res.success = true;
-        res.message = is_es ? "Descargando desde Google Drive..." : "Downloading from Google Drive...";
+        // Buscar carpeta de respaldo existente (soporta coincidencia exacta o con nombre del juego)
+        std::string backup_game_folder =
+            source_device.root_dir + "/" + game.title_id + " - " + sanitize_name(game.title);
+
+        if (access(backup_game_folder.c_str(), F_OK) != 0)
+        {
+            // Probar si solo tiene el title_id
+            std::string fallback_folder = source_device.root_dir + "/" + game.title_id;
+            if (access(fallback_folder.c_str(), F_OK) == 0)
+                backup_game_folder = fallback_folder;
+        }
+
+        if (access(backup_game_folder.c_str(), F_OK) != 0)
+        {
+            res.success = false;
+            res.message = is_es ? ("No se encontro respaldo previo en " + source_device.label)
+                                : ("No previous backup found on " + source_device.label);
+            MACHETE_LOG("[RESTORE]", "Backup folder not found: %s", backup_game_folder.c_str());
+            return res;
+        }
+
+        const std::uint64_t total_dir_bytes = calculate_directory_size(backup_game_folder);
+        if (total_dir_bytes == 0)
+        {
+            res.success = false;
+            res.message = is_es ? "La carpeta de respaldo esta vacia (0 bytes)"
+                                : "Backup folder is empty (0 bytes)";
+            MACHETE_LOG("[RESTORE]", "Error: empty backup at %s (0 bytes)", backup_game_folder.c_str());
+            return res;
+        }
+
+        std::string dst_target = game.save_path;
+        if (dst_target.empty())
+        {
+            dst_target = resolve_default_save_path(game);
+            MACHETE_LOG("[RESTORE]", "Target path resolved dynamically for %s: %s",
+                        game.title_id.c_str(), dst_target.c_str());
+        }
+
+        if (dst_target.empty())
+        {
+            res.success = false;
+            res.message = is_es ? "Ruta de guardado del juego no localizada en la consola"
+                                : "Game save path not located on console";
+            MACHETE_LOG("[RESTORE]", "Could not determine destination for %s", game.title_id.c_str());
+            return res;
+        }
+
+        struct stat save_st{};
+        if (stat(dst_target.c_str(), &save_st) == 0 && S_ISREG(save_st.st_mode))
+        {
+            std::size_t slash = dst_target.find_last_of('/');
+            if (slash != std::string::npos)
+                dst_target = dst_target.substr(0, slash);
+        }
+
+        uid_t target_uid = 0;
+        gid_t target_gid = 0;
+        resolve_path_ownership(dst_target, target_uid, target_gid);
+        if (target_uid == 0 && target_gid == 0)
+        {
+            target_uid = 1;
+            target_gid = 1;
+        }
+        ensure_directories_recursive(dst_target, target_uid, target_gid);
+
+        int files_count = 0;
+        std::uint64_t bytes_copied = 0;
+        MACHETE_LOG("[RESTORE]", "Restoring from %s -> %s (uid=%d, gid=%d)",
+                    backup_game_folder.c_str(), dst_target.c_str(),
+                    static_cast<int>(target_uid), static_cast<int>(target_gid));
+        const bool ok = copy_directory_recursive(backup_game_folder, dst_target, files_count,
+                                                 bytes_copied, total_dir_bytes, progress_cb,
+                                                 target_uid, target_gid);
+        post_process_restored_save(game, dst_target, backup_game_folder, target_uid, target_gid);
+        ::sync();
+
+        if (progress_cb)
+        {
+            OperationProgress p;
+            p.bytes_transferred = bytes_copied;
+            p.total_bytes = total_dir_bytes > 0 ? total_dir_bytes : bytes_copied;
+            p.files_transferred = files_count;
+            p.progress = 1.0f;
+            p.current_file = is_es ? "Completado" : "Completed";
+            progress_cb(p);
+        }
+
+        res.success = ok && (files_count > 0);
+        res.files_transferred = files_count;
+        res.bytes_transferred = bytes_copied;
+
+        if (res.success)
+        {
+            res.message = is_es
+                              ? ("Restauracion exitosa (" + std::to_string(files_count) + " archivos)")
+                              : ("Restore successful (" + std::to_string(files_count) + " files)");
+            MACHETE_LOG("[RESTORE]", "Restore completed successfully: %d files", files_count);
+        }
+        else
+        {
+            res.message = is_es ? ("Fallo al restaurar archivos en " + dst_target)
+                                : ("Failed to restore files at " + dst_target);
+            MACHETE_LOG("[RESTORE]", "Error restoring files at %s", dst_target.c_str());
+        }
+
         return res;
+#if defined(__cpp_exceptions) || defined(__EXCEPTIONS) || defined(_CPPUNWIND)
     }
-
-    // Buscar carpeta de respaldo existente (soporta coincidencia exacta o con nombre del juego)
-    std::string backup_game_folder =
-        source_device.root_dir + "/" + game.title_id + " - " + sanitize_name(game.title);
-
-    if (access(backup_game_folder.c_str(), F_OK) != 0)
+    catch (const std::exception &e)
     {
-        // Probar si solo tiene el title_id
-        std::string fallback_folder = source_device.root_dir + "/" + game.title_id;
-        if (access(fallback_folder.c_str(), F_OK) == 0)
-            backup_game_folder = fallback_folder;
-    }
-
-    if (access(backup_game_folder.c_str(), F_OK) != 0)
-    {
+        MACHETE_LOG("[RESTORE]", "Exception during restore of %s: %s", game.title_id.c_str(), e.what());
+        OperationResult res;
         res.success = false;
-        res.message = is_es ? ("No se encontro respaldo previo en " + source_device.label)
-                            : ("No previous backup found on " + source_device.label);
-        MACHETE_LOG("[RESTORE]", "Backup folder not found: %s", backup_game_folder.c_str());
+        res.message = std::string("Error inesperado en restauracion: ") + e.what();
         return res;
     }
-
-    const std::uint64_t total_dir_bytes = calculate_directory_size(backup_game_folder);
-    if (total_dir_bytes == 0)
+    catch (...)
     {
+        MACHETE_LOG("[RESTORE]", "Fatal unknown exception during restore of %s", game.title_id.c_str());
+        OperationResult res;
         res.success = false;
-        res.message = is_es ? "La carpeta de respaldo esta vacia (0 bytes)"
-                            : "Backup folder is empty (0 bytes)";
-        MACHETE_LOG("[RESTORE]", "Error: empty backup at %s (0 bytes)", backup_game_folder.c_str());
+        res.message = "Error crítico desconocido durante la restauracion";
         return res;
     }
-
-    std::string dst_target = game.save_path;
-    if (dst_target.empty())
-    {
-        dst_target = resolve_default_save_path(game);
-        MACHETE_LOG("[RESTORE]", "Target path resolved dynamically for %s: %s",
-                    game.title_id.c_str(), dst_target.c_str());
-    }
-
-    if (dst_target.empty())
-    {
-        res.success = false;
-        res.message = is_es ? "Ruta de guardado del juego no localizada en la consola"
-                            : "Game save path not located on console";
-        MACHETE_LOG("[RESTORE]", "Could not determine destination for %s", game.title_id.c_str());
-        return res;
-    }
-
-    struct stat save_st{};
-    if (stat(dst_target.c_str(), &save_st) == 0 && S_ISREG(save_st.st_mode))
-    {
-        std::size_t slash = dst_target.find_last_of('/');
-        if (slash != std::string::npos)
-            dst_target = dst_target.substr(0, slash);
-    }
-
-    uid_t target_uid = 0;
-    gid_t target_gid = 0;
-    resolve_path_ownership(dst_target, target_uid, target_gid);
-    if (target_uid == 0 && target_gid == 0)
-    {
-        target_uid = 1;
-        target_gid = 1;
-    }
-    ensure_directories_recursive(dst_target, target_uid, target_gid);
-
-    int files_count = 0;
-    std::uint64_t bytes_copied = 0;
-    MACHETE_LOG("[RESTORE]", "Restoring from %s -> %s (uid=%d, gid=%d)",
-                backup_game_folder.c_str(), dst_target.c_str(),
-                static_cast<int>(target_uid), static_cast<int>(target_gid));
-    const bool ok = copy_directory_recursive(backup_game_folder, dst_target, files_count,
-                                             bytes_copied, total_dir_bytes, progress_cb,
-                                             target_uid, target_gid);
-    post_process_restored_save(game, dst_target, backup_game_folder, target_uid, target_gid);
-    ::sync();
-
-    if (progress_cb)
-    {
-        OperationProgress p;
-        p.bytes_transferred = bytes_copied;
-        p.total_bytes = total_dir_bytes > 0 ? total_dir_bytes : bytes_copied;
-        p.files_transferred = files_count;
-        p.progress = 1.0f;
-        p.current_file = is_es ? "Completado" : "Completed";
-        progress_cb(p);
-    }
-
-    res.success = ok && (files_count > 0);
-    res.files_transferred = files_count;
-    res.bytes_transferred = bytes_copied;
-
-    if (res.success)
-    {
-        res.message = is_es
-                          ? ("Restauracion exitosa (" + std::to_string(files_count) + " archivos)")
-                          : ("Restore successful (" + std::to_string(files_count) + " files)");
-        MACHETE_LOG("[RESTORE]", "Restore completed successfully: %d files", files_count);
-    }
-    else
-    {
-        res.message = is_es ? ("Fallo al restaurar archivos en " + dst_target)
-                            : ("Failed to restore files at " + dst_target);
-        MACHETE_LOG("[RESTORE]", "Error restoring files at %s", dst_target.c_str());
-    }
-
-    return res;
+#endif
 }
 
 std::vector<BackupItem> find_available_backups(const scanner::ScannedGame &game,
@@ -1093,128 +1142,151 @@ OperationResult restore_backup_item(const scanner::ScannedGame &game,
                                     const BackupItem &backup,
                                     ProgressCallback progress_cb)
 {
-    OperationResult res;
-    const bool is_es = (machete::i18n::current_language() == machete::i18n::Language::Spanish);
-
-    if (!jailbreak::verify_root_access(static_cast<int>(getpid())))
+#if defined(__cpp_exceptions) || defined(__EXCEPTIONS) || defined(_CPPUNWIND)
+    try
     {
-        MACHETE_LOG("[RESTORE]", "Root privileges absent (UID=%d, EUID=%d). Requesting elevation...",
-                    static_cast<int>(getuid()), static_cast<int>(geteuid()));
-        const auto jb = jailbreak::request_jailbreak();
-        if (!jb.root_access)
+#endif
+        OperationResult res;
+        const bool is_es = (machete::i18n::current_language() == machete::i18n::Language::Spanish);
+
+        if (!jailbreak::verify_root_access(static_cast<int>(getpid())))
+        {
+            MACHETE_LOG("[RESTORE]", "Root privileges absent (UID=%d, EUID=%d). Requesting elevation...",
+                        static_cast<int>(getuid()), static_cast<int>(geteuid()));
+            const auto jb = jailbreak::request_jailbreak();
+            if (!jb.root_access)
+            {
+                res.success = false;
+                res.message = is_es
+                    ? "Fallo de privilegios: se requiere jailbreak (UID 0) para restaurar en /user/home"
+                    : "Privilege failure: jailbreak (UID 0) required to restore to /user/home";
+                MACHETE_LOG("[RESTORE]", "Elevation failed. Safe operation aborted.");
+                return res;
+            }
+        }
+
+        if (access(backup.folder_path.c_str(), F_OK) != 0)
         {
             res.success = false;
-            res.message = is_es
-                ? "Fallo de privilegios: se requiere jailbreak (UID 0) para restaurar en /user/home"
-                : "Privilege failure: jailbreak (UID 0) required to restore to /user/home";
-            MACHETE_LOG("[RESTORE]", "Elevation failed. Safe operation aborted.");
+            res.message = is_es ? ("No se encontro la carpeta de respaldo: " + backup.folder_path)
+                                : ("Backup folder not found: " + backup.folder_path);
+            MACHETE_LOG("[RESTORE]", "Backup folder inaccessible: %s", backup.folder_path.c_str());
             return res;
         }
-    }
 
-    if (access(backup.folder_path.c_str(), F_OK) != 0)
+        const std::uint64_t total_dir_bytes = calculate_directory_size(backup.folder_path);
+        if (total_dir_bytes == 0)
+        {
+            res.success = false;
+            res.message = is_es ? "La carpeta de respaldo esta vacia (0 bytes)"
+                                : "Backup folder is empty (0 bytes)";
+            MACHETE_LOG("[RESTORE]", "Empty backup folder (0 bytes): %s", backup.folder_path.c_str());
+            return res;
+        }
+
+        std::string dst_target = game.save_path;
+        if (dst_target.empty())
+        {
+            dst_target = resolve_default_save_path(game);
+            MACHETE_LOG("[RESTORE]", "Target path resolved dynamically for %s: %s",
+                        game.title_id.c_str(), dst_target.c_str());
+        }
+
+        if (dst_target.empty())
+        {
+            res.success = false;
+            res.message = is_es ? "Ruta de guardado del juego no localizada en la consola"
+                                : "Game save path not located on console";
+            MACHETE_LOG("[RESTORE]", "Could not locate save destination for %s", game.title_id.c_str());
+            return res;
+        }
+
+        struct stat save_st{};
+        if (stat(dst_target.c_str(), &save_st) == 0 && S_ISREG(save_st.st_mode))
+        {
+            std::size_t slash = dst_target.find_last_of('/');
+            if (slash != std::string::npos)
+                dst_target = dst_target.substr(0, slash);
+        }
+
+        uid_t target_uid = 0;
+        gid_t target_gid = 0;
+        resolve_path_ownership(dst_target, target_uid, target_gid);
+        if (target_uid == 0 && target_gid == 0)
+        {
+            target_uid = 1;
+            target_gid = 1;
+        }
+        ensure_directories_recursive(dst_target, target_uid, target_gid);
+
+        std::uint64_t total_bytes = backup.total_bytes;
+        if (total_bytes == 0)
+            total_bytes = total_dir_bytes;
+
+        int files_count = 0;
+        std::uint64_t bytes_copied = 0;
+        MACHETE_LOG("[RESTORE]", "Starting recursive copy from %s -> %s (total=%llu bytes, uid=%d, gid=%d)",
+                    backup.folder_path.c_str(), dst_target.c_str(),
+                    static_cast<unsigned long long>(total_bytes),
+                    static_cast<int>(target_uid), static_cast<int>(target_gid));
+        const bool ok = copy_directory_recursive(backup.folder_path, dst_target, files_count,
+                                                 bytes_copied, total_bytes, progress_cb,
+                                                 target_uid, target_gid);
+        post_process_restored_save(game, dst_target, backup.folder_path, target_uid, target_gid);
+        ::sync();
+
+        if (progress_cb)
+        {
+            OperationProgress p;
+            p.bytes_transferred = bytes_copied;
+            p.total_bytes = total_bytes > 0 ? total_bytes : bytes_copied;
+            p.files_transferred = files_count;
+            p.progress = 1.0f;
+            p.current_file = is_es ? "Completado" : "Completed";
+            progress_cb(p);
+        }
+
+        res.success = ok && (files_count > 0);
+        res.files_transferred = files_count;
+        res.bytes_transferred = bytes_copied;
+
+        if (res.success)
+        {
+            res.message = is_es
+                              ? ("Restauracion exitosa (" + std::to_string(files_count) +
+                                 " archivos, " + backup.size_str + ") desde " + backup.device_label)
+                              : ("Restore successful (" + std::to_string(files_count) +
+                                 " files, " + backup.size_str + ") from " + backup.device_label);
+            MACHETE_LOG("[RESTORE]", "Restore successful: %d files transferred", files_count);
+        }
+        else
+        {
+            res.message = is_es ? ("Fallo al restaurar archivos en " + dst_target)
+                                : ("Failed to restore files at " + dst_target);
+            MACHETE_LOG("[RESTORE]", "Failed to restore files at %s (files copied: %d)",
+                        dst_target.c_str(), files_count);
+        }
+
+        return res;
+#if defined(__cpp_exceptions) || defined(__EXCEPTIONS) || defined(_CPPUNWIND)
+    }
+    catch (const std::exception &e)
     {
+        MACHETE_LOG("[RESTORE]", "Exception during restore of %s: %s", game.title_id.c_str(), e.what());
+        OperationResult res;
         res.success = false;
-        res.message = is_es ? ("No se encontro la carpeta de respaldo: " + backup.folder_path)
-                            : ("Backup folder not found: " + backup.folder_path);
-        MACHETE_LOG("[RESTORE]", "Backup folder inaccessible: %s", backup.folder_path.c_str());
+        res.message = std::string("Error inesperado en restauracion: ") + e.what();
         return res;
     }
-
-    const std::uint64_t total_dir_bytes = calculate_directory_size(backup.folder_path);
-    if (total_dir_bytes == 0)
+    catch (...)
     {
+        MACHETE_LOG("[RESTORE]", "Fatal unknown exception during restore of %s", game.title_id.c_str());
+        OperationResult res;
         res.success = false;
-        res.message = is_es ? "La carpeta de respaldo esta vacia (0 bytes)"
-                            : "Backup folder is empty (0 bytes)";
-        MACHETE_LOG("[RESTORE]", "Empty backup folder (0 bytes): %s", backup.folder_path.c_str());
+        res.message = "Error crítico desconocido durante la restauracion";
         return res;
     }
-
-    std::string dst_target = game.save_path;
-    if (dst_target.empty())
-    {
-        dst_target = resolve_default_save_path(game);
-        MACHETE_LOG("[RESTORE]", "Target path resolved dynamically for %s: %s",
-                    game.title_id.c_str(), dst_target.c_str());
-    }
-
-    if (dst_target.empty())
-    {
-        res.success = false;
-        res.message = is_es ? "Ruta de guardado del juego no localizada en la consola"
-                            : "Game save path not located on console";
-        MACHETE_LOG("[RESTORE]", "Could not locate save destination for %s", game.title_id.c_str());
-        return res;
-    }
-
-    struct stat save_st{};
-    if (stat(dst_target.c_str(), &save_st) == 0 && S_ISREG(save_st.st_mode))
-    {
-        std::size_t slash = dst_target.find_last_of('/');
-        if (slash != std::string::npos)
-            dst_target = dst_target.substr(0, slash);
-    }
-
-    uid_t target_uid = 0;
-    gid_t target_gid = 0;
-    resolve_path_ownership(dst_target, target_uid, target_gid);
-    if (target_uid == 0 && target_gid == 0)
-    {
-        target_uid = 1;
-        target_gid = 1;
-    }
-    ensure_directories_recursive(dst_target, target_uid, target_gid);
-
-    std::uint64_t total_bytes = backup.total_bytes;
-    if (total_bytes == 0)
-        total_bytes = total_dir_bytes;
-
-    int files_count = 0;
-    std::uint64_t bytes_copied = 0;
-    MACHETE_LOG("[RESTORE]", "Starting recursive copy from %s -> %s (total=%llu bytes, uid=%d, gid=%d)",
-                backup.folder_path.c_str(), dst_target.c_str(),
-                static_cast<unsigned long long>(total_bytes),
-                static_cast<int>(target_uid), static_cast<int>(target_gid));
-    const bool ok = copy_directory_recursive(backup.folder_path, dst_target, files_count,
-                                             bytes_copied, total_bytes, progress_cb,
-                                             target_uid, target_gid);
-    post_process_restored_save(game, dst_target, backup.folder_path, target_uid, target_gid);
-    ::sync();
-
-    if (progress_cb)
-    {
-        OperationProgress p;
-        p.bytes_transferred = bytes_copied;
-        p.total_bytes = total_bytes > 0 ? total_bytes : bytes_copied;
-        p.files_transferred = files_count;
-        p.progress = 1.0f;
-        p.current_file = is_es ? "Completado" : "Completed";
-        progress_cb(p);
-    }
-
-    res.success = ok && (files_count > 0);
-    res.files_transferred = files_count;
-    res.bytes_transferred = bytes_copied;
-
-    if (res.success)
-    {
-        res.message = is_es
-                          ? ("Restauracion exitosa (" + std::to_string(files_count) +
-                             " archivos, " + backup.size_str + ") desde " + backup.device_label)
-                          : ("Restore successful (" + std::to_string(files_count) +
-                             " files, " + backup.size_str + ") from " + backup.device_label);
-        MACHETE_LOG("[RESTORE]", "Restore successful: %d files transferred", files_count);
-    }
-    else
-    {
-        res.message = is_es ? ("Fallo al restaurar archivos en " + dst_target)
-                            : ("Failed to restore files at " + dst_target);
-        MACHETE_LOG("[RESTORE]", "Failed to restore files at %s (files copied: %d)",
-                    dst_target.c_str(), files_count);
-    }
-
-    return res;
+#endif
 }
 
 } // namespace machete::save
