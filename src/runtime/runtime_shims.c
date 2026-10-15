@@ -8,10 +8,12 @@
 
 #include <errno.h>
 #include <fcntl.h>
+#include <pthread.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/resource.h>
 #include <sys/stat.h>
 
 extern int sceKernelUsleep(uint32_t microseconds);
@@ -26,6 +28,18 @@ extern uint64_t sceKernelGetProcessTime(void);
 
 __attribute__((constructor)) static void hui_open_log(void)
 {
+    /* Expand main thread stack limit to 16 MB if restricted */
+    struct rlimit rl;
+    if (getrlimit(RLIMIT_STACK, &rl) == 0)
+    {
+        const rlim_t target_stack = 16 * 1024 * 1024;
+        if (rl.rlim_cur < target_stack)
+        {
+            rl.rlim_cur = (rl.rlim_max < target_stack && rl.rlim_max != RLIM_INFINITY) ? rl.rlim_max : target_stack;
+            setrlimit(RLIMIT_STACK, &rl);
+        }
+    }
+
     mkdir(HUI_PARENT_DIR, 0755);
     mkdir(HUI_DATA_DIR, 0755);
     /* Keep the previous launch's log for post-close inspection. */
@@ -158,4 +172,50 @@ int pclose(FILE *stream)
     (void)stream;
     errno = ENOSYS;
     return -1;
+}
+
+/* Intercept pthread_create to ensure every thread created in the process
+ * (including Mesa/ACO shader compiler threads and background task threads)
+ * has a minimum of 4 MB stack size, preventing stack overflow page faults. */
+extern int __real_pthread_create(pthread_t *restrict thread,
+                                const pthread_attr_t *restrict attr,
+                                void *(*start_routine)(void *),
+                                void *restrict arg);
+
+int __wrap_pthread_create(pthread_t *restrict thread,
+                          const pthread_attr_t *restrict attr,
+                          void *(*start_routine)(void *),
+                          void *restrict arg)
+{
+    pthread_attr_t local_attr;
+    int allocated = 0;
+    const size_t min_stack = 4 * 1024 * 1024; /* 4 MB stack */
+
+    if (attr == NULL || *attr == NULL)
+    {
+        if (pthread_attr_init(&local_attr) == 0)
+        {
+            pthread_attr_setstacksize(&local_attr, min_stack);
+            attr = (const pthread_attr_t *)&local_attr;
+            allocated = 1;
+        }
+    }
+    else
+    {
+        size_t current_stack = 0;
+        if (pthread_attr_getstacksize(attr, &current_stack) == 0)
+        {
+            if (current_stack < min_stack)
+            {
+                pthread_attr_setstacksize((pthread_attr_t *)attr, min_stack);
+            }
+        }
+    }
+
+    int result = __real_pthread_create(thread, attr, start_routine, arg);
+    if (allocated)
+    {
+        pthread_attr_destroy(&local_attr);
+    }
+    return result;
 }

@@ -221,6 +221,9 @@ wrap_options=()
 if grep -qs '__wrap_sceSystemServiceHideSplashScreen' "$root/src/runtime/runtime_shims.c"; then
     wrap_options+=("--wrap=sceSystemServiceHideSplashScreen")
 fi
+if grep -qs '__wrap_pthread_create' "$root/src/runtime/runtime_shims.c"; then
+    wrap_options+=("--wrap=pthread_create")
+fi
 if [[ -f $root/src/runtime/app_heap.c ]]; then
     for symbol in malloc calloc realloc free posix_memalign malloc_usable_size; do
         wrap_options+=("--wrap=$symbol")
@@ -237,7 +240,7 @@ if [[ -n ${pacbrew_root:-} ]]; then
     done < <(find "$pacbrew_root" -type f \( -name '*.a' -o -name '*.so' \) -print0 | sort -z)
 fi
 ninja_edge LINK "$build/llvm-pie.elf" "$sdk_root/bin/prospero-lld" \
-    -T "$native/ps5-pie.ld" --eh-frame-hdr "${wrap_options[@]}" \
+    -T "$native/ps5-pie.ld" --eh-frame-hdr -z stack-size=8388608 "${wrap_options[@]}" \
     --version-script "$native/app-symbols.map" \
     -e _start -o "$build/llvm-pie.elf" "${link_inputs[@]}" \
     --as-needed "${stub_paths[@]}" "$sdk_root"/target/lib/*.so
