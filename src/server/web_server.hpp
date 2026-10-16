@@ -16,13 +16,17 @@
 namespace machete::server
 {
 
+inline constexpr std::uint16_t kDefaultPort = 8383;
+
 class WebServer
 {
 public:
+    static constexpr std::uint16_t kDefaultPort = machete::server::kDefaultPort;
+
     static WebServer &instance();
 
-    // Starts the embedded web server on the specified port (default: 8080)
-    bool start(std::uint16_t port = 8080);
+    // Starts the embedded web server on the specified port (default: 8383)
+    bool start(std::uint16_t port = kDefaultPort);
 
     // Stops the web server and terminates the listener thread
     void stop();
@@ -36,7 +40,7 @@ public:
     // Returns the LAN IP address of the PS5 console (e.g. "192.168.1.50")
     std::string local_ip() const;
 
-    // Returns full formatted URL (e.g. "http://192.168.1.50:8080")
+    // Returns full formatted URL (e.g. "http://192.168.1.50:8383")
     std::string url() const;
 
     // Updates the game library list served by the Web API
@@ -44,6 +48,9 @@ public:
 
     // Retrieves current scanned games (thread-safe copy)
     std::vector<scanner::ScannedGame> get_games() const;
+
+    // Finds a scanned game by title ID (thread-safe copy)
+    bool find_game(const std::string &title_id, scanner::ScannedGame &out) const;
 
 private:
     WebServer();
@@ -67,12 +74,13 @@ private:
 
     std::atomic<bool> running_{false};
     std::atomic<bool> stop_requested_{false};
-    std::uint16_t port_{8080};
+    std::uint16_t port_{kDefaultPort};
     int server_sock_{-1};
     pthread_t thread_{0};
 
     mutable std::mutex games_mutex_;
     std::vector<scanner::ScannedGame> games_;
+    mutable std::mutex ip_mutex_;
     mutable std::string cached_ip_;
 };
 

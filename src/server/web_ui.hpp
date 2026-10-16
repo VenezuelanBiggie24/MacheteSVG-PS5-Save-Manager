@@ -454,7 +454,7 @@ constexpr std::string_view kWebUiHtml = R"rawhtml(<!DOCTYPE html>
       </div>
       <div class="metric-card">
         <div class="metric-title">Puerto Local</div>
-        <div class="metric-value" id="stat-port">8080</div>
+        <div class="metric-value" id="stat-port">8383</div>
       </div>
     </div>
 

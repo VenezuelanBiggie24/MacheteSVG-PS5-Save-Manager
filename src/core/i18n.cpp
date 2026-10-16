@@ -73,7 +73,7 @@ const char *const s_strings[2][static_cast<std::size_t>(StringId::Count)] = {
         /* LocInternal */               "Internal: /data/MacheteSVG/",
         /* LocM2 */                     "SSD: /mnt/ext1/MacheteSVG/",
         /* LocUsb */                    "USB: /mnt/usb0/MacheteSVG/",
-        /* LocWebServer */              "Web: http://<IP>:8080",
+        /* LocWebServer */              "Web: http://<IP>:8383",
 
         /* DialogActionTitle */         "Save Management: %s",
         /* DialogBackupUsb */           "Create Backup on USB Drive (/mnt/usb0/)",
@@ -152,7 +152,7 @@ const char *const s_strings[2][static_cast<std::size_t>(StringId::Count)] = {
         /* LocInternal */               "Interno: /data/MacheteSVG/",
         /* LocM2 */                     "SSD: /mnt/ext1/MacheteSVG/",
         /* LocUsb */                    "USB: /mnt/usb0/MacheteSVG/",
-        /* LocWebServer */              "Web: http://<IP>:8080",
+        /* LocWebServer */              "Web: http://<IP>:8383",
 
         /* DialogActionTitle */         "Gestion de Partida: %s",
         /* DialogBackupUsb */           "Crear Copia en USB (/mnt/usb0/)",

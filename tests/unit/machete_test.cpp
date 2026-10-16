@@ -20,6 +20,9 @@
 #include <fcntl.h>
 #include <sys/stat.h>
 #include <unistd.h>
+#include <arpa/inet.h>
+#include <netinet/in.h>
+#include <sys/socket.h>
 
 #include <chrono>
 #include <thread>
@@ -98,8 +101,10 @@ TEST_F(MacheteTest, WebServerInstanceAndLifecycle)
     auto &server = machete::server::WebServer::instance();
     EXPECT_FALSE(server.is_running());
     EXPECT_FALSE(server.local_ip().empty());
-    EXPECT_EQ(server.port(), 8080);
+    EXPECT_EQ(server.port(), machete::server::kDefaultPort);
+    EXPECT_EQ(server.port(), 8383);
     EXPECT_FALSE(server.url().empty());
+    EXPECT_NE(server.url().find(":8383"), std::string::npos);
 }
 
 TEST_F(MacheteTest, WebServerHeaderShortcutAndDialog)
@@ -576,6 +581,150 @@ TEST(MacheteKeystoneTest, LookupSearchCandidates)
     // Verificar que find_authentic_game_keystone maneja IDs inexistentes sin crashear
     std::string path = machete::keystone::find_authentic_game_keystone("NONEXISTENT");
     EXPECT_TRUE(path.empty());
+}
+
+namespace
+{
+
+std::string test_http_request(std::uint16_t port, const std::string &request)
+{
+    int sock = socket(AF_INET, SOCK_STREAM, 0);
+    if (sock < 0) return "";
+
+    struct timeval tv{};
+    tv.tv_sec = 2;
+    setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+    setsockopt(sock, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
+
+    struct sockaddr_in addr{};
+    addr.sin_family = AF_INET;
+    addr.sin_port = htons(port);
+    addr.sin_addr.s_addr = inet_addr("127.0.0.1");
+
+    if (connect(sock, reinterpret_cast<struct sockaddr *>(&addr), sizeof(addr)) != 0)
+    {
+        close(sock);
+        return "";
+    }
+
+    send(sock, request.data(), request.size(), 0);
+
+    std::string response;
+    char buf[1024];
+    while (true)
+    {
+        ssize_t n = recv(sock, buf, sizeof(buf) - 1, 0);
+        if (n <= 0) break;
+        buf[n] = '\0';
+        response.append(buf, static_cast<std::size_t>(n));
+    }
+    close(sock);
+    return response;
+}
+
+} // namespace
+
+TEST(MacheteServerTest, HttpApiEndpointsAndSecurity)
+{
+    auto &server = machete::server::WebServer::instance();
+    const std::uint16_t test_port = 18383;
+    EXPECT_TRUE(server.start(test_port));
+    EXPECT_TRUE(server.is_running());
+    EXPECT_EQ(server.port(), test_port);
+
+    // 1. GET /api/status
+    std::string status_resp = test_http_request(test_port, "GET /api/status HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n");
+    EXPECT_NE(status_resp.find("HTTP/1.1 200 OK"), std::string::npos);
+    EXPECT_NE(status_resp.find("\"version\":\"1.0.0\""), std::string::npos);
+    EXPECT_NE(status_resp.find("\"status\":\"running\""), std::string::npos);
+
+    // 2. GET / (Web UI HTML)
+    std::string root_resp = test_http_request(test_port, "GET / HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n");
+    EXPECT_NE(root_resp.find("HTTP/1.1 200 OK"), std::string::npos);
+    EXPECT_NE(root_resp.find("<!DOCTYPE html>"), std::string::npos);
+
+    // 3. GET /api/games
+    std::string games_resp = test_http_request(test_port, "GET /api/games HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n");
+    EXPECT_NE(games_resp.find("HTTP/1.1 200 OK"), std::string::npos);
+    EXPECT_NE(games_resp.find("["), std::string::npos);
+
+    // 4. Security Traversal Attack on /api/file/
+    std::string trav_file = test_http_request(test_port, "GET /api/file/PPSA01411/../../etc/passwd HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n");
+    EXPECT_NE(trav_file.find("HTTP/1.1 403 Forbidden"), std::string::npos);
+
+    // 5. Security Traversal Attack on /api/icon/
+    std::string trav_icon = test_http_request(test_port, "GET /api/icon/../../etc/passwd HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n");
+    EXPECT_NE(trav_icon.find("HTTP/1.1 400 Bad Request"), std::string::npos);
+
+    // 6. Security Traversal Attack on /api/download/
+    std::string trav_dl = test_http_request(test_port, "GET /api/download/../../etc/passwd HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n");
+    EXPECT_NE(trav_dl.find("HTTP/1.1 400 Bad Request"), std::string::npos);
+
+    server.stop();
+    EXPECT_FALSE(server.is_running());
+}
+
+TEST(MacheteServerTest, ZipWriterAutoPrepareAndMemoryBuffer)
+{
+    const std::string test_dir = "/tmp/machete_zip_unit_test";
+    mkdir(test_dir.c_str(), 0777);
+    const std::string file_a = test_dir + "/file_a.bin";
+    const std::string file_b = test_dir + "/file_b.bin";
+
+    FILE *fa = std::fopen(file_a.c_str(), "wb");
+    ASSERT_NE(fa, nullptr);
+    std::fputs("HELLO_ZIP_A", fa);
+    std::fclose(fa);
+
+    FILE *fb = std::fopen(file_b.c_str(), "wb");
+    ASSERT_NE(fb, nullptr);
+    std::fputs("HELLO_ZIP_B", fb);
+    std::fclose(fb);
+
+    machete::server::ZipWriter zip;
+    zip.add_directory(test_dir, "test_prefix");
+    EXPECT_GE(zip.entry_count(), 2u);
+
+    // Test write_to_memory (which auto-prepares if needed)
+    std::vector<std::uint8_t> mem = zip.write_to_memory();
+    ASSERT_GE(mem.size(), 30u);
+    // Check standard PK zip local header signature: 0x04034B50 (LE: 0x50, 0x4b, 0x03, 0x04)
+    EXPECT_EQ(mem[0], 0x50);
+    EXPECT_EQ(mem[1], 0x4B);
+    EXPECT_EQ(mem[2], 0x03);
+    EXPECT_EQ(mem[3], 0x04);
+
+    // Check EOCD signature in buffer: 0x06054B50 (LE: 0x50, 0x4b, 0x05, 0x06)
+    bool has_eocd = false;
+    for (std::size_t i = 0; i + 3 < mem.size(); ++i)
+    {
+        if (mem[i] == 0x50 && mem[i + 1] == 0x4B && mem[i + 2] == 0x05 && mem[i + 3] == 0x06)
+        {
+            has_eocd = true;
+            break;
+        }
+    }
+    EXPECT_TRUE(has_eocd);
+
+    std::remove(file_a.c_str());
+    std::remove(file_b.c_str());
+    rmdir(test_dir.c_str());
+}
+
+TEST(MacheteServerTest, ThreadSafeFindGame)
+{
+    auto &server = machete::server::WebServer::instance();
+    auto games = machete::scanner::scan_installed_games_and_saves();
+    server.update_games(games);
+
+    machete::scanner::ScannedGame found;
+    EXPECT_FALSE(server.find_game("NON_EXISTENT_TITLE", found));
+
+    if (!games.empty())
+    {
+        EXPECT_TRUE(server.find_game(games[0].title_id, found));
+        EXPECT_EQ(found.title_id, games[0].title_id);
+    }
 }
 
 } // namespace hui::testing

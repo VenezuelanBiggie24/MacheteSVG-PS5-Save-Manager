@@ -822,7 +822,7 @@ class Machete final : public app::Concept
                 else
                 {
                     server.update_games(games_);
-                    const bool ok = server.start(8080);
+                    const bool ok = server.start(machete::server::kDefaultPort);
                     if (ok)
                     {
                         std::snprintf(notification_text_, sizeof(notification_text_), "%s",
@@ -833,9 +833,10 @@ class Machete final : public app::Concept
                     else
                     {
                         const bool is_es = (machete::i18n::current_language() == machete::i18n::Language::Spanish);
-                        std::snprintf(notification_text_, sizeof(notification_text_), "%s",
-                                      is_es ? "Error al iniciar servidor en puerto 8080"
-                                            : "Failed to start server on port 8080");
+                        std::snprintf(notification_text_, sizeof(notification_text_),
+                                      is_es ? "Error al iniciar servidor en puerto %u"
+                                            : "Failed to start server on port %u",
+                                      static_cast<unsigned>(machete::server::kDefaultPort));
                         notification_timer_ = 4.0f;
                         feedback.play(audio::Cue::error, 1.0f, 0.0f);
                     }
@@ -1048,8 +1049,19 @@ class Machete final : public app::Concept
 
         list.circle(web_chip.x + 22, web_chip.cy(), 5.0f,
                     server_running ? Color::rgb(0x38ef7d) : Color::rgb(0x76d6ff));
-        paint.body(server_running ? machete::i18n::tr(machete::i18n::StringId::WebServerActive)
-                                  : machete::i18n::tr(machete::i18n::StringId::WebServerPrompt),
+        char web_pill_text[64];
+        if (server_running)
+        {
+            std::snprintf(web_pill_text, sizeof(web_pill_text), "%s (:%u)",
+                          machete::i18n::tr(machete::i18n::StringId::WebServerActive),
+                          static_cast<unsigned>(machete::server::WebServer::instance().port()));
+        }
+        else
+        {
+            std::snprintf(web_pill_text, sizeof(web_pill_text), "%s",
+                          machete::i18n::tr(machete::i18n::StringId::WebServerPrompt));
+        }
+        paint.body(web_pill_text,
                    web_chip.x + 36, web_chip.cy() + 7, 18,
                    web_focused ? theme.primary : Color::rgb(0xffffff));
 
@@ -1222,11 +1234,21 @@ class Machete final : public app::Concept
             // Destinos de almacenamiento disponibles
             paint.label(machete::i18n::tr(machete::i18n::StringId::StorageLocationsHeader),
                         836, 630, 17, theme.text_muted);
+            std::string web_loc_str;
+            auto &web_inst = machete::server::WebServer::instance();
+            if (web_inst.is_running())
+            {
+                web_loc_str = "Web: " + web_inst.url();
+            }
+            else
+            {
+                web_loc_str = machete::i18n::tr(machete::i18n::StringId::LocWebServer);
+            }
             const char *locs[] = {
                 machete::i18n::tr(machete::i18n::StringId::LocInternal),
                 machete::i18n::tr(machete::i18n::StringId::LocM2),
                 machete::i18n::tr(machete::i18n::StringId::LocUsb),
-                machete::i18n::tr(machete::i18n::StringId::LocWebServer),
+                web_loc_str.c_str(),
             };
             for (int l = 0; l < 4; ++l)
             {
@@ -1335,7 +1357,9 @@ class Machete final : public app::Concept
                          is_running ? Color::rgb(0x76d6ff).with_alpha(0.8f)
                                     : Color::rgb(0x556677).with_alpha(0.4f));
 
-            const std::string s_url = is_running ? server.url() : "http://<IP-PS5>:8080";
+            const std::string s_url = is_running
+                ? server.url()
+                : ("http://<IP-PS5>:" + std::to_string(machete::server::kDefaultPort));
             paint.heading(s_url.c_str(), url_box.cx(), url_box.cy() + 14, 34,
                           is_running ? Color::rgb(0x76d6ff) : Color::rgb(0x8899aa),
                           gfx::Align::center);

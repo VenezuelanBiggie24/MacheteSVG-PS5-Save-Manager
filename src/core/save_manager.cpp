@@ -26,6 +26,100 @@ namespace machete::save
 namespace
 {
 
+class ScopedDir
+{
+public:
+    ScopedDir() noexcept : dir_(nullptr) {}
+    explicit ScopedDir(DIR *dir) noexcept : dir_(dir) {}
+    ~ScopedDir() noexcept { reset(); }
+
+    ScopedDir(const ScopedDir &) = delete;
+    ScopedDir &operator=(const ScopedDir &) = delete;
+
+    ScopedDir(ScopedDir &&other) noexcept : dir_(other.dir_) { other.dir_ = nullptr; }
+    ScopedDir &operator=(ScopedDir &&other) noexcept
+    {
+        if (this != &other)
+        {
+            reset();
+            dir_ = other.dir_;
+            other.dir_ = nullptr;
+        }
+        return *this;
+    }
+
+    DIR *get() const noexcept { return dir_; }
+    bool is_valid() const noexcept { return dir_ != nullptr; }
+    explicit operator bool() const noexcept { return dir_ != nullptr; }
+
+    DIR *release() noexcept
+    {
+        DIR *ret = dir_;
+        dir_ = nullptr;
+        return ret;
+    }
+
+    void reset(DIR *new_dir = nullptr) noexcept
+    {
+        if (dir_)
+        {
+            ::closedir(dir_);
+        }
+        dir_ = new_dir;
+    }
+
+private:
+    DIR *dir_{nullptr};
+};
+
+class ScopedFile
+{
+public:
+    ScopedFile() noexcept : file_(nullptr) {}
+    explicit ScopedFile(std::FILE *file) noexcept : file_(file) {}
+    ~ScopedFile() noexcept { reset(); }
+
+    ScopedFile(const ScopedFile &) = delete;
+    ScopedFile &operator=(const ScopedFile &) = delete;
+
+    ScopedFile(ScopedFile &&other) noexcept : file_(other.file_) { other.file_ = nullptr; }
+    ScopedFile &operator=(ScopedFile &&other) noexcept
+    {
+        if (this != &other)
+        {
+            reset();
+            file_ = other.file_;
+            other.file_ = nullptr;
+        }
+        return *this;
+    }
+
+    std::FILE *get() const noexcept { return file_; }
+    bool is_valid() const noexcept { return file_ != nullptr; }
+    explicit operator bool() const noexcept { return file_ != nullptr; }
+
+    std::FILE *release() noexcept
+    {
+        std::FILE *ret = file_;
+        file_ = nullptr;
+        return ret;
+    }
+
+    void reset(std::FILE *new_file = nullptr) noexcept
+    {
+        if (file_)
+        {
+            std::fclose(file_);
+        }
+        file_ = new_file;
+    }
+
+private:
+    std::FILE *file_{nullptr};
+};
+
+constexpr int kMaxDirectoryDepth = 8;
+
 std::uint32_t extract_user_id_from_path(const std::string &path)
 {
     std::size_t pos = path.find("/user/home/");
@@ -122,20 +216,27 @@ std::string sanitize_name(std::string name)
     return name;
 }
 
-std::uint64_t calculate_directory_size(const std::string &path)
+std::uint64_t calculate_directory_size(const std::string &path, int depth = 0)
 {
+    if (depth >= kMaxDirectoryDepth)
+    {
+        return 0;
+    }
+
     struct stat st{};
     if (stat(path.c_str(), &st) != 0)
         return 0;
     if (S_ISREG(st.st_mode))
         return static_cast<std::uint64_t>(st.st_size);
+    if (!S_ISDIR(st.st_mode))
+        return 0;
 
-    DIR *dir = opendir(path.c_str());
-    if (!dir)
+    ScopedDir dir(opendir(path.c_str()));
+    if (!dir.is_valid())
         return 0;
 
     std::uint64_t total = 0;
-    while (const dirent *entry = readdir(dir))
+    while (const dirent *entry = readdir(dir.get()))
     {
         if (std::strcmp(entry->d_name, ".") == 0 || std::strcmp(entry->d_name, "..") == 0)
             continue;
@@ -144,12 +245,11 @@ std::uint64_t calculate_directory_size(const std::string &path)
         if (stat(sub_path.c_str(), &sub_st) == 0)
         {
             if (S_ISDIR(sub_st.st_mode))
-                total += calculate_directory_size(sub_path);
+                total += calculate_directory_size(sub_path, depth + 1);
             else if (S_ISREG(sub_st.st_mode))
                 total += static_cast<std::uint64_t>(sub_st.st_size);
         }
     }
-    closedir(dir);
     return total;
 }
 
@@ -160,8 +260,8 @@ bool copy_file_with_fsync(const std::string &src, const std::string &dst,
                           const ProgressCallback &progress_cb,
                           uid_t owner_uid = 0, gid_t owner_gid = 0)
 {
-    std::FILE *in = std::fopen(src.c_str(), "rb");
-    if (!in)
+    ScopedFile in(std::fopen(src.c_str(), "rb"));
+    if (!in.is_valid())
     {
         MACHETE_LOG("[COPY]", "Failed to open source file: %s (errno=%d: %s)",
                     src.c_str(), errno, std::strerror(errno));
@@ -171,12 +271,11 @@ bool copy_file_with_fsync(const std::string &src, const std::string &dst,
     const std::string tmp_dst = dst + ".mcht_tmp";
     (void)unlink(tmp_dst.c_str());
 
-    std::FILE *out = std::fopen(tmp_dst.c_str(), "wb");
-    if (!out)
+    ScopedFile out(std::fopen(tmp_dst.c_str(), "wb"));
+    if (!out.is_valid())
     {
         MACHETE_LOG("[COPY]", "Failed to open temp destination file: %s (errno=%d: %s)",
                     tmp_dst.c_str(), errno, std::strerror(errno));
-        std::fclose(in);
         return false;
     }
 
@@ -186,9 +285,9 @@ bool copy_file_with_fsync(const std::string &src, const std::string &dst,
     bool write_ok = true;
     std::uint64_t last_cb_bytes = bytes_copied;
 
-    while ((n = std::fread(buffer.get(), 1, kCopyBufferSize, in)) > 0)
+    while ((n = std::fread(buffer.get(), 1, kCopyBufferSize, in.get())) > 0)
     {
-        if (std::fwrite(buffer.get(), 1, n, out) != n)
+        if (std::fwrite(buffer.get(), 1, n, out.get()) != n)
         {
             MACHETE_LOG("[COPY]", "Write failure to temp file %s (errno=%d: %s)",
                         tmp_dst.c_str(), errno, std::strerror(errno));
@@ -213,12 +312,19 @@ bool copy_file_with_fsync(const std::string &src, const std::string &dst,
         }
     }
 
-    std::fclose(in);
+    if (std::ferror(in.get()))
+    {
+        MACHETE_LOG("[COPY]", "Read error on source file %s (errno=%d: %s)",
+                    src.c_str(), errno, std::strerror(errno));
+        write_ok = false;
+    }
 
-    if (std::fflush(out) != 0)
+    in.reset();
+
+    if (std::fflush(out.get()) != 0)
         write_ok = false;
 
-    int fd = fileno(out);
+    int fd = fileno(out.get());
     if (fd >= 0)
     {
         if (::fsync(fd) != 0)
@@ -228,7 +334,7 @@ bool copy_file_with_fsync(const std::string &src, const std::string &dst,
         }
     }
 
-    if (std::fclose(out) != 0)
+    if (std::fclose(out.release()) != 0)
         write_ok = false;
 
     if (!write_ok)

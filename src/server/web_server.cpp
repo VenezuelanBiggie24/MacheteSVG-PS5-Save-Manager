@@ -8,6 +8,7 @@
 #include "core/logger.hpp"
 
 #include <arpa/inet.h>
+#include <csignal>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -18,13 +19,141 @@
 #include <poll.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
+#include <sys/time.h>
 #include <unistd.h>
+
+#ifndef SO_NOSIGPIPE
+#if defined(__FreeBSD__) || defined(__PS5__) || defined(__prospero__) || defined(__APPLE__)
+#define SO_NOSIGPIPE 0x0800
+#endif
+#endif
 
 namespace machete::server
 {
 
 namespace
 {
+
+class ScopedFd
+{
+public:
+    ScopedFd() noexcept : fd_(-1) {}
+    explicit ScopedFd(int fd) noexcept : fd_(fd) {}
+    ~ScopedFd() noexcept { reset(); }
+
+    ScopedFd(const ScopedFd &) = delete;
+    ScopedFd &operator=(const ScopedFd &) = delete;
+
+    ScopedFd(ScopedFd &&other) noexcept : fd_(other.fd_) { other.fd_ = -1; }
+    ScopedFd &operator=(ScopedFd &&other) noexcept
+    {
+        if (this != &other)
+        {
+            reset();
+            fd_ = other.fd_;
+            other.fd_ = -1;
+        }
+        return *this;
+    }
+
+    int get() const noexcept { return fd_; }
+    bool is_valid() const noexcept { return fd_ >= 0; }
+    explicit operator bool() const noexcept { return fd_ >= 0; }
+
+    int release() noexcept
+    {
+        int ret = fd_;
+        fd_ = -1;
+        return ret;
+    }
+
+    void reset(int new_fd = -1) noexcept
+    {
+        if (fd_ >= 0)
+        {
+            ::close(fd_);
+        }
+        fd_ = new_fd;
+    }
+
+private:
+    int fd_{-1};
+};
+
+class ScopedDir
+{
+public:
+    ScopedDir() noexcept : dir_(nullptr) {}
+    explicit ScopedDir(DIR *dir) noexcept : dir_(dir) {}
+    ~ScopedDir() noexcept { reset(); }
+
+    ScopedDir(const ScopedDir &) = delete;
+    ScopedDir &operator=(const ScopedDir &) = delete;
+
+    ScopedDir(ScopedDir &&other) noexcept : dir_(other.dir_) { other.dir_ = nullptr; }
+    ScopedDir &operator=(ScopedDir &&other) noexcept
+    {
+        if (this != &other)
+        {
+            reset();
+            dir_ = other.dir_;
+            other.dir_ = nullptr;
+        }
+        return *this;
+    }
+
+    DIR *get() const noexcept { return dir_; }
+    bool is_valid() const noexcept { return dir_ != nullptr; }
+    explicit operator bool() const noexcept { return dir_ != nullptr; }
+
+    DIR *release() noexcept
+    {
+        DIR *ret = dir_;
+        dir_ = nullptr;
+        return ret;
+    }
+
+    void reset(DIR *new_dir = nullptr) noexcept
+    {
+        if (dir_)
+        {
+            ::closedir(dir_);
+        }
+        dir_ = new_dir;
+    }
+
+private:
+    DIR *dir_{nullptr};
+};
+
+static bool send_all_socket(int fd, const void *data, std::size_t len)
+{
+    if (!data || len == 0)
+    {
+        return true;
+    }
+    const char *ptr = static_cast<const char *>(data);
+    std::size_t remaining = len;
+    while (remaining > 0)
+    {
+        ssize_t sent = send(fd, ptr, remaining, 0);
+        if (sent < 0)
+        {
+            if (errno == EINTR)
+            {
+                continue;
+            }
+            return false;
+        }
+        if (sent == 0)
+        {
+            return false;
+        }
+        ptr += sent;
+        remaining -= static_cast<std::size_t>(sent);
+    }
+    return true;
+}
 
 std::string url_decode(const std::string &in)
 {
@@ -135,7 +264,10 @@ WebServer &WebServer::instance()
     return s_instance;
 }
 
-WebServer::WebServer() = default;
+WebServer::WebServer()
+{
+    std::signal(SIGPIPE, SIG_IGN);
+}
 
 WebServer::~WebServer()
 {
@@ -144,30 +276,29 @@ WebServer::~WebServer()
 
 std::string WebServer::local_ip() const
 {
+    std::lock_guard<std::mutex> lock(ip_mutex_);
     if (!cached_ip_.empty())
     {
         return cached_ip_;
     }
 
-    // Método 1: Apertura de socket UDP saliente hacia DNS público (no transmite paquetes)
-    int sock = socket(AF_INET, SOCK_DGRAM, 0);
-    if (sock >= 0)
+    // Metodo 1: Apertura de socket UDP saliente hacia DNS publico (no transmite paquetes)
+    ScopedFd sock(socket(AF_INET, SOCK_DGRAM, 0));
+    if (sock.is_valid())
     {
-        struct sockaddr_in target;
-        std::memset(&target, 0, sizeof(target));
+        struct sockaddr_in target{};
         target.sin_family = AF_INET;
         target.sin_addr.s_addr = inet_addr("8.8.8.8");
         target.sin_port = htons(53);
 
-        if (connect(sock, reinterpret_cast<struct sockaddr *>(&target), sizeof(target)) == 0)
+        if (connect(sock.get(), reinterpret_cast<struct sockaddr *>(&target), sizeof(target)) == 0)
         {
-            struct sockaddr_in local;
+            struct sockaddr_in local{};
             socklen_t len = sizeof(local);
-            if (getsockname(sock, reinterpret_cast<struct sockaddr *>(&local), &len) == 0)
+            if (getsockname(sock.get(), reinterpret_cast<struct sockaddr *>(&local), &len) == 0)
             {
                 char buf[INET_ADDRSTRLEN] = {0};
                 inet_ntop(AF_INET, &local.sin_addr, buf, sizeof(buf));
-                close(sock);
                 if (std::strlen(buf) > 0 && std::strcmp(buf, "0.0.0.0") != 0 && std::strcmp(buf, "127.0.0.1") != 0)
                 {
                     cached_ip_ = buf;
@@ -175,12 +306,11 @@ std::string WebServer::local_ip() const
                 }
             }
         }
-        close(sock);
     }
 
-    // Método 2: Recorrido de interfaces con getifaddrs
+    // Metodo 2: Recorrido de interfaces con getifaddrs
     struct ifaddrs *ifaddr = nullptr;
-    if (getifaddrs(&ifaddr) == 0)
+    if (getifaddrs(&ifaddr) == 0 && ifaddr != nullptr)
     {
         for (struct ifaddrs *ifa = ifaddr; ifa != nullptr; ifa = ifa->ifa_next)
         {
@@ -221,6 +351,20 @@ std::vector<scanner::ScannedGame> WebServer::get_games() const
     return games_;
 }
 
+bool WebServer::find_game(const std::string &title_id, scanner::ScannedGame &out) const
+{
+    std::lock_guard<std::mutex> lock(games_mutex_);
+    for (const auto &g : games_)
+    {
+        if (g.title_id == title_id)
+        {
+            out = g;
+            return true;
+        }
+    }
+    return false;
+}
+
 bool WebServer::start(std::uint16_t port)
 {
     if (running_.load())
@@ -228,8 +372,13 @@ bool WebServer::start(std::uint16_t port)
         return true;
     }
 
+    std::signal(SIGPIPE, SIG_IGN);
+
     port_ = port;
-    cached_ip_.clear();
+    {
+        std::lock_guard<std::mutex> lock(ip_mutex_);
+        cached_ip_.clear();
+    }
 
     server_sock_ = socket(AF_INET, SOCK_STREAM, 0);
     if (server_sock_ < 0)
@@ -239,10 +388,26 @@ bool WebServer::start(std::uint16_t port)
     }
 
     int opt = 1;
-    setsockopt(server_sock_, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
+    if (setsockopt(server_sock_, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt)) != 0)
+    {
+        MACHETE_LOG("[SERVER]", "setsockopt SO_REUSEADDR warning: errno=%d", errno);
+    }
 
-    struct sockaddr_in addr;
-    std::memset(&addr, 0, sizeof(addr));
+#ifdef SO_REUSEPORT
+    if (setsockopt(server_sock_, SOL_SOCKET, SO_REUSEPORT, &opt, sizeof(opt)) != 0)
+    {
+        MACHETE_LOG("[SERVER]", "setsockopt SO_REUSEPORT warning: errno=%d", errno);
+    }
+#endif
+
+#ifdef SO_NOSIGPIPE
+    if (setsockopt(server_sock_, SOL_SOCKET, SO_NOSIGPIPE, &opt, sizeof(opt)) != 0)
+    {
+        MACHETE_LOG("[SERVER]", "setsockopt SO_NOSIGPIPE warning: errno=%d", errno);
+    }
+#endif
+
+    struct sockaddr_in addr{};
     addr.sin_family = AF_INET;
     addr.sin_addr.s_addr = htonl(INADDR_ANY);
     addr.sin_port = htons(port_);
@@ -306,7 +471,6 @@ void WebServer::stop()
 
     if (server_sock_ >= 0)
     {
-        // Forzar cierre de socket para desbloquear cualquier accept pendiente
         shutdown(server_sock_, SHUT_RDWR);
         close(server_sock_);
         server_sock_ = -1;
@@ -326,7 +490,7 @@ void WebServer::server_thread_main()
 {
     while (!stop_requested_.load())
     {
-        struct pollfd pfd;
+        struct pollfd pfd{};
         pfd.fd = server_sock_;
         pfd.events = POLLIN;
         pfd.revents = 0;
@@ -344,14 +508,35 @@ void WebServer::server_thread_main()
 
         if (pfd.revents & POLLIN)
         {
-            struct sockaddr_in client_addr;
+            struct sockaddr_in client_addr{};
             socklen_t client_len = sizeof(client_addr);
             int client_fd = accept(server_sock_, reinterpret_cast<struct sockaddr *>(&client_addr), &client_len);
             if (client_fd >= 0)
             {
-                // Manejar petición del cliente
+#ifdef SO_NOSIGPIPE
+                int opt_nosigpipe = 1;
+                setsockopt(client_fd, SOL_SOCKET, SO_NOSIGPIPE, &opt_nosigpipe, sizeof(opt_nosigpipe));
+#endif
+                struct timeval tv{};
+                tv.tv_sec = 15;
+                tv.tv_usec = 0;
+                setsockopt(client_fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+                setsockopt(client_fd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
+
                 handle_client(client_fd);
                 close(client_fd);
+            }
+            else
+            {
+                if (errno == EINTR || errno == ECONNABORTED || errno == EAGAIN || errno == EWOULDBLOCK)
+                {
+                    continue;
+                }
+                if (stop_requested_.load())
+                {
+                    break;
+                }
+                MACHETE_LOG("[SERVER]", "accept() failed: errno=%d", errno);
             }
         }
     }
@@ -372,18 +557,19 @@ void WebServer::send_response(int client_fd, int status_code, const std::string 
         "%s\r\n",
         status_code, status_text.c_str(), content_type.c_str(), body_len, extra_headers.c_str());
 
-    send(client_fd, header_buf, static_cast<std::size_t>(header_len), 0);
+    if (header_len <= 0 || static_cast<std::size_t>(header_len) >= sizeof(header_buf))
+    {
+        return;
+    }
+
+    if (!send_all_socket(client_fd, header_buf, static_cast<std::size_t>(header_len)))
+    {
+        return;
+    }
+
     if (body_data && body_len > 0)
     {
-        const auto *ptr = static_cast<const char *>(body_data);
-        std::size_t remaining = body_len;
-        while (remaining > 0)
-        {
-            ssize_t sent = send(client_fd, ptr, remaining, 0);
-            if (sent <= 0) break;
-            ptr += sent;
-            remaining -= static_cast<std::size_t>(sent);
-        }
+        send_all_socket(client_fd, body_data, body_len);
     }
 }
 
@@ -396,17 +582,16 @@ void WebServer::send_string_response(int client_fd, int status_code, const std::
 
 void WebServer::send_file_response(int client_fd, const std::string &file_path, const std::string &filename)
 {
-    int fd = open(file_path.c_str(), O_RDONLY);
-    if (fd < 0)
+    ScopedFd fd(open(file_path.c_str(), O_RDONLY));
+    if (!fd.is_valid())
     {
         send_string_response(client_fd, 404, "Not Found", "text/plain", "File not found");
         return;
     }
 
-    struct stat st;
-    if (fstat(fd, &st) != 0 || !S_ISREG(st.st_mode))
+    struct stat st{};
+    if (fstat(fd.get(), &st) != 0 || !S_ISREG(st.st_mode))
     {
-        close(fd);
         send_string_response(client_fd, 403, "Forbidden", "text/plain", "Access denied");
         return;
     }
@@ -424,28 +609,42 @@ void WebServer::send_file_response(int client_fd, const std::string &file_path, 
         "%s\r\n",
         static_cast<unsigned long long>(file_size), disposition.c_str());
 
-    send(client_fd, header_buf, static_cast<std::size_t>(header_len), 0);
+    if (header_len <= 0 || static_cast<std::size_t>(header_len) >= sizeof(header_buf))
+    {
+        return;
+    }
 
-    std::vector<std::uint8_t> buffer(64 * 1024);
+    if (!send_all_socket(client_fd, header_buf, static_cast<std::size_t>(header_len)))
+    {
+        return;
+    }
+
+    constexpr std::size_t kBufferSize = 64 * 1024;
+    std::vector<std::uint8_t> buffer(kBufferSize);
     std::uint64_t bytes_left = file_size;
     while (bytes_left > 0)
     {
         std::size_t to_read = std::min<std::uint64_t>(bytes_left, buffer.size());
-        ssize_t read_bytes = read(fd, buffer.data(), to_read);
-        if (read_bytes <= 0) break;
-
-        const char *ptr = reinterpret_cast<const char *>(buffer.data());
-        std::size_t remaining = static_cast<std::size_t>(read_bytes);
-        while (remaining > 0)
+        ssize_t read_bytes = read(fd.get(), buffer.data(), to_read);
+        if (read_bytes < 0)
         {
-            ssize_t sent = send(client_fd, ptr, remaining, 0);
-            if (sent <= 0) break;
-            ptr += sent;
-            remaining -= static_cast<std::size_t>(sent);
+            if (errno == EINTR)
+            {
+                continue;
+            }
+            break;
+        }
+        if (read_bytes == 0)
+        {
+            break;
+        }
+
+        if (!send_all_socket(client_fd, buffer.data(), static_cast<std::size_t>(read_bytes)))
+        {
+            break;
         }
         bytes_left -= static_cast<std::uint64_t>(read_bytes);
     }
-    close(fd);
 }
 
 void WebServer::handle_client(int client_fd)
@@ -458,7 +657,7 @@ void WebServer::handle_client(int client_fd)
     }
     req_buf[n] = '\0';
 
-    // Parsear primera línea: "GET /ruta HTTP/1.1"
+    // Parsear primera linea: "GET /ruta HTTP/1.1"
     char method[16] = {0};
     char path_buf[1024] = {0};
     if (std::sscanf(req_buf, "%15s %1023s", method, path_buf) < 2)
@@ -502,8 +701,9 @@ void WebServer::handle_client(int client_fd)
         auto games = get_games();
         if (games.empty())
         {
-            games = scanner::scan_installed_games_and_saves();
-            update_games(games);
+            auto scanned = scanner::scan_installed_games_and_saves();
+            update_games(scanned);
+            games = std::move(scanned);
         }
 
         std::string json = "[";
@@ -533,21 +733,23 @@ void WebServer::handle_client(int client_fd)
     if (path.rfind("/api/icon/", 0) == 0)
     {
         std::string title_id = path.substr(10);
-        // Buscar ruta del icono
-        std::string icon_path;
-        auto games = get_games();
-        for (const auto &g : games)
+        if (title_id.empty() || title_id.find("..") != std::string::npos ||
+            title_id.find('/') != std::string::npos || title_id.find('\\') != std::string::npos)
         {
-            if (g.title_id == title_id && !g.icon_path.empty() && access(g.icon_path.c_str(), F_OK) == 0)
+            send_string_response(client_fd, 400, "Bad Request", "text/plain", "Invalid Title ID");
+            return;
+        }
+        std::string icon_path;
+        {
+            scanner::ScannedGame g;
+            if (find_game(title_id, g) && !g.icon_path.empty() && access(g.icon_path.c_str(), F_OK) == 0)
             {
                 icon_path = g.icon_path;
-                break;
             }
         }
 
         if (icon_path.empty())
         {
-            // Intentar rutas estándar
             std::string candidates[] = {
                 "/user/appmeta/" + title_id + "/icon0.png",
                 "/system_data/priv/appmeta/" + title_id + "/icon0.png",
@@ -565,22 +767,38 @@ void WebServer::handle_client(int client_fd)
 
         if (!icon_path.empty())
         {
-            int fd = open(icon_path.c_str(), O_RDONLY);
-            if (fd >= 0)
+            ScopedFd fd(open(icon_path.c_str(), O_RDONLY));
+            if (fd.is_valid())
             {
-                struct stat st;
-                if (fstat(fd, &st) == 0 && S_ISREG(st.st_mode))
+                struct stat st{};
+                if (fstat(fd.get(), &st) == 0 && S_ISREG(st.st_mode))
                 {
-                    std::vector<std::uint8_t> icon_data(static_cast<std::size_t>(st.st_size));
-                    if (read(fd, icon_data.data(), icon_data.size()) == static_cast<ssize_t>(icon_data.size()))
+                    if (st.st_size > 0 && st.st_size <= 16 * 1024 * 1024)
                     {
-                        close(fd);
-                        send_response(client_fd, 200, "OK", "image/png", icon_data.data(), icon_data.size(),
-                                      "Cache-Control: public, max-age=86400\r\n");
-                        return;
+                        std::vector<std::uint8_t> icon_data(static_cast<std::size_t>(st.st_size));
+                        std::size_t total_read = 0;
+                        bool read_ok = true;
+                        while (total_read < icon_data.size())
+                        {
+                            ssize_t r = read(fd.get(), icon_data.data() + total_read, icon_data.size() - total_read);
+                            if (r < 0)
+                            {
+                                if (errno == EINTR) continue;
+                                read_ok = false;
+                                break;
+                            }
+                            if (r == 0) break;
+                            total_read += static_cast<std::size_t>(r);
+                        }
+
+                        if (read_ok && total_read == icon_data.size())
+                        {
+                            send_response(client_fd, 200, "OK", "image/png", icon_data.data(), icon_data.size(),
+                                          "Cache-Control: public, max-age=86400\r\n");
+                            return;
+                        }
                     }
                 }
-                close(fd);
             }
         }
 
@@ -592,43 +810,50 @@ void WebServer::handle_client(int client_fd)
     if (path.rfind("/api/download/", 0) == 0)
     {
         std::string title_id = path.substr(14);
-        auto games = get_games();
-        const scanner::ScannedGame *target_game = nullptr;
-        for (const auto &g : games)
+        if (title_id.empty() || title_id.find("..") != std::string::npos ||
+            title_id.find('/') != std::string::npos || title_id.find('\\') != std::string::npos)
         {
-            if (g.title_id == title_id)
+            send_string_response(client_fd, 400, "Bad Request", "text/plain", "Invalid Title ID");
+            return;
+        }
+        scanner::ScannedGame target_game;
+        if (!find_game(title_id, target_game))
+        {
+            auto scanned = scanner::scan_installed_games_and_saves();
+            update_games(scanned);
+            if (!find_game(title_id, target_game))
             {
-                target_game = &g;
-                break;
+                send_string_response(client_fd, 404, "Not Found", "text/plain", "Save data not found for title");
+                return;
             }
         }
 
-        if (!target_game || target_game->save_path.empty() || access(target_game->save_path.c_str(), F_OK) != 0)
+        if (target_game.save_path.empty() || access(target_game.save_path.c_str(), F_OK) != 0)
         {
             send_string_response(client_fd, 404, "Not Found", "text/plain", "Save data not found for title");
             return;
         }
 
         ZipWriter zip;
-        zip.add_directory(target_game->save_path, target_game->title_id);
+        zip.add_directory(target_game.save_path, target_game.title_id);
 
-        // Si es PS5, incluir también metadatos si existen en savedata_prospero_meta
-        std::string meta_path = target_game->save_path;
+        // Si es PS5, incluir tambien metadatos si existen en savedata_prospero_meta
+        std::string meta_path = target_game.save_path;
         std::size_t pos = meta_path.find("savedata_prospero");
         if (pos != std::string::npos)
         {
             meta_path.replace(pos, 17, "savedata_prospero_meta");
             if (access(meta_path.c_str(), F_OK) == 0)
             {
-                zip.add_directory(meta_path, target_game->title_id + "/sce_meta");
+                zip.add_directory(meta_path, target_game.title_id + "/sce_meta");
             }
         }
 
         // Si existe keystone en /user/appmeta/<title_id>/sce_sys/keystone, agregarlo
-        std::string keystone_path = "/user/appmeta/" + target_game->title_id + "/sce_sys/keystone";
+        std::string keystone_path = "/user/appmeta/" + target_game.title_id + "/sce_sys/keystone";
         if (access(keystone_path.c_str(), F_OK) == 0)
         {
-            zip.add_file(keystone_path, target_game->title_id + "/keystone");
+            zip.add_file(keystone_path, target_game.title_id + "/keystone");
         }
 
         zip.prepare();
@@ -638,7 +863,7 @@ void WebServer::handle_client(int client_fd)
             return;
         }
 
-        std::string filename = target_game->title_id + "_" + sanitize_filename(target_game->title) + "_save.zip";
+        std::string filename = target_game.title_id + "_" + sanitize_filename(target_game.title) + "_save.zip";
         std::uint64_t total_size = zip.total_zip_size();
 
         char header_buf[1024];
@@ -651,8 +876,13 @@ void WebServer::handle_client(int client_fd)
             "Connection: close\r\n\r\n",
             filename.c_str(), static_cast<unsigned long long>(total_size));
 
-        send(client_fd, header_buf, static_cast<std::size_t>(header_len), 0);
-        zip.stream_to_fd(client_fd);
+        if (header_len > 0 && static_cast<std::size_t>(header_len) < sizeof(header_buf))
+        {
+            if (send_all_socket(client_fd, header_buf, static_cast<std::size_t>(header_len)))
+            {
+                zip.stream_to_fd(client_fd);
+            }
+        }
         return;
     }
 
@@ -660,6 +890,13 @@ void WebServer::handle_client(int client_fd)
     if (path == "/api/download_all")
     {
         auto games = get_games();
+        if (games.empty())
+        {
+            auto scanned = scanner::scan_installed_games_and_saves();
+            update_games(scanned);
+            games = std::move(scanned);
+        }
+
         ZipWriter zip;
         for (const auto &g : games)
         {
@@ -690,34 +927,46 @@ void WebServer::handle_client(int client_fd)
             "Connection: close\r\n\r\n",
             filename.c_str(), static_cast<unsigned long long>(total_size));
 
-        send(client_fd, header_buf, static_cast<std::size_t>(header_len), 0);
-        zip.stream_to_fd(client_fd);
+        if (header_len > 0 && static_cast<std::size_t>(header_len) < sizeof(header_buf))
+        {
+            if (send_all_socket(client_fd, header_buf, static_cast<std::size_t>(header_len)))
+            {
+                zip.stream_to_fd(client_fd);
+            }
+        }
         return;
     }
 
-    // Ruta 7: API de Exploración de Archivos Individuales de una Partida
+    // Ruta 7: API de Exploracion de Archivos Individuales de una Partida
     if (path.rfind("/api/files/", 0) == 0)
     {
         std::string title_id = path.substr(11);
-        auto games = get_games();
-        const scanner::ScannedGame *target_game = nullptr;
-        for (const auto &g : games)
+        if (title_id.empty() || title_id.find("..") != std::string::npos ||
+            title_id.find('/') != std::string::npos || title_id.find('\\') != std::string::npos)
         {
-            if (g.title_id == title_id)
+            send_string_response(client_fd, 400, "Bad Request", "application/json", "[]");
+            return;
+        }
+        scanner::ScannedGame target_game;
+        if (!find_game(title_id, target_game))
+        {
+            auto scanned = scanner::scan_installed_games_and_saves();
+            update_games(scanned);
+            if (!find_game(title_id, target_game))
             {
-                target_game = &g;
-                break;
+                send_string_response(client_fd, 404, "Not Found", "application/json", "[]");
+                return;
             }
         }
 
-        if (!target_game || target_game->save_path.empty())
+        if (target_game.save_path.empty() || access(target_game.save_path.c_str(), F_OK) != 0)
         {
             send_string_response(client_fd, 404, "Not Found", "application/json", "[]");
             return;
         }
 
-        DIR *dir = opendir(target_game->save_path.c_str());
-        if (!dir)
+        ScopedDir dir(opendir(target_game.save_path.c_str()));
+        if (!dir.is_valid())
         {
             send_string_response(client_fd, 404, "Not Found", "application/json", "[]");
             return;
@@ -725,16 +974,16 @@ void WebServer::handle_client(int client_fd)
 
         std::string json = "[";
         bool first = true;
-        struct dirent *de;
-        while ((de = readdir(dir)) != nullptr)
+        struct dirent *de = nullptr;
+        while ((de = readdir(dir.get())) != nullptr)
         {
             if (std::strcmp(de->d_name, ".") == 0 || std::strcmp(de->d_name, "..") == 0)
             {
                 continue;
             }
 
-            std::string full_path = target_game->save_path + "/" + de->d_name;
-            struct stat st;
+            std::string full_path = target_game.save_path + "/" + de->d_name;
+            struct stat st{};
             if (stat(full_path.c_str(), &st) == 0 && S_ISREG(st.st_mode))
             {
                 if (!first) json += ",";
@@ -746,7 +995,6 @@ void WebServer::handle_client(int client_fd)
                 json += "}";
             }
         }
-        closedir(dir);
         json += "]";
 
         send_string_response(client_fd, 200, "OK", "application/json", json);
@@ -767,31 +1015,33 @@ void WebServer::handle_client(int client_fd)
         std::string title_id = rest.substr(0, slash);
         std::string filename = rest.substr(slash + 1);
 
-        // Seguridad: Prohibir directory traversal
-        if (filename.find("..") != std::string::npos || filename.find('/') != std::string::npos)
+        // Seguridad: Prohibir directory traversal y caracteres peligrosos
+        if (filename.find("..") != std::string::npos || filename.find('/') != std::string::npos ||
+            filename.find('\\') != std::string::npos || filename.find('\0') != std::string::npos)
         {
             send_string_response(client_fd, 403, "Forbidden", "text/plain", "Access denied");
             return;
         }
 
-        auto games = get_games();
-        const scanner::ScannedGame *target_game = nullptr;
-        for (const auto &g : games)
+        scanner::ScannedGame target_game;
+        if (!find_game(title_id, target_game))
         {
-            if (g.title_id == title_id)
+            auto scanned = scanner::scan_installed_games_and_saves();
+            update_games(scanned);
+            if (!find_game(title_id, target_game))
             {
-                target_game = &g;
-                break;
+                send_string_response(client_fd, 404, "Not Found", "text/plain", "Save data not found");
+                return;
             }
         }
 
-        if (!target_game || target_game->save_path.empty())
+        if (target_game.save_path.empty())
         {
             send_string_response(client_fd, 404, "Not Found", "text/plain", "Save data not found");
             return;
         }
 
-        std::string target_file = target_game->save_path + "/" + filename;
+        std::string target_file = target_game.save_path + "/" + filename;
         send_file_response(client_fd, target_file, filename);
         return;
     }

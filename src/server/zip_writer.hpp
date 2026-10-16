@@ -35,7 +35,9 @@ public:
     void add_file(const std::string &disk_path, const std::string &zip_relative_path);
 
     // Adds all files in a directory recursively into the zip under a root prefix
-    void add_directory(const std::string &dir_path, const std::string &zip_prefix = "");
+    // Strict recursion depth limit of 8 levels to prevent stack overflow on FreeBSD/Prospero
+    static constexpr int kMaxDirectoryDepth = 8;
+    void add_directory(const std::string &dir_path, const std::string &zip_prefix = "", int depth = 0);
 
     // Computes total uncompressed size and pre-calculates CRCs for streaming
     void prepare();

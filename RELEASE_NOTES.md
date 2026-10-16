@@ -47,7 +47,7 @@ Built with a hardware-accelerated OpenGL 4.6 SDF renderer, MacheteSVG delivers a
 - **SAMU Hardware Cryptographic Vault:** Archives console-unique 96-byte SAMU sealed blobs, plaintext 32-byte AES PFS keys via `/dev/pfsmgr` ioctl `0xc0845302` (`PFS_DECRYPT_KEK`), OpenPSID, and SHA-256 integrity signatures in `crypto_vault.bin` alongside each backup for digital preservation and future cross-console decryption.
 
 #### 2. Embedded Web Save Station (LAN / Wi-Fi Download Server)
-- **Local HTTP Web Server:** Integrated high-performance HTTP server listening on port 8080 with automatic PS5 LAN IP detection. Runs on a dedicated background thread with 4 MB stack without blocking the 60 FPS UI.
+- **Local HTTP Web Server:** Integrated high-performance HTTP server listening on port 8383 with automatic PS5 LAN IP detection. Runs on a dedicated background thread with 4 MB stack without blocking the 60 FPS UI.
 - **Modern Dark Glassmorphism Web UI:** Responsive single-page web app (HTML5 / CSS3 / ES6) embedded directly inside the binary. Zero external CDN dependencies; 100% offline-ready.
 - **Live Game Save Browser:** View installed games, real cover art, Title IDs, platform tags (PS5 / PS4), and save sizes from your phone or PC browser.
 - **Instant ZIP Streaming:** Custom C++ streaming ZIP archive generator (IEEE 802.3 CRC32, Store mode) allowing one-click download of individual game saves or an entire library archive (`.zip`) with precalculated `Content-Length` for accurate browser progress bars.
@@ -142,7 +142,7 @@ Desarrollado con renderizado acelerado por hardware OpenGL 4.6 SDF, MacheteSVG o
 - **Bóveda Criptográfica de Hardware SAMU:** Archiva el blob sellado por SAMU de 96 bytes, la clave AES PFS en texto plano de 32 bytes desellada en vivo mediante `/dev/pfsmgr` (ioctl `0xc0845302`), el OpenPSID y hashes de integridad SHA-256 en `crypto_vault.bin` junto a cada copia de seguridad para preservación digital y futuro descifrado entre consolas.
 
 #### 2. Estación Web Local Integrada (Descarga por Wi-Fi / LAN)
-- **Servidor Web HTTP Local:** Servidor HTTP de alto rendimiento embebido en el puerto 8080 con detección automática de la IP local de la consola PS5. Corre en un hilo de fondo dedicado con 4 MB de pila sin afectar los 60 FPS de la interfaz.
+- **Servidor Web HTTP Local:** Servidor HTTP de alto rendimiento embebido en el puerto 8383 con detección automática de la IP local de la consola PS5. Corre en un hilo de fondo dedicado con 4 MB de pila sin afectar los 60 FPS de la interfaz.
 - **Interfaz Web Dark Glassmorphism:** Aplicación web moderna (HTML5 / CSS3 / ES6) integrada directamente en el binario sin enlaces a CDNs externos ni requerir conexión a Internet.
 - **Explorador de Partidas en Vivo:** Visualiza tus títulos instalados, carátulas auténticas, Title IDs, plataformas (PS5 / PS4) y peso de datos de guardado desde cualquier navegador en PC o teléfono inteligente.
 - **Transmisión de Archivos ZIP al Vuelo:** Generador streaming de archivos ZIP en C++ (IEEE 802.3 CRC32, modo Store) que permite descargar partidas individuales o la librería completa en un archivo `.zip` con barra de progreso real en el navegador gracias al cálculo anticipado de `Content-Length`.

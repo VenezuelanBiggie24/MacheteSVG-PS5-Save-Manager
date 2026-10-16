@@ -6,6 +6,7 @@
 #include "core/logger.hpp"
 
 #include <array>
+#include <cerrno>
 #include <cstring>
 #include <dirent.h>
 #include <fcntl.h>
@@ -13,11 +14,109 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
+#ifndef SO_NOSIGPIPE
+#if defined(__FreeBSD__) || defined(__PS5__) || defined(__prospero__) || defined(__APPLE__)
+#define SO_NOSIGPIPE 0x0800
+#endif
+#endif
+
 namespace machete::server
 {
 
 namespace
 {
+
+class ScopedFd
+{
+public:
+    ScopedFd() noexcept : fd_(-1) {}
+    explicit ScopedFd(int fd) noexcept : fd_(fd) {}
+    ~ScopedFd() noexcept { reset(); }
+
+    ScopedFd(const ScopedFd &) = delete;
+    ScopedFd &operator=(const ScopedFd &) = delete;
+
+    ScopedFd(ScopedFd &&other) noexcept : fd_(other.fd_) { other.fd_ = -1; }
+    ScopedFd &operator=(ScopedFd &&other) noexcept
+    {
+        if (this != &other)
+        {
+            reset();
+            fd_ = other.fd_;
+            other.fd_ = -1;
+        }
+        return *this;
+    }
+
+    int get() const noexcept { return fd_; }
+    bool is_valid() const noexcept { return fd_ >= 0; }
+    explicit operator bool() const noexcept { return fd_ >= 0; }
+
+    int release() noexcept
+    {
+        int ret = fd_;
+        fd_ = -1;
+        return ret;
+    }
+
+    void reset(int new_fd = -1) noexcept
+    {
+        if (fd_ >= 0)
+        {
+            ::close(fd_);
+        }
+        fd_ = new_fd;
+    }
+
+private:
+    int fd_{-1};
+};
+
+class ScopedDir
+{
+public:
+    ScopedDir() noexcept : dir_(nullptr) {}
+    explicit ScopedDir(DIR *dir) noexcept : dir_(dir) {}
+    ~ScopedDir() noexcept { reset(); }
+
+    ScopedDir(const ScopedDir &) = delete;
+    ScopedDir &operator=(const ScopedDir &) = delete;
+
+    ScopedDir(ScopedDir &&other) noexcept : dir_(other.dir_) { other.dir_ = nullptr; }
+    ScopedDir &operator=(ScopedDir &&other) noexcept
+    {
+        if (this != &other)
+        {
+            reset();
+            dir_ = other.dir_;
+            other.dir_ = nullptr;
+        }
+        return *this;
+    }
+
+    DIR *get() const noexcept { return dir_; }
+    bool is_valid() const noexcept { return dir_ != nullptr; }
+    explicit operator bool() const noexcept { return dir_ != nullptr; }
+
+    DIR *release() noexcept
+    {
+        DIR *ret = dir_;
+        dir_ = nullptr;
+        return ret;
+    }
+
+    void reset(DIR *new_dir = nullptr) noexcept
+    {
+        if (dir_)
+        {
+            ::closedir(dir_);
+        }
+        dir_ = new_dir;
+    }
+
+private:
+    DIR *dir_{nullptr};
+};
 
 constexpr std::array<std::uint32_t, 256> make_crc_table()
 {
@@ -66,25 +165,33 @@ std::uint32_t ZipWriter::calculate_crc32(const void *data, std::size_t length, s
 std::uint32_t ZipWriter::file_crc32(const std::string &file_path, std::uint64_t &out_size)
 {
     out_size = 0;
-    int fd = open(file_path.c_str(), O_RDONLY);
-    if (fd < 0)
+    ScopedFd fd(open(file_path.c_str(), O_RDONLY));
+    if (!fd.is_valid())
     {
         return 0;
     }
 
     std::uint32_t crc = 0;
-    std::vector<std::uint8_t> buffer(64 * 1024);
+    constexpr std::size_t kBufferSize = 64 * 1024;
+    std::vector<std::uint8_t> buffer(kBufferSize);
     while (true)
     {
-        ssize_t bytes_read = read(fd, buffer.data(), buffer.size());
-        if (bytes_read <= 0)
+        ssize_t bytes_read = read(fd.get(), buffer.data(), buffer.size());
+        if (bytes_read < 0)
+        {
+            if (errno == EINTR)
+            {
+                continue;
+            }
+            break;
+        }
+        if (bytes_read == 0)
         {
             break;
         }
         crc = calculate_crc32(buffer.data(), static_cast<std::size_t>(bytes_read), crc);
         out_size += static_cast<std::uint64_t>(bytes_read);
     }
-    close(fd);
     return crc;
 }
 
@@ -94,7 +201,7 @@ void ZipWriter::add_file(const std::string &disk_path, const std::string &zip_re
     entry.disk_path = disk_path;
     entry.path_in_zip = zip_relative_path;
 
-    struct stat st;
+    struct stat st{};
     if (stat(disk_path.c_str(), &st) == 0 && S_ISREG(st.st_mode))
     {
         entry.size = static_cast<std::uint64_t>(st.st_size);
@@ -103,16 +210,23 @@ void ZipWriter::add_file(const std::string &disk_path, const std::string &zip_re
     }
 }
 
-void ZipWriter::add_directory(const std::string &dir_path, const std::string &zip_prefix)
+void ZipWriter::add_directory(const std::string &dir_path, const std::string &zip_prefix, int depth)
 {
-    DIR *dir = opendir(dir_path.c_str());
-    if (!dir)
+    if (depth >= kMaxDirectoryDepth)
+    {
+        MACHETE_LOG("[ZIP]", "Maximum directory recursion depth (%d) reached at: %s",
+                    kMaxDirectoryDepth, dir_path.c_str());
+        return;
+    }
+
+    ScopedDir dir(opendir(dir_path.c_str()));
+    if (!dir.is_valid())
     {
         return;
     }
 
-    struct dirent *de;
-    while ((de = readdir(dir)) != nullptr)
+    struct dirent *de = nullptr;
+    while ((de = readdir(dir.get())) != nullptr)
     {
         if (std::strcmp(de->d_name, ".") == 0 || std::strcmp(de->d_name, "..") == 0)
         {
@@ -122,12 +236,12 @@ void ZipWriter::add_directory(const std::string &dir_path, const std::string &zi
         std::string full_path = dir_path + "/" + de->d_name;
         std::string rel_path = zip_prefix.empty() ? de->d_name : (zip_prefix + "/" + de->d_name);
 
-        struct stat st;
+        struct stat st{};
         if (stat(full_path.c_str(), &st) == 0)
         {
             if (S_ISDIR(st.st_mode))
             {
-                add_directory(full_path, rel_path);
+                add_directory(full_path, rel_path, depth + 1);
             }
             else if (S_ISREG(st.st_mode))
             {
@@ -135,7 +249,6 @@ void ZipWriter::add_directory(const std::string &dir_path, const std::string &zi
             }
         }
     }
-    closedir(dir);
 }
 
 void ZipWriter::prepare()
@@ -179,7 +292,8 @@ bool ZipWriter::stream_to(const StreamCallback &callback) const
     }
 
     std::uint32_t cd_offset = 0;
-    std::vector<std::uint8_t> buffer(64 * 1024);
+    constexpr std::size_t kBufferSize = 64 * 1024;
+    std::vector<std::uint8_t> buffer(kBufferSize);
 
     // 1. Emit all local headers and file contents
     for (const auto &entry : entries_)
@@ -209,26 +323,32 @@ bool ZipWriter::stream_to(const StreamCallback &callback) const
         cd_offset += 30 + static_cast<std::uint32_t>(entry.path_in_zip.size());
 
         // Stream file contents
-        int fd = open(entry.disk_path.c_str(), O_RDONLY);
-        if (fd >= 0)
+        ScopedFd fd(open(entry.disk_path.c_str(), O_RDONLY));
+        if (fd.is_valid())
         {
             std::uint64_t bytes_left = entry.size;
             while (bytes_left > 0)
             {
                 std::size_t chunk_size = std::min<std::uint64_t>(bytes_left, buffer.size());
-                ssize_t read_bytes = read(fd, buffer.data(), chunk_size);
-                if (read_bytes <= 0)
+                ssize_t read_bytes = read(fd.get(), buffer.data(), chunk_size);
+                if (read_bytes < 0)
+                {
+                    if (errno == EINTR)
+                    {
+                        continue;
+                    }
+                    break;
+                }
+                if (read_bytes == 0)
                 {
                     break;
                 }
                 if (!callback(buffer.data(), static_cast<std::size_t>(read_bytes)))
                 {
-                    close(fd);
                     return false;
                 }
                 bytes_left -= static_cast<std::uint64_t>(read_bytes);
             }
-            close(fd);
         }
         cd_offset += static_cast<std::uint32_t>(entry.size);
     }
@@ -286,13 +406,35 @@ bool ZipWriter::stream_to(const StreamCallback &callback) const
 
 bool ZipWriter::stream_to_fd(int socket_fd) const
 {
+    if (socket_fd < 0)
+    {
+        return false;
+    }
+
+#ifdef SO_NOSIGPIPE
+    int opt_nosigpipe = 1;
+    (void)setsockopt(socket_fd, SOL_SOCKET, SO_NOSIGPIPE, &opt_nosigpipe, sizeof(opt_nosigpipe));
+#endif
+
     return stream_to([socket_fd](const void *data, std::size_t size) -> bool {
+        if (!data || size == 0)
+        {
+            return true;
+        }
         const auto *ptr = static_cast<const char *>(data);
         std::size_t remaining = size;
         while (remaining > 0)
         {
             ssize_t sent = write(socket_fd, ptr, remaining);
-            if (sent <= 0)
+            if (sent < 0)
+            {
+                if (errno == EINTR)
+                {
+                    continue;
+                }
+                return false;
+            }
+            if (sent == 0)
             {
                 return false;
             }

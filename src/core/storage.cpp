@@ -9,8 +9,10 @@
 #include <algorithm>
 #include <cerrno>
 #include <cstdio>
+#include <cstring>
 #include <dirent.h>
 #include <sys/stat.h>
+#include <sys/statvfs.h>
 #include <unistd.h>
 
 namespace machete::storage
@@ -18,6 +20,62 @@ namespace machete::storage
 
 namespace
 {
+
+class ScopedDir
+{
+public:
+    ScopedDir() noexcept : dir_(nullptr) {}
+    explicit ScopedDir(DIR *dir) noexcept : dir_(dir) {}
+    ~ScopedDir() noexcept { reset(); }
+
+    ScopedDir(const ScopedDir &) = delete;
+    ScopedDir &operator=(const ScopedDir &) = delete;
+
+    ScopedDir(ScopedDir &&other) noexcept : dir_(other.dir_) { other.dir_ = nullptr; }
+    ScopedDir &operator=(ScopedDir &&other) noexcept
+    {
+        if (this != &other)
+        {
+            reset();
+            dir_ = other.dir_;
+            other.dir_ = nullptr;
+        }
+        return *this;
+    }
+
+    DIR *get() const noexcept { return dir_; }
+    bool is_valid() const noexcept { return dir_ != nullptr; }
+    explicit operator bool() const noexcept { return dir_ != nullptr; }
+
+    DIR *release() noexcept
+    {
+        DIR *ret = dir_;
+        dir_ = nullptr;
+        return ret;
+    }
+
+    void reset(DIR *new_dir = nullptr) noexcept
+    {
+        if (dir_)
+        {
+            ::closedir(dir_);
+        }
+        dir_ = new_dir;
+    }
+
+private:
+    DIR *dir_{nullptr};
+};
+
+void query_filesystem_space(const std::string &path, std::uint64_t &free_bytes, std::uint64_t &total_bytes)
+{
+    struct statvfs sv{};
+    if (statvfs(path.c_str(), &sv) == 0)
+    {
+        free_bytes = static_cast<std::uint64_t>(sv.f_bavail) * sv.f_frsize;
+        total_bytes = static_cast<std::uint64_t>(sv.f_blocks) * sv.f_frsize;
+    }
+}
 
 std::string sanitize_folder_name(std::string name)
 {
@@ -72,9 +130,17 @@ std::string get_base_path(StorageType type)
 bool ensure_internal_storage()
 {
     const std::string root_dir = "/data/" + std::string(ROOT_DIR_NAME);
-    mkdir("/data", 0777);
+    if (mkdir("/data", 0777) != 0 && errno != EEXIST)
+    {
+        MACHETE_LOG("[STORAGE]", "mkdir /data failed: errno=%d (%s)", errno, std::strerror(errno));
+    }
     chmod("/data", 0777);
+
     int res = mkdir(root_dir.c_str(), 0777);
+    if (res != 0 && errno != EEXIST)
+    {
+        MACHETE_LOG("[STORAGE]", "mkdir %s failed: errno=%d (%s)", root_dir.c_str(), errno, std::strerror(errno));
+    }
     chmod(root_dir.c_str(), 0777);
     return (res == 0 || errno == EEXIST || access(root_dir.c_str(), F_OK) == 0);
 }
@@ -112,7 +178,10 @@ std::vector<StorageDevice> scan_storage_devices()
         // Si /data o /data/MacheteSVG son accesibles, asegurar existencia y permisos 0777
         if (access("/data", F_OK) == 0 || access(dev.root_dir.c_str(), F_OK) == 0)
         {
-            mkdir(dev.root_dir.c_str(), 0777);
+            if (mkdir(dev.root_dir.c_str(), 0777) != 0 && errno != EEXIST)
+            {
+                MACHETE_LOG("[STORAGE]", "mkdir internal root failed: errno=%d", errno);
+            }
             chmod(dev.root_dir.c_str(), 0777);
             dev.connected = true;
         }
@@ -134,28 +203,27 @@ std::vector<StorageDevice> scan_storage_devices()
         {
             mkdir(dev.root_dir.c_str(), 0777);
             chmod(dev.root_dir.c_str(), 0777);
-            dev.free_bytes = 0;
-            dev.total_bytes = 0;
+            query_filesystem_space("/data", dev.free_bytes, dev.total_bytes);
         }
         devices.push_back(dev);
     }
 
-    // 2. SSD de Expansión M.2 (/mnt/ext1 o /mnt/ext0)
+    // 2. SSD de Expansion M.2 (/mnt/ext1 o /mnt/ext0)
     {
         std::string ssd_path;
-        DIR *dir_ext1 = opendir("/mnt/ext1");
-        if (dir_ext1)
         {
-            closedir(dir_ext1);
-            ssd_path = "/mnt/ext1";
-        }
-        else
-        {
-            DIR *dir_ext0 = opendir("/mnt/ext0");
-            if (dir_ext0)
+            ScopedDir dir_ext1(opendir("/mnt/ext1"));
+            if (dir_ext1.is_valid())
             {
-                closedir(dir_ext0);
-                ssd_path = "/mnt/ext0";
+                ssd_path = "/mnt/ext1";
+            }
+            else
+            {
+                ScopedDir dir_ext0(opendir("/mnt/ext0"));
+                if (dir_ext0.is_valid())
+                {
+                    ssd_path = "/mnt/ext0";
+                }
             }
         }
 
@@ -170,20 +238,20 @@ std::vector<StorageDevice> scan_storage_devices()
             dev.connected = true;
             dev.free_bytes = 0;
             dev.total_bytes = 0;
+            query_filesystem_space(ssd_path, dev.free_bytes, dev.total_bytes);
             devices.push_back(dev);
         }
     }
 
-    // 3. Escaneo dinámico de puertos USB (/mnt/usb0 .. /mnt/usb7)
+    // 3. Escaneo dinamico de puertos USB (/mnt/usb0 .. /mnt/usb7)
     for (int i = 0; i < 8; ++i)
     {
         char usb_path[32];
         std::snprintf(usb_path, sizeof(usb_path), "/mnt/usb%d", i);
 
-        DIR *usb_dir = opendir(usb_path);
-        if (usb_dir)
+        ScopedDir usb_dir(opendir(usb_path));
+        if (usb_dir.is_valid())
         {
-            closedir(usb_dir);
             StorageDevice dev;
             dev.type = StorageType::USB;
             dev.id = "usb" + std::to_string(i);
@@ -197,6 +265,7 @@ std::vector<StorageDevice> scan_storage_devices()
             dev.connected = true;
             dev.free_bytes = 0;
             dev.total_bytes = 0;
+            query_filesystem_space(usb_path, dev.free_bytes, dev.total_bytes);
             devices.push_back(dev);
         }
     }
@@ -211,10 +280,9 @@ bool poll_storage_changes(std::vector<StorageDevice> &out_devices, std::string &
     {
         char usb_path[32];
         std::snprintf(usb_path, sizeof(usb_path), "/mnt/usb%d", i);
-        DIR *dir = opendir(usb_path);
-        if (dir)
+        ScopedDir dir(opendir(usb_path));
+        if (dir.is_valid())
         {
-            closedir(dir);
             current_usb_mask |= (1ULL << i);
         }
     }
@@ -222,7 +290,7 @@ bool poll_storage_changes(std::vector<StorageDevice> &out_devices, std::string &
     const std::string internal_path = "/data/" + std::string(ROOT_DIR_NAME);
     const bool current_internal_connected = (access("/data", F_OK) == 0 || access(internal_path.c_str(), F_OK) == 0);
 
-    // Primera ejecución: solo registrar el estado inicial
+    // Primera ejecucion: solo registrar el estado inicial
     static bool first_run = true;
     static bool previous_internal_connected = false;
     if (first_run)
@@ -282,20 +350,36 @@ bool poll_storage_changes(std::vector<StorageDevice> &out_devices, std::string &
 bool ensure_directory_structure_at(const std::string &mount_path, const std::string &title_id,
                                    const std::string &game_name)
 {
+    if (mount_path.empty())
+    {
+        return false;
+    }
+
     std::string base = mount_path + "/" + ROOT_DIR_NAME;
-    mkdir(base.c_str(), 0777);
+    if (mkdir(base.c_str(), 0777) != 0 && errno != EEXIST)
+    {
+        MACHETE_LOG("[STORAGE]", "mkdir base failed for %s: errno=%d (%s)",
+                    base.c_str(), errno, std::strerror(errno));
+    }
     chmod(base.c_str(), 0777);
 
     if (title_id.empty() && game_name.empty())
+    {
         return true;
+    }
 
     std::string safe_name = sanitize_folder_name(game_name);
     std::string folder_name = title_id.empty() ? safe_name : (title_id + " - " + safe_name);
     std::string game_dir = base + "/" + folder_name;
     int res = mkdir(game_dir.c_str(), 0777);
+    if (res != 0 && errno != EEXIST)
+    {
+        MACHETE_LOG("[STORAGE]", "mkdir game_dir failed for %s: errno=%d (%s)",
+                    game_dir.c_str(), errno, std::strerror(errno));
+    }
     chmod(game_dir.c_str(), 0777);
 
-    return (res == 0 || errno == EEXIST);
+    return (res == 0 || errno == EEXIST || access(game_dir.c_str(), F_OK) == 0);
 }
 
 bool ensure_directory_structure(StorageType type, const std::string &title_id,

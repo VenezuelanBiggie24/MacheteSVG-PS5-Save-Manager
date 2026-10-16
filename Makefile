@@ -151,6 +151,10 @@ lint:
 	@printf '%s\n' '==> [lint] Running source, metadata, and shell checks'
 	@bash tools/lint.sh
 
+check-emojis:
+	@printf '%s\n' '==> [emojis] Validating zero emoji characters in project'
+	@python3 tools/check-emojis.py
+
 check: lint test app
 
 host-snapshots:
