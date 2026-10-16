@@ -12,7 +12,6 @@
 #include <cstring>
 #include <dirent.h>
 #include <sys/stat.h>
-#include <sys/statvfs.h>
 #include <unistd.h>
 
 namespace machete::storage
@@ -69,12 +68,11 @@ private:
 
 void query_filesystem_space(const std::string &path, std::uint64_t &free_bytes, std::uint64_t &total_bytes)
 {
-    struct statvfs sv{};
-    if (statvfs(path.c_str(), &sv) == 0)
-    {
-        free_bytes = static_cast<std::uint64_t>(sv.f_bavail) * sv.f_frsize;
-        total_bytes = static_cast<std::uint64_t>(sv.f_blocks) * sv.f_frsize;
-    }
+    // PS5 Prospero does not export statvfs in its dynamic libraries.
+    // Leaving free_bytes and total_bytes as 0 displays "Listo para respaldar" safely.
+    (void)path;
+    free_bytes = 0;
+    total_bytes = 0;
 }
 
 std::string sanitize_folder_name(std::string name)
@@ -164,9 +162,11 @@ bool is_storage_available(StorageType type)
 
 std::vector<StorageDevice> scan_storage_devices()
 {
+    MACHETE_BREADCRUMB("scan_storage_devices: start");
     std::vector<StorageDevice> devices;
 
     // 1. Memoria Interna (/data)
+    MACHETE_BREADCRUMB("scan_storage_devices: internal");
     {
         StorageDevice dev;
         dev.type = StorageType::Internal;
@@ -209,21 +209,23 @@ std::vector<StorageDevice> scan_storage_devices()
     }
 
     // 2. SSD de Expansion M.2 (/mnt/ext1 o /mnt/ext0)
+    MACHETE_BREADCRUMB("scan_storage_devices: m2_ssd");
     {
         std::string ssd_path;
+        if (access("/mnt/ext1", F_OK) == 0)
         {
             ScopedDir dir_ext1(opendir("/mnt/ext1"));
             if (dir_ext1.is_valid())
             {
                 ssd_path = "/mnt/ext1";
             }
-            else
+        }
+        else if (access("/mnt/ext0", F_OK) == 0)
+        {
+            ScopedDir dir_ext0(opendir("/mnt/ext0"));
+            if (dir_ext0.is_valid())
             {
-                ScopedDir dir_ext0(opendir("/mnt/ext0"));
-                if (dir_ext0.is_valid())
-                {
-                    ssd_path = "/mnt/ext0";
-                }
+                ssd_path = "/mnt/ext0";
             }
         }
 
@@ -244,32 +246,37 @@ std::vector<StorageDevice> scan_storage_devices()
     }
 
     // 3. Escaneo dinamico de puertos USB (/mnt/usb0 .. /mnt/usb7)
+    MACHETE_BREADCRUMB("scan_storage_devices: usb_ports");
     for (int i = 0; i < 8; ++i)
     {
         char usb_path[32];
         std::snprintf(usb_path, sizeof(usb_path), "/mnt/usb%d", i);
 
-        ScopedDir usb_dir(opendir(usb_path));
-        if (usb_dir.is_valid())
+        if (access(usb_path, F_OK) == 0)
         {
-            StorageDevice dev;
-            dev.type = StorageType::USB;
-            dev.id = "usb" + std::to_string(i);
+            ScopedDir usb_dir(opendir(usb_path));
+            if (usb_dir.is_valid())
+            {
+                StorageDevice dev;
+                dev.type = StorageType::USB;
+                dev.id = "usb" + std::to_string(i);
 
-            char label_buf[64];
-            std::snprintf(label_buf, sizeof(label_buf),
-                          machete::i18n::tr(machete::i18n::StringId::StorageUsbFormat), i, usb_path);
-            dev.label = label_buf;
-            dev.mount_path = usb_path;
-            dev.root_dir = std::string(usb_path) + "/" + ROOT_DIR_NAME;
-            dev.connected = true;
-            dev.free_bytes = 0;
-            dev.total_bytes = 0;
-            query_filesystem_space(usb_path, dev.free_bytes, dev.total_bytes);
-            devices.push_back(dev);
+                char label_buf[64];
+                std::snprintf(label_buf, sizeof(label_buf),
+                              machete::i18n::tr(machete::i18n::StringId::StorageUsbFormat), i, usb_path);
+                dev.label = label_buf;
+                dev.mount_path = usb_path;
+                dev.root_dir = std::string(usb_path) + "/" + ROOT_DIR_NAME;
+                dev.connected = true;
+                dev.free_bytes = 0;
+                dev.total_bytes = 0;
+                query_filesystem_space(usb_path, dev.free_bytes, dev.total_bytes);
+                devices.push_back(dev);
+            }
         }
     }
 
+    MACHETE_BREADCRUMB("scan_storage_devices: done");
     return devices;
 }
 
@@ -280,10 +287,13 @@ bool poll_storage_changes(std::vector<StorageDevice> &out_devices, std::string &
     {
         char usb_path[32];
         std::snprintf(usb_path, sizeof(usb_path), "/mnt/usb%d", i);
-        ScopedDir dir(opendir(usb_path));
-        if (dir.is_valid())
+        if (access(usb_path, F_OK) == 0)
         {
-            current_usb_mask |= (1ULL << i);
+            ScopedDir dir(opendir(usb_path));
+            if (dir.is_valid())
+            {
+                current_usb_mask |= (1ULL << i);
+            }
         }
     }
 
