@@ -260,6 +260,20 @@ std::string sanitize_filename(const std::string &name)
     return out.empty() ? "save" : out;
 }
 
+const std::string kStorageRoots[] = {
+    "/data/" + std::string(storage::ROOT_DIR_NAME),
+    "/mnt/ext1/" + std::string(storage::ROOT_DIR_NAME),
+    "/mnt/ext0/" + std::string(storage::ROOT_DIR_NAME),
+    "/mnt/usb0/" + std::string(storage::ROOT_DIR_NAME),
+    "/mnt/usb1/" + std::string(storage::ROOT_DIR_NAME),
+    "/mnt/usb2/" + std::string(storage::ROOT_DIR_NAME),
+    "/mnt/usb3/" + std::string(storage::ROOT_DIR_NAME),
+    "/mnt/usb4/" + std::string(storage::ROOT_DIR_NAME),
+    "/mnt/usb5/" + std::string(storage::ROOT_DIR_NAME),
+    "/mnt/usb6/" + std::string(storage::ROOT_DIR_NAME),
+    "/mnt/usb7/" + std::string(storage::ROOT_DIR_NAME)
+};
+
 std::string resolve_or_create_crypto_vault(const scanner::ScannedGame &game)
 {
     if (game.save_path.empty())
@@ -267,18 +281,41 @@ std::string resolve_or_create_crypto_vault(const scanner::ScannedGame &game)
         return "";
     }
 
-    // 1. Si ya existe un respaldo previo con crypto_vault.bin en almacenamiento local
-    std::string existing_vault = "/data/MacheteSVG/" + game.title_id + "/crypto_vault.bin";
-    if (access(existing_vault.c_str(), F_OK) == 0)
+    // 1. Si ya existe un respaldo previo con crypto_vault.bin en cualquier unidad de almacenamiento
+    for (const auto &root : kStorageRoots)
     {
-        return existing_vault;
+        ScopedDir dir(opendir(root.c_str()));
+        if (!dir.is_valid())
+            continue;
+
+        while (const dirent *ent = readdir(dir.get()))
+        {
+            if (ent->d_name[0] == '.')
+                continue;
+            std::string name = ent->d_name;
+            if (name.rfind(game.title_id, 0) == 0)
+            {
+                std::string cand = root + "/" + name + "/crypto_vault.bin";
+                if (access(cand.c_str(), F_OK) == 0)
+                {
+                    return cand;
+                }
+            }
+        }
     }
 
-    // 2. Si no, generar el vault al vuelo en una carpeta temporal segura
-    std::string vault_base = "/tmp/machete_vault";
-    mkdir(vault_base.c_str(), 0777);
+    // 2. Si ya fue generado previamente en la zona de staging
+    std::string staging_vault = std::string(machete::pfs::SAVE_STAGING_DIR) + "/vault/" + game.title_id + "/crypto_vault.bin";
+    if (access(staging_vault.c_str(), F_OK) == 0)
+    {
+        return staging_vault;
+    }
+
+    // 3. Generar el vault al vuelo en la zona de staging segura (/data/save_staging/vault/)
+    std::string vault_base = std::string(machete::pfs::SAVE_STAGING_DIR) + "/vault";
+    machete::pfs::ensure_dir_tree(vault_base);
     std::string game_vault_dir = vault_base + "/" + game.title_id;
-    mkdir(game_vault_dir.c_str(), 0777);
+    machete::pfs::ensure_dir_tree(game_vault_dir);
 
     std::uint32_t user_id = 0x10000000;
     std::size_t pos = game.save_path.find("/user/home/");
@@ -313,33 +350,41 @@ std::string resolve_or_extract_decrypted_dir(const scanner::ScannedGame &game)
         return "";
     }
 
-    // 1. Si ya existe carpeta decrypted/ en un respaldo local previo
-    DIR *base_dir = opendir("/data/MacheteSVG");
-    if (base_dir)
+    // 1. Si ya existe carpeta decrypted/ en un respaldo previo en cualquier unidad de almacenamiento
+    for (const auto &root : kStorageRoots)
     {
-        while (const dirent *ent = readdir(base_dir))
+        ScopedDir dir(opendir(root.c_str()));
+        if (!dir.is_valid())
+            continue;
+
+        while (const dirent *ent = readdir(dir.get()))
         {
             if (ent->d_name[0] == '.')
                 continue;
             std::string name = ent->d_name;
             if (name.rfind(game.title_id, 0) == 0)
             {
-                std::string cand = "/data/MacheteSVG/" + name + "/decrypted";
-                if (machete::pfs::has_decrypted_payload("/data/MacheteSVG/" + name))
+                std::string folder = root + "/" + name;
+                if (machete::pfs::has_decrypted_payload(folder))
                 {
-                    closedir(base_dir);
-                    return cand;
+                    return folder + "/decrypted";
                 }
             }
         }
-        closedir(base_dir);
     }
 
-    // 2. Si no, intentar extraer al vuelo mediante /dev/pfsmgr + ScopedPfsMount
-    std::string vault_base = "/tmp/machete_vault";
-    mkdir(vault_base.c_str(), 0777);
+    // 2. Si ya fue extraido previamente en la zona de staging
+    std::string staging_dir = std::string(machete::pfs::SAVE_STAGING_DIR) + "/vault/" + game.title_id;
+    if (machete::pfs::has_decrypted_payload(staging_dir))
+    {
+        return staging_dir + "/decrypted";
+    }
+
+    // 3. Extraer al vuelo mediante /dev/pfsmgr + ScopedPfsMount en /data/save_staging/vault/
+    std::string vault_base = std::string(machete::pfs::SAVE_STAGING_DIR) + "/vault";
+    machete::pfs::ensure_dir_tree(vault_base);
     std::string game_vault_dir = vault_base + "/" + game.title_id;
-    mkdir(game_vault_dir.c_str(), 0777);
+    machete::pfs::ensure_dir_tree(game_vault_dir);
 
     const bool is_ps4 = (game.platform == "PS4");
     if (machete::pfs::extract_decrypted_slots_to_backup(game.save_path, game_vault_dir, game.title_id, !is_ps4) > 0)
@@ -348,6 +393,55 @@ std::string resolve_or_extract_decrypted_dir(const scanner::ScannedGame &game)
         if (access(dec_dir.c_str(), F_OK) == 0)
         {
             return dec_dir;
+        }
+    }
+
+    return "";
+}
+
+std::string resolve_authentic_keystone(const scanner::ScannedGame &game)
+{
+    // 1. /user/appmeta/<title_id>/sce_sys/keystone
+    std::string appmeta_ks = "/user/appmeta/" + game.title_id + "/sce_sys/keystone";
+    if (access(appmeta_ks.c_str(), R_OK) == 0)
+    {
+        return appmeta_ks;
+    }
+
+    // 2. /data/MacheteSVG/keystones/<title_id>.keystone
+    std::string global_ks = "/data/MacheteSVG/keystones/" + game.title_id + ".keystone";
+    if (access(global_ks.c_str(), R_OK) == 0)
+    {
+        return global_ks;
+    }
+
+    // 3. Staging vault: /data/save_staging/vault/<title_id>/keystone
+    std::string staging_ks = std::string(machete::pfs::SAVE_STAGING_DIR) + "/vault/" + game.title_id + "/keystone";
+    if (access(staging_ks.c_str(), R_OK) == 0)
+    {
+        return staging_ks;
+    }
+
+    // 4. Respaldos existentes en cualquier unidad
+    for (const auto &root : kStorageRoots)
+    {
+        ScopedDir dir(opendir(root.c_str()));
+        if (!dir.is_valid())
+            continue;
+
+        while (const dirent *ent = readdir(dir.get()))
+        {
+            if (ent->d_name[0] == '.')
+                continue;
+            std::string name = ent->d_name;
+            if (name.rfind(game.title_id, 0) == 0)
+            {
+                std::string cand = root + "/" + name + "/keystone";
+                if (access(cand.c_str(), R_OK) == 0)
+                {
+                    return cand;
+                }
+            }
         }
     }
 
@@ -788,7 +882,7 @@ void WebServer::handle_client(int client_fd)
     // Ruta 2: API de Estado
     if (path == "/api/status")
     {
-        std::string json = "{\"status\":\"running\",\"version\":\"1.2.2\",\"ip\":\"" + local_ip() +
+        std::string json = "{\"status\":\"running\",\"version\":\"1.2.3\",\"ip\":\"" + local_ip() +
                            "\",\"port\":" + std::to_string(port_) +
                            ",\"games_count\":" + std::to_string(get_games().size()) + "}";
         send_string_response(client_fd, 200, "OK", "application/json", json);
@@ -814,7 +908,7 @@ void WebServer::handle_client(int client_fd)
             }
         }
         send_string_response(client_fd, 200, "OK", "text/plain; charset=utf-8",
-                             "[SYSTEM] MacheteSVG v1.2.2 - No log file found on disk yet.\n");
+                             "[SYSTEM] MacheteSVG v1.2.3 - No log file found on disk yet.\n");
         return;
     }
 
@@ -1008,7 +1102,7 @@ void WebServer::handle_client(int client_fd)
         ZipWriter zip;
         zip.add_directory(target_game.save_path, target_game.title_id);
 
-        // Si es PS5 o PS4, incluir tambien metadatos (.meta / sce_meta)
+        // Si es PS5 o PS4, incluir tambien metadatos (.meta / meta / sce_sys) para visibilidad en cualquier SO
         std::string meta_path = target_game.save_path;
         std::size_t pos = meta_path.find("savedata_prospero");
         if (pos != std::string::npos)
@@ -1017,6 +1111,8 @@ void WebServer::handle_client(int client_fd)
             if (access(meta_path.c_str(), F_OK) == 0)
             {
                 zip.add_directory(meta_path, target_game.title_id + "/.meta");
+                zip.add_directory(meta_path, target_game.title_id + "/meta");
+                zip.add_directory(meta_path, target_game.title_id + "/sce_sys");
             }
         }
         else
@@ -1028,15 +1124,10 @@ void WebServer::handle_client(int client_fd)
                 if (access(meta_path.c_str(), F_OK) == 0)
                 {
                     zip.add_directory(meta_path, target_game.title_id + "/.meta");
+                    zip.add_directory(meta_path, target_game.title_id + "/meta");
+                    zip.add_directory(meta_path, target_game.title_id + "/sce_sys");
                 }
             }
-        }
-
-        // Si existe keystone en /user/appmeta/<title_id>/sce_sys/keystone, agregarlo
-        std::string keystone_path = "/user/appmeta/" + target_game.title_id + "/sce_sys/keystone";
-        if (access(keystone_path.c_str(), F_OK) == 0)
-        {
-            zip.add_file(keystone_path, target_game.title_id + "/keystone");
         }
 
         // Boveda Criptografica SAMU: generar o vincular crypto_vault.bin
@@ -1051,6 +1142,13 @@ void WebServer::handle_client(int client_fd)
         if (!dec_dir.empty() && access(dec_dir.c_str(), F_OK) == 0)
         {
             zip.add_directory(dec_dir, target_game.title_id + "/decrypted");
+        }
+
+        // Keystone autentico de la consola
+        std::string keystone_path = resolve_authentic_keystone(target_game);
+        if (!keystone_path.empty() && access(keystone_path.c_str(), F_OK) == 0)
+        {
+            zip.add_file(keystone_path, target_game.title_id + "/keystone");
         }
 
         zip.prepare();
@@ -1102,11 +1200,32 @@ void WebServer::handle_client(int client_fd)
                 std::string folder_name = g.title_id + " - " + sanitize_filename(g.title);
                 zip.add_directory(g.save_path, folder_name);
 
-                // Si existe keystone en /user/appmeta/<title_id>/sce_sys/keystone, agregarlo
-                std::string keystone_path = "/user/appmeta/" + g.title_id + "/sce_sys/keystone";
-                if (access(keystone_path.c_str(), F_OK) == 0)
+                // Si es PS5 o PS4, incluir tambien metadatos (.meta / meta / sce_sys) para visibilidad en cualquier SO
+                std::string meta_path = g.save_path;
+                std::size_t pos = meta_path.find("savedata_prospero");
+                if (pos != std::string::npos)
                 {
-                    zip.add_file(keystone_path, folder_name + "/keystone");
+                    meta_path.replace(pos, 17, "savedata_prospero_meta");
+                    if (access(meta_path.c_str(), F_OK) == 0)
+                    {
+                        zip.add_directory(meta_path, folder_name + "/.meta");
+                        zip.add_directory(meta_path, folder_name + "/meta");
+                        zip.add_directory(meta_path, folder_name + "/sce_sys");
+                    }
+                }
+                else
+                {
+                    std::size_t pos4 = meta_path.find("/savedata/");
+                    if (pos4 != std::string::npos)
+                    {
+                        meta_path.replace(pos4, 10, "/savedata_meta/user/");
+                        if (access(meta_path.c_str(), F_OK) == 0)
+                        {
+                            zip.add_directory(meta_path, folder_name + "/.meta");
+                            zip.add_directory(meta_path, folder_name + "/meta");
+                            zip.add_directory(meta_path, folder_name + "/sce_sys");
+                        }
+                    }
                 }
 
                 // Boveda Criptografica SAMU: generar o vincular crypto_vault.bin
@@ -1121,6 +1240,13 @@ void WebServer::handle_client(int client_fd)
                 if (!dec_dir.empty() && access(dec_dir.c_str(), F_OK) == 0)
                 {
                     zip.add_directory(dec_dir, folder_name + "/decrypted");
+                }
+
+                // Keystone autentico de la consola
+                std::string keystone_path = resolve_authentic_keystone(g);
+                if (!keystone_path.empty() && access(keystone_path.c_str(), F_OK) == 0)
+                {
+                    zip.add_file(keystone_path, folder_name + "/keystone");
                 }
             }
         }

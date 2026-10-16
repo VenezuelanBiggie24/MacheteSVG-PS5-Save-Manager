@@ -208,7 +208,7 @@ void init()
         std::snprintf(time_str, sizeof(time_str), "unknown");
 
     write("[SYSTEM]", "====================================================");
-    write("[SYSTEM]", "MacheteSVG v1.2.2 - Event Log & System Diagnostics");
+    write("[SYSTEM]", "MacheteSVG v1.2.3 - Event Log & System Diagnostics");
     write("[SYSTEM]", "Date & Time: %s", time_str);
     write("[SYSTEM]", "PID: %d | UID: %d | EUID: %d | GID: %d",
           static_cast<int>(getpid()), static_cast<int>(getuid()),

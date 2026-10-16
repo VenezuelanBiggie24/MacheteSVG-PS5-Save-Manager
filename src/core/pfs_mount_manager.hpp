@@ -316,28 +316,140 @@ class ScopedPfsMount
 {
 public:
     ScopedPfsMount() = default;
-    ~ScopedPfsMount() = default;
+    ~ScopedPfsMount()
+    {
+        if (mounted_)
+            unmount();
+    }
 
     ScopedPfsMount(const ScopedPfsMount &) = delete;
     ScopedPfsMount &operator=(const ScopedPfsMount &) = delete;
 
     bool mount(const std::string &image_path, const std::uint8_t key[32], bool write_back)
     {
-        (void)image_path;
-        (void)key;
-        (void)write_back;
-        // El montaje dinamico de libSceFsInternalForVsh.sprx desde el espacio de usuario Prospero
-        // no es seguro y causa saltos a punteros de funcion invalidos. Retornamos false de forma limpia.
-        return false;
+        if (mounted_)
+            return false;
+
+        if (getuid() != 0)
+            return false;
+
+        void *h = dlopen("/system/common/lib/libSceFsInternalForVsh.sprx", RTLD_NOW | RTLD_GLOBAL);
+        if (!h)
+            h = dlopen("/system/vsh/libSceFsInternalForVsh.sprx", RTLD_NOW | RTLD_GLOBAL);
+        if (!h)
+            h = dlopen("libSceFsInternalForVsh.sprx", RTLD_NOW | RTLD_GLOBAL);
+        if (!h)
+        {
+            MACHETE_LOG("[PFS]", "libSceFsInternalForVsh.sprx not available on this host");
+            return false;
+        }
+
+        auto init_mount = reinterpret_cast<int (*)(SaveMountOpt *)>(dlsym(h, "sceFsInitMountSaveDataOpt"));
+        mount_fn_ = reinterpret_cast<int (*)(SaveMountOpt *, const char *, const char *, const void *)>(
+            dlsym(h, "sceFsMountSaveData"));
+        init_umount_fn_ = reinterpret_cast<int (*)(SaveMountOpt *)>(dlsym(h, "sceFsInitUmountSaveDataOpt"));
+        umount_fn_ = reinterpret_cast<int (*)(SaveMountOpt *, const char *, void *, int)>(
+            dlsym(h, "sceFsUmountSaveData"));
+
+        if (!init_mount || !mount_fn_ || !umount_fn_)
+        {
+            MACHETE_LOG("[PFS]", "Missing sceFsMountSaveData symbols in libSceFsInternalForVsh.sprx");
+            return false;
+        }
+
+        ensure_dir_tree(SAVE_STAGING_DIR);
+        ensure_dir_tree(SAVE_MNT_PATH);
+
+        // Desmontar cualquier montaje residual previo en /data/save_mnt
+        {
+            SaveMountOpt clean_opt{};
+            if (init_umount_fn_)
+                init_umount_fn_(&clean_opt);
+            (void)umount_fn_(&clean_opt, SAVE_MNT_PATH, nullptr, 0);
+        }
+
+        const std::string staged_img = std::string(SAVE_STAGING_DIR) + "/sdimg_staged";
+        (void)unlink(staged_img.c_str());
+        if (!copy_file_atomic(image_path, staged_img))
+        {
+            MACHETE_LOG("[PFS]", "Failed to stage PFS image %s -> %s", image_path.c_str(), staged_img.c_str());
+            return false;
+        }
+
+        SaveMountOpt mopt{};
+        init_mount(&mopt);
+        mopt.budgetid = "system";
+
+        const int rc = mount_fn_(&mopt, staged_img.c_str(), SAVE_MNT_PATH, key);
+        if (rc < 0)
+        {
+            MACHETE_LOG("[PFS]", "sceFsMountSaveData failed on %s (rc=0x%08x)",
+                        staged_img.c_str(), static_cast<unsigned int>(rc));
+            (void)unlink(staged_img.c_str());
+            return false;
+        }
+
+        mounted_ = true;
+        write_back_ = write_back;
+        original_image_path_ = image_path;
+        staged_image_path_ = staged_img;
+        MACHETE_LOG("[PFS]", "Mounted PFS container %s at %s (write_back=%d)",
+                    image_path.c_str(), SAVE_MNT_PATH, write_back ? 1 : 0);
+        return true;
     }
 
     bool unmount()
     {
-        return true;
+        if (!mounted_)
+            return true;
+
+        ::sync();
+        SaveMountOpt uopt{};
+        if (init_umount_fn_)
+            init_umount_fn_(&uopt);
+
+        int rc = 0;
+        if (umount_fn_)
+        {
+            rc = umount_fn_(&uopt, SAVE_MNT_PATH, nullptr, 0);
+        }
+        ::sync();
+
+        bool ok = (rc >= 0);
+        if (write_back_ && !staged_image_path_.empty() && !original_image_path_.empty())
+        {
+            struct stat st{};
+            if (stat(original_image_path_.c_str(), &st) == 0)
+            {
+                (void)copy_file_atomic(staged_image_path_, original_image_path_, st.st_uid, st.st_gid);
+            }
+            else
+            {
+                (void)copy_file_atomic(staged_image_path_, original_image_path_);
+            }
+            MACHETE_LOG("[PFS]", "Unmounted and committed sealed PFS container back to %s",
+                        original_image_path_.c_str());
+        }
+
+        if (!staged_image_path_.empty())
+            (void)unlink(staged_image_path_.c_str());
+        (void)rmdir(SAVE_MNT_PATH);
+
+        mounted_ = false;
+        return ok;
     }
 
     std::string mount_point() const { return SAVE_MNT_PATH; }
-    bool is_mounted() const { return false; }
+    bool is_mounted() const { return mounted_; }
+
+private:
+    bool mounted_ = false;
+    bool write_back_ = false;
+    std::string original_image_path_;
+    std::string staged_image_path_;
+    int (*mount_fn_)(SaveMountOpt *, const char *, const char *, const void *) = nullptr;
+    int (*init_umount_fn_)(SaveMountOpt *) = nullptr;
+    int (*umount_fn_)(SaveMountOpt *, const char *, void *, int) = nullptr;
 };
 
 // Extrae todos los archivos desencriptados de cada sdimg_<slot> hacia <dest_backup_folder>/decrypted/<slot>/
@@ -348,6 +460,8 @@ inline int extract_decrypted_slots_to_backup(const std::string &source_save_dir,
 {
     if (!is_ps5)
         return 0;
+
+    std::lock_guard<std::mutex> lock(pfs_global_mount_mutex());
 
     std::vector<std::string> slots;
     if (!has_local_save_dummy(source_save_dir, &slots))
@@ -596,6 +710,8 @@ inline PfsRestoreReport inject_and_resign_save(const std::string &title_id,
     PfsRestoreReport report;
     if (!is_ps5)
         return report;
+
+    std::lock_guard<std::mutex> lock(pfs_global_mount_mutex());
 
     report.cross_console_detected = is_backup_from_different_console(backup_folder, is_ps5);
     const bool has_dec = has_decrypted_payload(backup_folder);

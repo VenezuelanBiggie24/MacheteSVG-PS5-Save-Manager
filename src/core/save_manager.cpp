@@ -925,12 +925,17 @@ __attribute__((noinline)) OperationResult backup_game_save(const scanner::Scanne
                     int meta_files = 0;
                     std::uint64_t meta_bytes = 0;
                     std::string dest_meta = dest_game_folder + "/.meta";
+                    std::string dest_meta_vis = dest_game_folder + "/meta";
                     ensure_directories_recursive(dest_meta);
+                    ensure_directories_recursive(dest_meta_vis);
                     copy_directory_recursive(meta_path, dest_meta, meta_files, meta_bytes, 0, nullptr);
+                    int vis_files = 0;
+                    std::uint64_t vis_bytes = 0;
+                    copy_directory_recursive(meta_path, dest_meta_vis, vis_files, vis_bytes, 0, nullptr);
                     files_count += meta_files;
                     bytes_copied += meta_bytes;
-                    MACHETE_LOG("[BACKUP]", "Metadata backed up for PS5: %d files in %s",
-                                meta_files, dest_meta.c_str());
+                    MACHETE_LOG("[BACKUP]", "Metadata backed up for PS5: %d files in %s and %s",
+                                meta_files, dest_meta.c_str(), dest_meta_vis.c_str());
                 }
             }
         }
@@ -946,8 +951,13 @@ __attribute__((noinline)) OperationResult backup_game_save(const scanner::Scanne
                     int meta_files = 0;
                     std::uint64_t meta_bytes = 0;
                     std::string dest_meta = dest_game_folder + "/.meta";
+                    std::string dest_meta_vis = dest_game_folder + "/meta";
                     ensure_directories_recursive(dest_meta);
+                    ensure_directories_recursive(dest_meta_vis);
                     copy_directory_recursive(meta_path, dest_meta, meta_files, meta_bytes, 0, nullptr);
+                    int vis_files = 0;
+                    std::uint64_t vis_bytes = 0;
+                    copy_directory_recursive(meta_path, dest_meta_vis, vis_files, vis_bytes, 0, nullptr);
                     files_count += meta_files;
                     bytes_copied += meta_bytes;
                 }
