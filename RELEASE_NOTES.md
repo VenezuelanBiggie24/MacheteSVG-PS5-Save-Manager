@@ -83,8 +83,8 @@ Built with a hardware-accelerated OpenGL 4.6 SDF renderer, MacheteSVG delivers a
 
 | File | Size | SHA-256 Checksum |
 | :--- | :--- | :--- |
-| `MacheteSVG_v1.0.0_PS5.zip` | 29.5 MB (30,972,941 bytes) | `03845236f3e26e7ccf9342d3dab7ec6b987cbca038fce096cb920737d400f81b` |
-| `eboot.bin` | 23.8 MB (24,909,319 bytes) | `a24e5c8bb8912d47ba9cc774122a58024d3601ec73ee337050e1fd1e1c352efc` |
+| `MacheteSVG_v1.0.0_PS5.zip` | 29.5 MB (30,975,227 bytes) | `5b006c0a457b1ef8a8e3504e2aaf1cbc173d59cfa92c289cbe535118d4a03a6a` |
+| `eboot.bin` | 23.8 MB (24,913,671 bytes) | `504b05e3fd61b30abbb288a754bbba4512d3b1fa7daa1651547627e0b7b95c24` |
 
 All package files are validated with open-mode permissions (`0777`) for out-of-the-box execution on jailbroken PlayStation 5 systems.
 
@@ -178,8 +178,8 @@ Desarrollado con renderizado acelerado por hardware OpenGL 4.6 SDF, MacheteSVG o
 
 | Archivo | Tamaño | Suma de Verificación SHA-256 |
 | :--- | :--- | :--- |
-| `MacheteSVG_v1.0.0_PS5.zip` | 29.5 MB (30,972,941 bytes) | `03845236f3e26e7ccf9342d3dab7ec6b987cbca038fce096cb920737d400f81b` |
-| `eboot.bin` | 23.8 MB (24,909,319 bytes) | `a24e5c8bb8912d47ba9cc774122a58024d3601ec73ee337050e1fd1e1c352efc` |
+| `MacheteSVG_v1.0.0_PS5.zip` | 29.5 MB (30,975,227 bytes) | `5b006c0a457b1ef8a8e3504e2aaf1cbc173d59cfa92c289cbe535118d4a03a6a` |
+| `eboot.bin` | 23.8 MB (24,913,671 bytes) | `504b05e3fd61b30abbb288a754bbba4512d3b1fa7daa1651547627e0b7b95c24` |
 
 Todos los archivos han sido generados y verificados con permisos de modo abierto (`0777`) para ejecución inmediata en consolas PlayStation 5.
 

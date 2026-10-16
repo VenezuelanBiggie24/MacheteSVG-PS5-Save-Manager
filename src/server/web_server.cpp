@@ -6,6 +6,7 @@
 #include "server/web_ui.hpp"
 #include "server/zip_writer.hpp"
 #include "core/logger.hpp"
+#include "core/samu_vault.hpp"
 
 #include <arpa/inet.h>
 #include <csignal>
@@ -254,6 +255,52 @@ std::string sanitize_filename(const std::string &name)
         }
     }
     return out.empty() ? "save" : out;
+}
+
+std::string resolve_or_create_crypto_vault(const scanner::ScannedGame &game)
+{
+    if (game.save_path.empty())
+    {
+        return "";
+    }
+
+    // 1. Si ya existe un respaldo previo con crypto_vault.bin en almacenamiento local
+    std::string existing_vault = "/data/MacheteSVG/" + game.title_id + "/crypto_vault.bin";
+    if (access(existing_vault.c_str(), F_OK) == 0)
+    {
+        return existing_vault;
+    }
+
+    // 2. Si no, generar el vault al vuelo en una carpeta temporal segura
+    std::string vault_base = "/tmp/machete_vault";
+    mkdir(vault_base.c_str(), 0777);
+    std::string game_vault_dir = vault_base + "/" + game.title_id;
+    mkdir(game_vault_dir.c_str(), 0777);
+
+    std::uint32_t user_id = 0x10000000;
+    std::size_t pos = game.save_path.find("/user/home/");
+    if (pos != std::string::npos)
+    {
+        std::size_t start = pos + 11;
+        std::size_t end = game.save_path.find('/', start);
+        std::string uid_str = (end == std::string::npos) ? game.save_path.substr(start) : game.save_path.substr(start, end - start);
+        unsigned long val = std::strtoul(uid_str.c_str(), nullptr, 16);
+        if (val != 0)
+        {
+            user_id = static_cast<std::uint32_t>(val);
+        }
+    }
+
+    if (machete::vault::archive_crypto_vault(game_vault_dir, game.title_id, game.platform, game.save_path, user_id))
+    {
+        std::string out_file = game_vault_dir + "/crypto_vault.bin";
+        if (access(out_file.c_str(), F_OK) == 0)
+        {
+            return out_file;
+        }
+    }
+
+    return "";
 }
 
 } // namespace
@@ -856,6 +903,13 @@ void WebServer::handle_client(int client_fd)
             zip.add_file(keystone_path, target_game.title_id + "/keystone");
         }
 
+        // Boveda Criptografica SAMU: generar o vincular crypto_vault.bin
+        std::string vault_path = resolve_or_create_crypto_vault(target_game);
+        if (!vault_path.empty() && access(vault_path.c_str(), F_OK) == 0)
+        {
+            zip.add_file(vault_path, target_game.title_id + "/crypto_vault.bin");
+        }
+
         zip.prepare();
         if (zip.entry_count() == 0)
         {
@@ -904,6 +958,20 @@ void WebServer::handle_client(int client_fd)
             {
                 std::string folder_name = g.title_id + " - " + sanitize_filename(g.title);
                 zip.add_directory(g.save_path, folder_name);
+
+                // Si existe keystone en /user/appmeta/<title_id>/sce_sys/keystone, agregarlo
+                std::string keystone_path = "/user/appmeta/" + g.title_id + "/sce_sys/keystone";
+                if (access(keystone_path.c_str(), F_OK) == 0)
+                {
+                    zip.add_file(keystone_path, folder_name + "/keystone");
+                }
+
+                // Boveda Criptografica SAMU: generar o vincular crypto_vault.bin
+                std::string vault_path = resolve_or_create_crypto_vault(g);
+                if (!vault_path.empty() && access(vault_path.c_str(), F_OK) == 0)
+                {
+                    zip.add_file(vault_path, folder_name + "/crypto_vault.bin");
+                }
             }
         }
 
@@ -995,6 +1063,29 @@ void WebServer::handle_client(int client_fd)
                 json += "}";
             }
         }
+
+        // Comprobar y agregar keystone si no estaba dentro de save_path
+        std::string keystone_path = "/user/appmeta/" + target_game.title_id + "/sce_sys/keystone";
+        struct stat st_key{};
+        if (stat(keystone_path.c_str(), &st_key) == 0 && S_ISREG(st_key.st_mode))
+        {
+            if (!first) json += ",";
+            first = false;
+            json += "{\"name\":\"keystone\",\"size_bytes\":" + std::to_string(st_key.st_size) +
+                    ",\"size_formatted\":\"" + format_bytes(static_cast<std::uint64_t>(st_key.st_size)) + "\"}";
+        }
+
+        // Comprobar y agregar crypto_vault.bin
+        std::string vault_path = resolve_or_create_crypto_vault(target_game);
+        struct stat st_vault{};
+        if (!vault_path.empty() && stat(vault_path.c_str(), &st_vault) == 0 && S_ISREG(st_vault.st_mode))
+        {
+            if (!first) json += ",";
+            first = false;
+            json += "{\"name\":\"crypto_vault.bin\",\"size_bytes\":" + std::to_string(st_vault.st_size) +
+                    ",\"size_formatted\":\"" + format_bytes(static_cast<std::uint64_t>(st_vault.st_size)) + "\"}";
+        }
+
         json += "]";
 
         send_string_response(client_fd, 200, "OK", "application/json", json);
@@ -1031,6 +1122,26 @@ void WebServer::handle_client(int client_fd)
             if (!find_game(title_id, target_game))
             {
                 send_string_response(client_fd, 404, "Not Found", "text/plain", "Save data not found");
+                return;
+            }
+        }
+
+        if (filename == "crypto_vault.bin")
+        {
+            std::string vault_file = resolve_or_create_crypto_vault(target_game);
+            if (!vault_file.empty() && access(vault_file.c_str(), F_OK) == 0)
+            {
+                send_file_response(client_fd, vault_file, "crypto_vault.bin");
+                return;
+            }
+        }
+
+        if (filename == "keystone")
+        {
+            std::string keystone_file = "/user/appmeta/" + target_game.title_id + "/sce_sys/keystone";
+            if (access(keystone_file.c_str(), F_OK) == 0)
+            {
+                send_file_response(client_fd, keystone_file, "keystone");
                 return;
             }
         }
