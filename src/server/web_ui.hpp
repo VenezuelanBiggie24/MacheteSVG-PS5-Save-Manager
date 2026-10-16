@@ -704,7 +704,7 @@ constexpr std::string_view kWebUiHtml = R"rawhtml(<!DOCTYPE html>
       <div>
         <div class="brand-title">
           <span>MacheteSVG</span>
-          <span class="version-tag">PPSA99001 v1.2.5</span>
+          <span class="version-tag">PPSA99001 v1.2.6</span>
         </div>
         <div class="brand-subtitle">Estación Web Local & Gestor de Partidas PS5 / PS4</div>
       </div>

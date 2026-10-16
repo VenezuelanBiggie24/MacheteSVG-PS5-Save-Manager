@@ -21,6 +21,8 @@ constexpr std::size_t KEYSTONE_SIZE = 96; // 0x60 bytes
 inline std::string find_authentic_game_keystone(const std::string &title_id, const std::string &backup_folder = "")
 {
     const std::vector<std::string> candidates = {
+        "/system_ex/app/" + title_id + "/sce_sys/keystone",
+        "/system_ex/app/" + title_id + "/keystone",
         "/user/app/" + title_id + "/sce_sys/keystone",
         "/user/app/" + title_id + "/keystone",
         "/mnt/sandbox/pfsmnt/" + title_id + "-app0/sce_sys/keystone",
@@ -34,11 +36,15 @@ inline std::string find_authentic_game_keystone(const std::string &title_id, con
         "/system_data/appmeta/" + title_id + "/keystone",
         "/user/appmeta/" + title_id + "/sce_sys/keystone",
         "/user/appmeta/" + title_id + "/keystone",
+        "/user/appmeta/external/" + title_id + "/sce_sys/keystone",
+        "/user/appmeta/external/" + title_id + "/keystone",
         "/mnt/ext0/user/appmeta/" + title_id + "/sce_sys/keystone",
         "/mnt/ext1/user/appmeta/" + title_id + "/sce_sys/keystone",
         "/data/apollo/" + title_id + ".keystone",
         "/data/MacheteSVG/keystones/" + title_id + ".keystone",
-        "/data/pkg/" + title_id + "/sce_sys/keystone"};
+        "/data/pkg/" + title_id + "/sce_sys/keystone",
+        "/data/homebrew/" + title_id + "/sce_sys/keystone",
+        "/data/homebrew/" + title_id + "/keystone"};
 
     for (const auto &p : candidates)
     {

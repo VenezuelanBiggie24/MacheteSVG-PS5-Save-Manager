@@ -28,6 +28,7 @@ src/gfx/draw_list.cpp
 src/gfx/font.cpp
 src/gfx/triangulate.cpp
 src/third_party/stb/vorbis.c
+src/vendor/sqlite/sqlite3.c
 src/ui/components/*.cpp
 src/ui/confetti.cpp
 src/ui/glyphs.cpp

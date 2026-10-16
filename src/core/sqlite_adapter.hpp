@@ -16,14 +16,10 @@
 #include <unistd.h>
 #include <vector>
 
+#include "vendor/sqlite/sqlite3.h"
+
 namespace machete::db
 {
-
-using sqlite3_open_fn = int (*)(const char *filename, void **ppDb);
-using sqlite3_close_fn = int (*)(void *pDb);
-using sqlite3_exec_fn = int (*)(void *pDb, const char *sql, int (*callback)(void *, int, char **, char **), void *arg, char **errmsg);
-using sqlite3_free_fn = void (*)(void *p);
-using sqlite3_errmsg_fn = const char *(*)(void *pDb);
 
 class SqliteAdapter
 {
@@ -36,127 +32,58 @@ public:
 
     bool is_available() const noexcept
     {
-        return (open_fn_ != nullptr && close_fn_ != nullptr && exec_fn_ != nullptr);
+        return true;
     }
 
     int open(const char *filename, void **ppDb)
     {
-        if (!is_available() || !filename || !ppDb)
+        if (!filename || !ppDb)
             return -1;
-        return open_fn_(filename, ppDb);
+        sqlite3 *db = nullptr;
+        int rc = sqlite3_open(filename, &db);
+        *ppDb = db;
+        return rc;
     }
 
     int close(void *pDb)
     {
-        if (!is_available() || !pDb)
+        if (!pDb)
             return 0;
-        return close_fn_(pDb);
+        return sqlite3_close(reinterpret_cast<sqlite3 *>(pDb));
     }
 
     int exec(void *pDb, const char *sql,
              int (*callback)(void *, int, char **, char **) = nullptr,
              void *arg = nullptr, char **errmsg = nullptr)
     {
-        if (!is_available() || !pDb || !sql)
+        if (!pDb || !sql)
             return -1;
-        return exec_fn_(pDb, sql, callback, arg, errmsg);
+        return sqlite3_exec(reinterpret_cast<sqlite3 *>(pDb), sql, callback, arg, errmsg);
     }
 
     void free(void *p)
     {
-        if (free_fn_ && p)
-            free_fn_(p);
+        if (p)
+            sqlite3_free(p);
     }
 
     const char *errmsg(void *pDb)
     {
-        if (errmsg_fn_ && pDb)
-            return errmsg_fn_(pDb);
+        if (pDb)
+            return sqlite3_errmsg(reinterpret_cast<sqlite3 *>(pDb));
         return "unknown error";
     }
 
 private:
     SqliteAdapter()
     {
-        load_symbols();
+        MACHETE_LOG("[DB]", "Embedded SQLite v%s initialized successfully", sqlite3_libversion());
     }
 
-    ~SqliteAdapter()
-    {
-        if (module_handle_)
-        {
-            dlclose(module_handle_);
-            module_handle_ = nullptr;
-        }
-    }
+    ~SqliteAdapter() = default;
 
     SqliteAdapter(const SqliteAdapter &) = delete;
     SqliteAdapter &operator=(const SqliteAdapter &) = delete;
-
-    void load_symbols()
-    {
-        const char *candidates[] = {
-            "/system/common/lib/libSceSqlite.sprx",
-            "/system/vsh/libSceSqlite.sprx",
-            "/system/priv/lib/libSceSqlite.sprx",
-            "libSceSqlite.sprx",
-            "/system/common/lib/libsqlite.sprx",
-            "/system/common/lib/libsqlite3.sprx",
-            "libsqlite3.dylib",
-            "libsqlite3.so",
-            "libsqlite3.so.0",
-            "libsqlite3.so.0.8.6"};
-
-        for (const char *cand : candidates)
-        {
-            void *h = dlopen(cand, RTLD_NOW | RTLD_GLOBAL);
-            if (!h)
-                continue;
-
-            auto fn_open = reinterpret_cast<sqlite3_open_fn>(dlsym(h, "sqlite3_open"));
-            if (!fn_open)
-                fn_open = reinterpret_cast<sqlite3_open_fn>(dlsym(h, "sceSqlite3Open"));
-
-            auto fn_close = reinterpret_cast<sqlite3_close_fn>(dlsym(h, "sqlite3_close"));
-            if (!fn_close)
-                fn_close = reinterpret_cast<sqlite3_close_fn>(dlsym(h, "sceSqlite3Close"));
-
-            auto fn_exec = reinterpret_cast<sqlite3_exec_fn>(dlsym(h, "sqlite3_exec"));
-            if (!fn_exec)
-                fn_exec = reinterpret_cast<sqlite3_exec_fn>(dlsym(h, "sceSqlite3Exec"));
-
-            auto fn_free = reinterpret_cast<sqlite3_free_fn>(dlsym(h, "sqlite3_free"));
-            if (!fn_free)
-                fn_free = reinterpret_cast<sqlite3_free_fn>(dlsym(h, "sceSqlite3Free"));
-
-            auto fn_errmsg = reinterpret_cast<sqlite3_errmsg_fn>(dlsym(h, "sqlite3_errmsg"));
-            if (!fn_errmsg)
-                fn_errmsg = reinterpret_cast<sqlite3_errmsg_fn>(dlsym(h, "sceSqlite3Errmsg"));
-
-            if (fn_open && fn_close && fn_exec)
-            {
-                module_handle_ = h;
-                open_fn_ = fn_open;
-                close_fn_ = fn_close;
-                exec_fn_ = fn_exec;
-                free_fn_ = fn_free;
-                errmsg_fn_ = fn_errmsg;
-                MACHETE_LOG("[DB]", "SQLite library initialized successfully from %s", cand);
-                return;
-            }
-
-            dlclose(h);
-        }
-
-        MACHETE_LOG("[DB]", "Notice: Native SQLite module not available in this environment");
-    }
-
-    void *module_handle_ = nullptr;
-    sqlite3_open_fn open_fn_ = nullptr;
-    sqlite3_close_fn close_fn_ = nullptr;
-    sqlite3_exec_fn exec_fn_ = nullptr;
-    sqlite3_free_fn free_fn_ = nullptr;
-    sqlite3_errmsg_fn errmsg_fn_ = nullptr;
 };
 
 // Localiza las rutas candidatas para savedata.db de un usuario
@@ -172,8 +99,12 @@ inline std::vector<std::string> get_savedata_db_candidates(std::uint32_t user_id
     paths.push_back(std::string("/system_data/savedata/") + uid_clean + "/db/user/savedata.db");
     paths.push_back(std::string("/system_data/savedata/") + uid_8 + "/db/savedata.db");
     paths.push_back(std::string("/system_data/savedata/") + uid_clean + "/db/savedata.db");
+    paths.push_back(std::string("/system_data/savedata/") + uid_8 + "/savedata.db");
+    paths.push_back(std::string("/system_data/savedata/") + uid_clean + "/savedata.db");
     paths.push_back(std::string("/user/home/") + uid_8 + "/savedata.db");
     paths.push_back(std::string("/user/home/") + uid_clean + "/savedata.db");
+    paths.push_back(std::string("/user/home/") + uid_8 + "/db/savedata.db");
+    paths.push_back(std::string("/user/home/") + uid_clean + "/db/savedata.db");
     paths.push_back("/system_data/priv/mms/savedata.db");
     return paths;
 }
@@ -308,7 +239,13 @@ inline bool update_or_register_ps4_savedata_db(std::uint32_t user_id,
         if (errmsg)
             adapter.free(errmsg);
 
+        // Forzar vaciado de WAL a disco
+        (void)adapter.exec(db, "PRAGMA wal_checkpoint(FULL);", nullptr, nullptr, nullptr);
         adapter.close(db);
+
+        (void)chmod(dbp.c_str(), 0666);
+        (void)chmod((dbp + "-wal").c_str(), 0666);
+        (void)chmod((dbp + "-shm").c_str(), 0666);
     }
 
     return any_updated;
@@ -344,7 +281,12 @@ inline bool repair_title_corruption_flags(std::uint32_t user_id, const std::stri
             MACHETE_LOG("[DB]", "Cleared corruption flags in %s for %s", dbp.c_str(), title_id.c_str());
             any_cleared = true;
         }
+        (void)adapter.exec(db, "PRAGMA wal_checkpoint(FULL);", nullptr, nullptr, nullptr);
         adapter.close(db);
+
+        (void)chmod(dbp.c_str(), 0666);
+        (void)chmod((dbp + "-wal").c_str(), 0666);
+        (void)chmod((dbp + "-shm").c_str(), 0666);
     }
     return any_cleared;
 }

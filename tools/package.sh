@@ -8,7 +8,7 @@ set -euo pipefail
 root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
 title_id="PPSA99001"
 app_name="MacheteSVG"
-version="1.2.5"
+version="1.2.6"
 
 echo "=================================================="
 echo "   Empaquetador de Distribución de MacheteSVG     "
@@ -58,7 +58,7 @@ rm -rf "$root/dist/lapy_jb" "$root/dist/PPSA00001"
 # 3. Crear guía de instalación bilingüe (Nombre en inglés: INSTRUCTIONS.txt, Inglés primero, Español después)
 cat << 'EOF' > "$dist_dir/INSTRUCTIONS.txt"
 =====================================================
-   MacheteSVG v1.2.5 - PS5 & PS4 Savegame Manager
+   MacheteSVG v1.2.6 - PS5 & PS4 Savegame Manager
 =====================================================
 
 [ENGLISH GUIDE]

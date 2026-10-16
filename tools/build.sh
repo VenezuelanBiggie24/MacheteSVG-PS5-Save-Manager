@@ -161,7 +161,10 @@ for source in "${sources[@]}"; do
     args=("$standard" -O2 -Wall -Wextra -ffunction-sections -fdata-sections)
     [[ $source == *.c ]] || args+=(-fno-exceptions -fno-rtti)
     # Vendored upstream code is built as published; its warnings are not ours to fix.
-    [[ $source != src/third_party/* ]] || args+=(-w)
+    [[ $source != src/third_party/* && $source != src/vendor/* ]] || args+=(-w)
+    if [[ $source == src/vendor/sqlite/* ]]; then
+        args+=(-DSQLITE_THREADSAFE=1 -DSQLITE_OMIT_LOAD_EXTENSION=1 -DSQLITE_DEFAULT_MEMSTATUS=0)
+    fi
     for definition in "${definitions[@]}"; do
         [[ $definition =~ ^[A-Za-z_][A-Za-z0-9_]*(=[A-Za-z0-9_]+)?$ ]] || {
             echo "invalid compile definition: $definition" >&2; exit 2;

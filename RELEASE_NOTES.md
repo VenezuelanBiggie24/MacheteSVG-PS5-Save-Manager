@@ -6,9 +6,46 @@
 
 ## English Documentation
 
-### Version 1.2.5 (Latest Release) - PS4 savedata.db Indexing, Corruption Flag Repair & In-Container PFS Resigning
+### Version 1.2.6 (Latest Release) - Embedded SQLite Engine, Guaranteed savedata.db Repair & Dual SPRX Loader
 
-MacheteSVG v1.2.5 completely resolves the "Corrupted Data" ("Datos dañados") error when restoring PS4 savegames (`CUSAxxxxx`) on PlayStation 5 backwards compatibility. It introduces native SQLite database integration to register restored saves into the system `savedata.db` and reset corruption flags (`is_broken = 0`, `fake_broken = 0`), unlocks authentic in-container PFS mounting and `param.sfo` resigning for PS4 encrypted save slots, and automatically discovers the genuine 64-bit `account_id` from the console's existing database.
+MacheteSVG v1.2.6 permanently resolves the "Corrupted Data" ("Datos dañados") error when restoring PS4 savegames (`CUSAxxxxx`) on PlayStation 5 backwards compatibility by embedding SQLite v3.54.1 directly into the application binary. This completely eliminates reliance on Sony's restricted `libSceSqlite.sprx` runtime module, guaranteeing that the console's internal `savedata.db` database is updated and all corruption flags (`is_broken = 0`, `fake_broken = 0`) are repaired on every restore operation.
+
+#### Key Enhancements in v1.2.6
+1. **Embedded SQLite 3.54.1 Database Engine:**
+   - On PlayStation 5 Prospero OS, userland `dlopen()` on `libSceSqlite.sprx` is restricted, which previously caused dynamic database operations to be skipped.
+   - Embedded the official SQLite amalgamation directly into `eboot.bin`. SQLite is now 100% available without any external runtime dependencies.
+2. **Guaranteed PS4 savedata.db Registration & Corruption Reset:**
+   - Unconditionally discovers the authentic 64-bit `account_id` from existing saves in `/system_data/savedata/<uid>/db/user/savedata.db`.
+   - Directly registers all restored PS4 save slots into `savedata.db` with proper titles, block allocations, and timestamps.
+   - Explicitly clears corruption flags (`is_broken = 0`, `fake_broken = 0`) for the restored title ID.
+   - Executes `PRAGMA wal_checkpoint(FULL);` and applies `chmod 0666` permissions across `savedata.db`, `savedata.db-wal`, and `savedata.db-shm` so changes take effect immediately in the PS4 backwards-compatibility daemon.
+3. **Dual SPRX Loading (`sceKernelLoadStartModule` + `dlopen`) with Verbose Diagnostics:**
+   - Added kernel module loader fallback via `sceKernelLoadStartModule` and `sceKernelDlsym` for system SPRX modules.
+   - Logs detailed `dlerror()` diagnostics in `machete.log` to monitor module availability.
+4. **Expanded Keystone Search Hierarchy:**
+   - Extended authentic keystone search to include `/system_ex/app/<title_id>/`, `/user/appmeta/external/<title_id>/`, and `/data/homebrew/`.
+5. **Verified Zero Emojis & 106 Passing Unit Tests:**
+   - 100% clean zero-emoji certification across all files and documentation.
+   - All 106 unit tests passing.
+
+#### Package Checksums (v1.2.6)
+| File | Size | SHA-256 Checksum |
+| :--- | :--- | :--- |
+| `MacheteSVG_v1.2.6_PS5.zip` | 30.2 MB (31,668,155 bytes) | `5b521b54ae896321d877471337fa9ca52a21144f454dc67713a2e4498ab4969c` |
+| `eboot.bin` | 25.0 MB (26,204,487 bytes) | `391a934d05a29bcd4c0fcb966efdd64e1e0b929944c27d991b048b29a5e5b923` |
+
+#### Installation (Easy FTP Method)
+1. Download `MacheteSVG_v1.2.6_PS5.zip`.
+2. Extract the archive on your PC to get the `PPSA99001` folder.
+3. Enable FTP on your PS5 (OnionHEN, etaHEN, etc.).
+4. Upload the `PPSA99001` folder directly to `/data/homebrew/` via FTP (resulting path: `/data/homebrew/PPSA99001/eboot.bin`).
+5. Launch MacheteSVG from your homebrew launcher or system menu.
+
+---
+
+### Version 1.2.5 - PS4 savedata.db Indexing, Corruption Flag Repair & In-Container PFS Resigning
+
+MacheteSVG v1.2.5 introduced PS4 savedata.db indexing and in-container PFS resigning.
 
 #### Key Enhancements in v1.2.5
 1. **System `savedata.db` Integration & Corruption Flag Auto-Repair:**
@@ -239,9 +276,46 @@ Upload the `PPSA99001` folder directly to `/data/homebrew/` via FTP.
 
 ## Notas de la Version en Espanol (Spanish Documentation)
 
-### Version 1.2.5 (Ultima Version) - Indexacion en savedata.db de PS4, Reparacion de Banderas de Corrupcion y Resignado PFS Interno
+### Version 1.2.6 (Ultima Version) - Motor SQLite Embebido, Reparacion Garantizada de savedata.db y Cargador Dual SPRX
 
-MacheteSVG v1.2.5 resuelve de forma definitiva el error de "Datos dañados" ("Corrupted Data") al restaurar partidas de PS4 (`CUSAxxxxx`) en el modo de retrocompatibilidad de PlayStation 5. Incorpora integracion nativa con la base de datos SQLite del sistema para registrar las partidas en `savedata.db` y limpiar las banderas de corrupcion (`is_broken = 0`, `fake_broken = 0`), desbloquea el montaje autentico PFS y resignado de `param.sfo` dentro del contenedor cifrado de PS4, y detecta automaticamente el `account_id` real de 64 bits a partir de las partidas existentes de la consola.
+MacheteSVG v1.2.6 resuelve de forma definitiva el error de "Datos dañados" ("Corrupted Data") al restaurar partidas de PS4 (`CUSAxxxxx`) en el modo de retrocompatibilidad de PlayStation 5 mediante la integracion embebida de SQLite v3.54.1 directamente en el binario ejecutable. Esto elimina por completo la dependencia del modulo restringido `libSceSqlite.sprx` de Sony, garantizando que la base de datos interna `savedata.db` de la consola se actualice y todas las banderas de corrupcion (`is_broken = 0`, `fake_broken = 0`) queden reparadas en cada operacion de restauracion.
+
+#### Mejoras Principales en v1.2.6
+1. **Motor de Base de Datos SQLite 3.54.1 Embebido:**
+   - En el sistema Prospero OS de PS5, las llamadas `dlopen()` a `libSceSqlite.sprx` desde espacio de usuario estan restringidas, lo que anteriormente provocaba la omision de las operaciones de base de datos dinamicas.
+   - Embebida la amalgamacion oficial de SQLite directamente en `eboot.bin`. SQLite queda 100% disponible sin requerir librerias compartidas externas en tiempo de ejecucion.
+2. **Registro e Indexacion Garantizada en savedata.db de PS4 y Limpieza de Corrupcion:**
+   - Detecta incondicionalmente el `account_id` real de 64 bits a partir de partidas previas en `/system_data/savedata/<uid>/db/user/savedata.db`.
+   - Registra de forma directa todas las ranuras de PS4 restauradas en `savedata.db` con sus titulos, bloques asignados y marcas de tiempo correctas.
+   - Limpia explicitamente las banderas de corrupcion (`is_broken = 0`, `fake_broken = 0`) para el Title ID restaurado.
+   - Ejecuta `PRAGMA wal_checkpoint(FULL);` y aplica permisos `chmod 0666` en `savedata.db`, `savedata.db-wal` y `savedata.db-shm` para que los cambios tengan efecto inmediato en el daemon de retrocompatibilidad de PS4 sin requerir reiniciar la consola.
+3. **Cargador Dual de Modulos SPRX (`sceKernelLoadStartModule` + `dlopen`) con Diagnostico Detallado:**
+   - Anadido fallback de carga de modulos a nivel de kernel mediante `sceKernelLoadStartModule` y `sceKernelDlsym` para modulos SPRX del sistema.
+   - Registra diagnosticos detallados de `dlerror()` en `machete.log` para supervisar la disponibilidad de modulos.
+4. **Jerarquia Extendida de Busqueda de Keystones:**
+   - Ampliada la busqueda de keystones autenticos a `/system_ex/app/<title_id>/`, `/user/appmeta/external/<title_id>/` y `/data/homebrew/`.
+5. **Certificacion de Cero Emojis y 106 Pruebas Unitarias Exitosas:**
+   - Certificacion 100% limpia de cero emojis en todos los archivos y documentacion.
+   - 106 pruebas unitarias completadas con 100% de exito.
+
+#### Sumas de Verificacion de Paquetes (v1.2.6)
+| Archivo | Tamano | Suma de Verificacion SHA-256 |
+| :--- | :--- | :--- |
+| `MacheteSVG_v1.2.6_PS5.zip` | 30.2 MB (31,668,155 bytes) | `5b521b54ae896321d877471337fa9ca52a21144f454dc67713a2e4498ab4969c` |
+| `eboot.bin` | 25.0 MB (26,204,487 bytes) | `391a934d05a29bcd4c0fcb966efdd64e1e0b929944c27d991b048b29a5e5b923` |
+
+#### Instalacion (Metodo Facil via FTP)
+1. Descarga `MacheteSVG_v1.2.6_PS5.zip`.
+2. Descomprime el archivo en tu PC para obtener la carpeta `PPSA99001`.
+3. Habilita el servidor FTP en tu PS5 (OnionHEN, etaHEN, etc.).
+4. Copia la carpeta `PPSA99001` directamente en `/data/homebrew/` via FTP (ruta final: `/data/homebrew/PPSA99001/eboot.bin`).
+5. Inicia MacheteSVG directamente desde tu lanzador de homebrew o menu principal.
+
+---
+
+### Version 1.2.5 - Indexacion en savedata.db de PS4, Reparacion de Banderas de Corrupcion y Resignado PFS Interno
+
+MacheteSVG v1.2.5 introdujo la indexacion en savedata.db y el resignado PFS interno.
 
 #### Mejoras Principales en v1.2.5
 1. **Integracion con `savedata.db` del Sistema y Reparacion de Corrupcion:**

@@ -52,6 +52,7 @@ for source in "${sources[@]}"; do
         # Vendored C builds without -Werror.
         ninja_inputs=("$source" "$cc")
         ninja_edge CC "$object" "${compiler_cache[@]}" "$cc" -std=c11 -O2 -w \
+            -DSQLITE_THREADSAFE=1 -DSQLITE_OMIT_LOAD_EXTENSION=1 -DSQLITE_DEFAULT_MEMSTATUS=0 \
             "${sanitizers[@]}" -I"$root/src" -MD -MF "$object.d" -c "$source" -o "$object"
     else
         ninja_edge CXX "$object" "${compiler_cache[@]}" "$cxx" "${flags[@]}" -pthread \

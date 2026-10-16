@@ -26,6 +26,13 @@
 #include <vector>
 #include <mutex>
 
+#if defined(__PROSPERO__) || defined(__Prospero__) || defined(__PS5__)
+extern "C" {
+    __attribute__((weak)) int sceKernelLoadStartModule(const char *name, std::size_t argc, const void *argv, std::uint32_t flags, void *pOpt, int *pRes);
+    __attribute__((weak)) int sceKernelDlsym(int handle, const char *symbol, void **addrp);
+}
+#endif
+
 namespace machete::pfs
 {
 
@@ -365,27 +372,63 @@ public:
         if (getuid() != 0)
             return false;
 
-        void *h = dlopen("/system/common/lib/libSceFsInternalForVsh.sprx", RTLD_NOW | RTLD_GLOBAL);
-        if (!h)
-            h = dlopen("/system/vsh/libSceFsInternalForVsh.sprx", RTLD_NOW | RTLD_GLOBAL);
-        if (!h)
-            h = dlopen("libSceFsInternalForVsh.sprx", RTLD_NOW | RTLD_GLOBAL);
-        if (!h)
+        static const char *candidate_paths[] = {
+            "/system/vsh/libSceFsInternalForVsh.sprx",
+            "/system/common/lib/libSceFsInternalForVsh.sprx",
+            "/preinst2/vsh/libSceFsInternalForVsh.sprx",
+            "/preinst2/common/lib/libSceFsInternalForVsh.sprx",
+            "libSceFsInternalForVsh.sprx",
+            nullptr
+        };
+
+        int (*init_mount)(SaveMountOpt *) = nullptr;
+
+        for (int i = 0; candidate_paths[i]; ++i)
         {
-            MACHETE_LOG("[PFS]", "libSceFsInternalForVsh.sprx not available on this host");
-            return false;
+            void *h = dlopen(candidate_paths[i], RTLD_NOW | RTLD_GLOBAL);
+            if (h)
+            {
+                init_mount = reinterpret_cast<int (*)(SaveMountOpt *)>(dlsym(h, "sceFsInitMountSaveDataOpt"));
+                mount_fn_ = reinterpret_cast<int (*)(SaveMountOpt *, const char *, const char *, const void *)>(dlsym(h, "sceFsMountSaveData"));
+                init_umount_fn_ = reinterpret_cast<int (*)(SaveMountOpt *)>(dlsym(h, "sceFsInitUmountSaveDataOpt"));
+                umount_fn_ = reinterpret_cast<int (*)(SaveMountOpt *, const char *, void *, int)>(dlsym(h, "sceFsUmountSaveData"));
+                if (init_mount && mount_fn_ && umount_fn_)
+                {
+                    MACHETE_LOG("[PFS]", "Resolved libSceFsInternalForVsh symbols via dlopen (%s)", candidate_paths[i]);
+                    break;
+                }
+            }
         }
 
-        auto init_mount = reinterpret_cast<int (*)(SaveMountOpt *)>(dlsym(h, "sceFsInitMountSaveDataOpt"));
-        mount_fn_ = reinterpret_cast<int (*)(SaveMountOpt *, const char *, const char *, const void *)>(
-            dlsym(h, "sceFsMountSaveData"));
-        init_umount_fn_ = reinterpret_cast<int (*)(SaveMountOpt *)>(dlsym(h, "sceFsInitUmountSaveDataOpt"));
-        umount_fn_ = reinterpret_cast<int (*)(SaveMountOpt *, const char *, void *, int)>(
-            dlsym(h, "sceFsUmountSaveData"));
+#if defined(__PROSPERO__) || defined(__Prospero__) || defined(__PS5__)
+        if ((!mount_fn_ || !umount_fn_) && sceKernelLoadStartModule && sceKernelDlsym)
+        {
+            for (int i = 0; candidate_paths[i]; ++i)
+            {
+                int mod_res = 0;
+                int mod_h = sceKernelLoadStartModule(candidate_paths[i], 0, nullptr, 0, nullptr, &mod_res);
+                if (mod_h > 0)
+                {
+                    sceKernelDlsym(mod_h, "sceFsInitMountSaveDataOpt", reinterpret_cast<void **>(&init_mount));
+                    sceKernelDlsym(mod_h, "sceFsMountSaveData", reinterpret_cast<void **>(&mount_fn_));
+                    sceKernelDlsym(mod_h, "sceFsInitUmountSaveDataOpt", reinterpret_cast<void **>(&init_umount_fn_));
+                    sceKernelDlsym(mod_h, "sceFsUmountSaveData", reinterpret_cast<void **>(&umount_fn_));
+                    if (init_mount && mount_fn_ && umount_fn_)
+                    {
+                        MACHETE_LOG("[PFS]", "Resolved libSceFsInternalForVsh symbols via sceKernelLoadStartModule (%s, handle=0x%x)",
+                                    candidate_paths[i], mod_h);
+                        break;
+                    }
+                }
+            }
+        }
+#endif
 
         if (!init_mount || !mount_fn_ || !umount_fn_)
         {
-            MACHETE_LOG("[PFS]", "Missing sceFsMountSaveData symbols in libSceFsInternalForVsh.sprx");
+            const char *dl_err = dlerror();
+            MACHETE_LOG("[PFS]", "libSceFsInternalForVsh.sprx not available on this host (%s)",
+                        dl_err ? dl_err : "no dlerror");
             return false;
         }
 
