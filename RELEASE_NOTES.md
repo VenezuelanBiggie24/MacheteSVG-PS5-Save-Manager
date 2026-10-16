@@ -32,9 +32,9 @@ Built with a hardware-accelerated OpenGL 4.6 SDF renderer, MacheteSVG delivers a
 | :---: | :---: |
 | ![English Dashboard](https://raw.githubusercontent.com/VenezuelanBiggie24/MacheteSVG-PS5-Save-Manager/main/docs/screenshots/dashboard_english_1080p.png) | ![Real Hardware Dashboard](https://raw.githubusercontent.com/VenezuelanBiggie24/MacheteSVG-PS5-Save-Manager/main/docs/screenshots/ps5_real_hardware_dashboard.png) |
 
-| Web Save Station Dialog | Modal Location Selector (Real Console) |
+| Web Save Station Browser UI (1080p) | Web Save Station Console Dialog |
 | :---: | :---: |
-| ![Web Save Station](https://raw.githubusercontent.com/VenezuelanBiggie24/MacheteSVG-PS5-Save-Manager/main/docs/screenshots/web_station_dialog_1080p.png) | ![Real Hardware Modal](https://raw.githubusercontent.com/VenezuelanBiggie24/MacheteSVG-PS5-Save-Manager/main/docs/screenshots/ps5_real_hardware_modal.png) |
+| ![Web Station Browser](https://raw.githubusercontent.com/VenezuelanBiggie24/MacheteSVG-PS5-Save-Manager/main/docs/screenshots/web_station_browser_1080p.png) | ![Web Save Station](https://raw.githubusercontent.com/VenezuelanBiggie24/MacheteSVG-PS5-Save-Manager/main/docs/screenshots/web_station_dialog_1080p.png) |
 
 ---
 
@@ -83,8 +83,8 @@ Built with a hardware-accelerated OpenGL 4.6 SDF renderer, MacheteSVG delivers a
 
 | File | Size | SHA-256 Checksum |
 | :--- | :--- | :--- |
-| `MacheteSVG_v1.0.0_PS5.zip` | 29.5 MB (30,967,859 bytes) | `31db0d1eb6f471592e2ce6d09686e93df96fda1266cd618d3b30e57e9811a6b3` |
-| `eboot.bin` | 23.7 MB (24,888,103 bytes) | `738e36b17b89cd4a5dc154e1a4b1861ebc59d42c1791d563535d2c590c8aabad` |
+| `MacheteSVG_v1.0.0_PS5.zip` | 29.5 MB (30,972,941 bytes) | `03845236f3e26e7ccf9342d3dab7ec6b987cbca038fce096cb920737d400f81b` |
+| `eboot.bin` | 23.8 MB (24,909,319 bytes) | `a24e5c8bb8912d47ba9cc774122a58024d3601ec73ee337050e1fd1e1c352efc` |
 
 All package files are validated with open-mode permissions (`0777`) for out-of-the-box execution on jailbroken PlayStation 5 systems.
 
@@ -127,9 +127,9 @@ Desarrollado con renderizado acelerado por hardware OpenGL 4.6 SDF, MacheteSVG o
 | :---: | :---: |
 | ![Panel en Inglés](https://raw.githubusercontent.com/VenezuelanBiggie24/MacheteSVG-PS5-Save-Manager/main/docs/screenshots/dashboard_english_1080p.png) | ![Panel en Consola Real](https://raw.githubusercontent.com/VenezuelanBiggie24/MacheteSVG-PS5-Save-Manager/main/docs/screenshots/ps5_real_hardware_dashboard.png) |
 
-| Diálogo de Estación Web Local | Selector Modal de Ubicación (Consola Real) |
+| Interfaz Web en Navegador (1080p) | Diálogo de Estación Web Local (Consola) |
 | :---: | :---: |
-| ![Estación Web Local](https://raw.githubusercontent.com/VenezuelanBiggie24/MacheteSVG-PS5-Save-Manager/main/docs/screenshots/web_station_dialog_1080p.png) | ![Selector Modal](https://raw.githubusercontent.com/VenezuelanBiggie24/MacheteSVG-PS5-Save-Manager/main/docs/screenshots/ps5_real_hardware_modal.png) |
+| ![Interfaz Web en Navegador](https://raw.githubusercontent.com/VenezuelanBiggie24/MacheteSVG-PS5-Save-Manager/main/docs/screenshots/web_station_browser_1080p.png) | ![Estación Web Local](https://raw.githubusercontent.com/VenezuelanBiggie24/MacheteSVG-PS5-Save-Manager/main/docs/screenshots/web_station_dialog_1080p.png) |
 
 ---
 
@@ -178,8 +178,8 @@ Desarrollado con renderizado acelerado por hardware OpenGL 4.6 SDF, MacheteSVG o
 
 | Archivo | Tamaño | Suma de Verificación SHA-256 |
 | :--- | :--- | :--- |
-| `MacheteSVG_v1.0.0_PS5.zip` | 29.5 MB (30,967,859 bytes) | `31db0d1eb6f471592e2ce6d09686e93df96fda1266cd618d3b30e57e9811a6b3` |
-| `eboot.bin` | 23.7 MB (24,888,103 bytes) | `738e36b17b89cd4a5dc154e1a4b1861ebc59d42c1791d563535d2c590c8aabad` |
+| `MacheteSVG_v1.0.0_PS5.zip` | 29.5 MB (30,972,941 bytes) | `03845236f3e26e7ccf9342d3dab7ec6b987cbca038fce096cb920737d400f81b` |
+| `eboot.bin` | 23.8 MB (24,909,319 bytes) | `a24e5c8bb8912d47ba9cc774122a58024d3601ec73ee337050e1fd1e1c352efc` |
 
 Todos los archivos han sido generados y verificados con permisos de modo abierto (`0777`) para ejecución inmediata en consolas PlayStation 5.
 
