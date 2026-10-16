@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 #include "core/logger.hpp"
+#include "core/build_info.hpp"
 
 #include <csignal>
 #include <cstdarg>
@@ -111,11 +112,13 @@ void fatal_signal_handler(int sig, siginfo_t *info, void *ucontext)
     (void)ucontext;
 #endif
 
-    char crash_msg[1024];
+    char crash_msg[1280];
     std::snprintf(crash_msg, sizeof(crash_msg),
                   "\n"
                   "====================================================\n"
                   "[FATAL CRASH DETECTED]\n"
+                  "Application: MacheteSVG v%s (Build #%s, Commit %s)\n"
+                  "Built: %s %s\n"
                   "Signal: %d - %s\n"
                   "Faulting Memory Address (si_addr): %p\n"
                   "Signal Code (si_code): %d\n"
@@ -127,6 +130,11 @@ void fatal_signal_handler(int sig, siginfo_t *info, void *ucontext)
                   "Last Recorded Breadcrumb: [%s]\n"
                   "PID: %d | UID: %d | GID: %d\n"
                   "====================================================\n\n",
+                  ::machete::build::kAppVersion,
+                  ::machete::build::kBuildNumber,
+                  ::machete::build::kGitCommit,
+                  ::machete::build::kBuildDate,
+                  ::machete::build::kBuildTime,
                   sig, sig_name, info ? info->si_addr : nullptr, info ? info->si_code : 0,
                   static_cast<unsigned long long>(rip),
                   static_cast<unsigned long long>(rsp),
@@ -208,7 +216,11 @@ void init()
         std::snprintf(time_str, sizeof(time_str), "unknown");
 
     write("[SYSTEM]", "====================================================");
-    write("[SYSTEM]", "MacheteSVG v1.2.7 - Event Log & System Diagnostics");
+    write("[SYSTEM]", "MacheteSVG v%s (Build #%s, Commit %s) - Event Log & System Diagnostics",
+          ::machete::build::kAppVersion, ::machete::build::kBuildNumber, ::machete::build::kGitCommit);
+    write("[SYSTEM]", "App Version: %s | Compilation Build: #%s (%s %s)",
+          ::machete::build::kAppVersion, ::machete::build::kBuildNumber,
+          ::machete::build::kBuildDate, ::machete::build::kBuildTime);
     write("[SYSTEM]", "Date & Time: %s", time_str);
     write("[SYSTEM]", "PID: %d | UID: %d | EUID: %d | GID: %d",
           static_cast<int>(getpid()), static_cast<int>(getuid()),
@@ -241,6 +253,8 @@ void reopen_paths()
     try_open_fd(s_fd_primary, kPrimaryLogPath);
     try_open_fd(s_fd_data,    kDataLogPath);
     try_open_fd(s_fd_userapp, kUserAppLogPath);
+    write("[SYSTEM]", "Log paths refreshed after root jailbreak (App v%s, Build #%s, Commit %s)",
+          ::machete::build::kAppVersion, ::machete::build::kBuildNumber, ::machete::build::kGitCommit);
 }
 
 void vwrite(const char *tag, const char *fmt, va_list args)

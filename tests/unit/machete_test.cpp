@@ -18,6 +18,7 @@
 #include "core/samu_vault.hpp"
 #include "core/account_manager.hpp"
 #include "ui/qr_code.hpp"
+#include "core/build_info.hpp"
 
 #include <fcntl.h>
 #include <sys/stat.h>
@@ -637,7 +638,9 @@ TEST(MacheteServerTest, HttpApiEndpointsAndSecurity)
     // 1. GET /api/status
     std::string status_resp = test_http_request(test_port, "GET /api/status HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n");
     EXPECT_NE(status_resp.find("HTTP/1.1 200 OK"), std::string::npos);
-    EXPECT_NE(status_resp.find("\"version\":\"1.2.7\""), std::string::npos);
+    EXPECT_NE(status_resp.find("\"version\":\"1.2.8\""), std::string::npos);
+    EXPECT_NE(status_resp.find("\"build\":\"53\""), std::string::npos);
+    EXPECT_NE(status_resp.find("\"commit\":\"51c62a6\""), std::string::npos);
     EXPECT_NE(status_resp.find("\"status\":\"running\""), std::string::npos);
 
     // 1b. GET /api/log
@@ -1074,6 +1077,15 @@ TEST(MachetePfsTest, PS4SlotDetection)
     std::remove((test_dir + "/Book").c_str());
     std::remove((test_dir + "/Book.bin").c_str());
     rmdir(test_dir.c_str());
+}
+
+TEST(MacheteBuildInfoTest, ValidateAppVersionAndBuildNumber)
+{
+    EXPECT_STREQ(machete::build::version_string(), "1.2.8");
+    EXPECT_STREQ(machete::build::build_number(), "53");
+    EXPECT_STREQ(machete::build::git_commit(), "51c62a6");
+    EXPECT_STRNE(machete::build::build_date(), "");
+    EXPECT_STRNE(machete::build::build_time(), "");
 }
 
 } // namespace hui::testing

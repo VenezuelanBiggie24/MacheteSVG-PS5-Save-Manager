@@ -6,7 +6,42 @@
 
 ## English Documentation
 
-### Version 1.2.7 (Latest Release) - Elimination of Unexported Libc Stubs (fchown/chown) & Crash-Free Restore
+### Version 1.2.8 (Latest Release) - App Version & Build Compilation Info in System Logs
+
+MacheteSVG v1.2.8 integrates full application versioning and compilation build tracking across the entire runtime environment. All log streams (`machete.log`, root sandbox logs, kernel debug output, and fatal crash forensics) now prominently include the exact application version (`v1.2.8`), the internal build compilation number (`#53`), the source commit hash, and the build date/time. The Web Save Station (`:8383`) status endpoint (`/api/status`) and live browser dashboard also reflect this unified build information.
+
+#### Key Enhancements in v1.2.8
+1. **Application Version & Build Number in System Logs:**
+   - The session initialization banner in `machete.log` now outputs full build metadata:
+     `App Version: 1.2.8 | Compilation Build: #53 (Commit 51c62a6, Built Oct 16 2026)`
+   - Post-jailbreak log reopening (`reopen_paths`) also records the active version and build number.
+2. **Forensic Crash Dumps Enhanced with Build Identity:**
+   - The async-signal-safe fatal crash handler (`fatal_signal_handler`) includes the running application version and compilation build number in all crash reports on screen and on disk.
+3. **Web Save Station API & Dashboard Integration:**
+   - The `/api/status` JSON API now returns `version`, `build`, `commit`, and `build_date`.
+   - The embedded Web UI displays the complete version tag `PPSA99001 v1.2.8 (Build 53)` in the header.
+4. **Dedicated Build Information Architecture (`build_info.hpp`):**
+   - Created `src/core/build_info.hpp` as a single, centralized source of truth for version and build metadata across the codebase.
+5. **Verified Zero Emojis & 107 Passing Unit Tests:**
+   - 100% clean zero-emoji certification across all files and documentation.
+   - All 107 unit tests passing.
+
+#### Package Checksums (v1.2.8)
+| File | Size | SHA-256 Checksum |
+| :--- | :--- | :--- |
+| `MacheteSVG_v1.2.8_PS5.zip` | 30.2 MB (31,669,732 bytes) | `b98edd3dab2c8c0ed7e6d7d953b18fd2826f920b0752e6e4e62a2cfd2a765ae2` |
+| `eboot.bin` | 25.0 MB (26,207,360 bytes) | `36c57f5611f5c6c277ed64d97b59566f16d4d0b91d2854aaedd7a1ff1d499ebc` |
+
+#### Installation (Easy FTP Method)
+1. Download `MacheteSVG_v1.2.8_PS5.zip`.
+2. Extract the archive on your PC to get the `PPSA99001` folder.
+3. Enable FTP on your PS5 (OnionHEN, etaHEN, etc.).
+4. Upload the `PPSA99001` folder directly to `/data/homebrew/` via FTP (resulting path: `/data/homebrew/PPSA99001/eboot.bin`).
+5. Launch MacheteSVG from your homebrew launcher or system menu.
+
+---
+
+### Version 1.2.7 - Elimination of Unexported Libc Stubs (fchown/chown) & Crash-Free Restore
 
 MacheteSVG v1.2.7 permanently eliminates a fatal SIGSEGV segmentation fault (`si_addr: 0`) that occurred during the finalization of savegame restores on PlayStation 5 consoles running root jailbreak environments. The crash was triggered when SQLite's internal WAL checkpoint / file locking mechanism invoked POSIX `fchown()`, which exists in compile-time SDK stubs (`libkernel_sys.so`) but is not exported in userland by Sony's `libkernel.prx`. Version 1.2.7 provides built-in strong runtime stubs directly inside `eboot.bin`, purges all unexported dynamic symbols from the ELF, and adds database concurrency protection (`busy_timeout = 3000ms`).
 
@@ -311,7 +346,42 @@ Upload the `PPSA99001` folder directly to `/data/homebrew/` via FTP.
 
 ## Notas de la Version en Espanol (Spanish Documentation)
 
-### Version 1.2.7 (Ultima Version) - Eliminacion de Stubs Libc no Exportados (fchown/chown) y Restauracion Libre de Crashes
+### Version 1.2.8 (Ultima Version) - Version de App y Numero de Compilacion en Registros del Sistema (Logs)
+
+MacheteSVG v1.2.8 integra la identificacion completa de version y numero de compilacion (build) en todo el subsistema de ejecucion y diagnostico. Todas las vias de registro (`machete.log`, registros del sandbox raiz, salida de depuracion del kernel de Prospero y capturas forenses de crashes) ahora incluyen de forma prominente la version exacta de la aplicacion (`v1.2.8`), el numero de compilacion interna (`#53`), el hash del commit de origen y la fecha/hora de compilacion. Asimismo, el punto de enlace de estado de la Estacion Web (`/api/status`) y la interfaz web reflejan esta misma informacion unificada.
+
+#### Mejoras Principales en v1.2.8
+1. **Version y Numero de Compilacion en Registros de Eventos:**
+   - El encabezado de inicio en `machete.log` reporta explicitamente:
+     `App Version: 1.2.8 | Compilation Build: #53 (Commit 51c62a6, Built Oct 16 2026)`
+   - La reapertura de registros tras el jailbreak root (`reopen_paths`) registra la version y el numero de compilacion activo.
+2. **Reportes Forenses de Crashes Enriquecidos:**
+   - El manejador seguro de senales fatales (`fatal_signal_handler`) estampa la version y compilacion del binario en ejecucion en todo volcado de error en pantalla y disco.
+3. **Integracion en API y Panel de la Estacion Web (:8383):**
+   - El endpoint `/api/status` expone los campos `version`, `build`, `commit` y `build_date`.
+   - La cabecera de la interfaz web muestra la etiqueta `PPSA99001 v1.2.8 (Build 53)`.
+4. **Arquitectura Centralizada de Informacion de Build (`build_info.hpp`):**
+   - Implementado `src/core/build_info.hpp` como fuente unica de verdad para la version y metadatos de compilacion.
+5. **Certificacion de Cero Emojis y 107 Pruebas Unitarias Exitosas:**
+   - Certificacion 100% limpia de cero emojis en todos los archivos y documentacion.
+   - 107 pruebas unitarias completadas con 100% de exito.
+
+#### Sumas de Verificacion de Paquetes (v1.2.8)
+| Archivo | Tamano | Suma de Verificacion SHA-256 |
+| :--- | :--- | :--- |
+| `MacheteSVG_v1.2.8_PS5.zip` | 30.2 MB (31,669,732 bytes) | `b98edd3dab2c8c0ed7e6d7d953b18fd2826f920b0752e6e4e62a2cfd2a765ae2` |
+| `eboot.bin` | 25.0 MB (26,207,360 bytes) | `36c57f5611f5c6c277ed64d97b59566f16d4d0b91d2854aaedd7a1ff1d499ebc` |
+
+#### Instalacion (Metodo Facil via FTP)
+1. Descarga `MacheteSVG_v1.2.8_PS5.zip`.
+2. Descomprime el archivo en tu PC para obtener la carpeta `PPSA99001`.
+3. Habilita el servidor FTP en tu PS5 (OnionHEN, etaHEN, etc.).
+4. Copia la carpeta `PPSA99001` directamente en `/data/homebrew/` via FTP (ruta final: `/data/homebrew/PPSA99001/eboot.bin`).
+5. Inicia MacheteSVG directamente desde tu lanzador de homebrew o menu principal.
+
+---
+
+### Version 1.2.7 - Eliminacion de Stubs Libc no Exportados (fchown/chown) y Restauracion Libre de Crashes
 
 MacheteSVG v1.2.7 elimina de forma definitiva el error fatal de segmentacion SIGSEGV (`si_addr: 0`) que ocurria durante la finalizacion de la restauracion de partidas en consolas PlayStation 5 con privilegios de root. El fallo se producia cuando el mecanismo interno de WAL checkpoint y bloqueo de archivos de SQLite invocaba la llamada POSIX `fchown()`, la cual existe como stub en el SDK en tiempo de compilacion (`libkernel_sys.so`) pero no esta exportada en espacio de usuario por Sony en `libkernel.prx`. La version 1.2.7 implementa stubs fuertes enlazados directamente dentro de `eboot.bin`, purga todos los simbolos dinamicos no exportados del ELF y anade proteccion de concurrencia en bases de datos (`busy_timeout = 3000ms`).
 

@@ -17,6 +17,7 @@
 #include "core/logger.hpp"
 #include "core/save_file.hpp"
 #include "core/settings.hpp"
+#include "core/build_info.hpp"
 #include "core/version.hpp"
 #include "demo/catalog.hpp"
 #include "gfx/canvas.hpp"
@@ -225,9 +226,13 @@ int main()
     app::Shell shell(fonts, catalog, kDataRoot, renderer.glass_texture());
     MACHETE_BREADCRUMB("app::Shell constructed successfully");
     const std::string version = read_content_version("/app0/sce_sys/param.json");
-    shell.set_version(version);
-    sys::log("[HUI] version %s designs=%zu", version.empty() ? "unknown" : version.c_str(),
-             shell.concept_count());
+    shell.set_version(version.empty() ? std::string(::machete::build::kAppVersion) : version);
+    sys::log("[HUI] version %s build %s commit %s designs=%zu",
+             ::machete::build::kAppVersion, ::machete::build::kBuildNumber,
+             ::machete::build::kGitCommit, shell.concept_count());
+    MACHETE_LOG("[SYSTEM]", "Engine initialized: MacheteSVG v%s (Build #%s, Commit %s, Built %s %s)",
+                ::machete::build::kAppVersion, ::machete::build::kBuildNumber, ::machete::build::kGitCommit,
+                ::machete::build::kBuildDate, ::machete::build::kBuildTime);
 
     // A tour request turns this launch into an unattended validation run:
     // every design is shown with scripted input, pictures and a report are

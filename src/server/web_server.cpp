@@ -5,6 +5,7 @@
 #include "server/web_server.hpp"
 #include "server/web_ui.hpp"
 #include "server/zip_writer.hpp"
+#include "core/build_info.hpp"
 #include "core/logger.hpp"
 #include "core/pfs_mount_manager.hpp"
 #include "core/samu_vault.hpp"
@@ -882,7 +883,11 @@ void WebServer::handle_client(int client_fd)
     // Ruta 2: API de Estado
     if (path == "/api/status")
     {
-        std::string json = "{\"status\":\"running\",\"version\":\"1.2.7\",\"ip\":\"" + local_ip() +
+        std::string json = "{\"status\":\"running\",\"version\":\"" + std::string(::machete::build::kAppVersion) +
+                           "\",\"build\":\"" + std::string(::machete::build::kBuildNumber) +
+                           "\",\"commit\":\"" + std::string(::machete::build::kGitCommit) +
+                           "\",\"build_date\":\"" + std::string(::machete::build::kBuildDate) + " " + std::string(::machete::build::kBuildTime) +
+                           "\",\"ip\":\"" + local_ip() +
                            "\",\"port\":" + std::to_string(port_) +
                            ",\"games_count\":" + std::to_string(get_games().size()) + "}";
         send_string_response(client_fd, 200, "OK", "application/json", json);
@@ -907,8 +912,11 @@ void WebServer::handle_client(int client_fd)
                 return;
             }
         }
-        send_string_response(client_fd, 200, "OK", "text/plain; charset=utf-8",
-                             "[SYSTEM] MacheteSVG v1.2.7 - No log file found on disk yet.\n");
+        std::string fallback = "[SYSTEM] MacheteSVG v" + std::string(::machete::build::kAppVersion) +
+                               " (Build #" + std::string(::machete::build::kBuildNumber) +
+                               ", Commit " + std::string(::machete::build::kGitCommit) +
+                               ") - No log file found on disk yet.\n";
+        send_string_response(client_fd, 200, "OK", "text/plain; charset=utf-8", fallback);
         return;
     }
 
