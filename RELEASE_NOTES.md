@@ -28,9 +28,8 @@ MacheteSVG v1.2.0 is a major milestone release delivering reliable cross-console
 
 #### Package Checksums (v1.2.0)
 | File | Size | SHA-256 Checksum |
-| :--- | :--- | :--- |
-| `MacheteSVG_v1.2.0_PS5.zip` | 31.0 MB (31,008,313 bytes) | `7dfdfe47b00fd5b8cef13316ed6d6fca38fca7a592ddc7c9cba466ab5660d375` |
-| `eboot.bin` | 23.8 MB (24,987,895 bytes) | `1a10b1f264070b62d40e8dde951081ff14aee68607431bdb53523d5c90087f34` |
+| `MacheteSVG_v1.2.0_PS5.zip` | 29.6 MB (31,008,313 bytes) | `6a40f8c296fc05e4dd67c1bb58830cba364cec500ad8d1015abdf61319d7801e` |
+| `eboot.bin` | 23.8 MB (24,987,079 bytes) | `10947ae2c33a6636174e5fe66fa760520e996b4ae997a9ee1d635e57262c9b19` |
 
 #### Installation (Easy FTP Method)
 1. Download `MacheteSVG_v1.2.0_PS5.zip`.
@@ -96,8 +95,8 @@ MacheteSVG v1.2.0 es una actualizacion mayor que permite restaurar partidas nati
 #### Sumas de Verificacion de Paquetes (v1.2.0)
 | Archivo | Tamano | Suma de Verificacion SHA-256 |
 | :--- | :--- | :--- |
-| `MacheteSVG_v1.2.0_PS5.zip` | 31.0 MB (31,008,313 bytes) | `7dfdfe47b00fd5b8cef13316ed6d6fca38fca7a592ddc7c9cba466ab5660d375` |
-| `eboot.bin` | 23.8 MB (24,987,895 bytes) | `1a10b1f264070b62d40e8dde951081ff14aee68607431bdb53523d5c90087f34` |
+| `MacheteSVG_v1.2.0_PS5.zip` | 29.6 MB (31,008,313 bytes) | `6a40f8c296fc05e4dd67c1bb58830cba364cec500ad8d1015abdf61319d7801e` |
+| `eboot.bin` | 23.8 MB (24,987,079 bytes) | `10947ae2c33a6636174e5fe66fa760520e996b4ae997a9ee1d635e57262c9b19` |
 
 #### Instalacion (Metodo Facil via FTP)
 1. Descarga `MacheteSVG_v1.2.0_PS5.zip`.
