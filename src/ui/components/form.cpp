@@ -17,15 +17,17 @@ using gfx::Rect;
 
 namespace
 {
-
-const std::string kNoText;
+const std::string &empty_string()
+{
+    static const std::string kEmpty;
+    return kEmpty;
+}
 
 // Where a slider's value sits between its limits, 0..1.
 float fraction(const FormRow &row)
 {
     return tween::inverse_lerp(row.minimum, row.maximum, row.value);
 }
-
 } // namespace
 
 // ---- building ---------------------------------------------------------------
@@ -146,7 +148,7 @@ int Form::choice_index(int id) const
 const std::string &Form::choice_text(int id) const
 {
     const FormRow *found = row(id);
-    return found != nullptr ? found->choice.value() : kNoText;
+    return found != nullptr ? found->choice.value() : empty_string();
 }
 
 float Form::slider_value(int id) const
@@ -164,7 +166,7 @@ int Form::stepper_value(int id) const
 const std::string &Form::value_text(int id) const
 {
     const FormRow *found = row(id);
-    return found != nullptr ? found->text : kNoText;
+    return found != nullptr ? found->text : empty_string();
 }
 
 void Form::set_toggle(int id, bool on)
@@ -398,7 +400,7 @@ bool Form::uses_horizontal() const
 
 const std::string &Form::help_text() const
 {
-    return focus_ >= 0 ? rows_[static_cast<std::size_t>(focus_)].description : kNoText;
+    return focus_ >= 0 ? rows_[static_cast<std::size_t>(focus_)].description : empty_string();
 }
 
 void Form::enter()

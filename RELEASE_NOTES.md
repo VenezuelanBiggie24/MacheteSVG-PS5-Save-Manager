@@ -6,7 +6,42 @@
 
 ## English Documentation
 
-### Version 1.2.3 (Latest Release) - SAMU Crypto Vault, Decrypted Save Slots & Web ZIP Packaging Fix
+### Version 1.2.4 (Latest Release) - Restore Crash Fix (chown NULL-Stub Elimination) & Apollo PS4 UI Badges
+
+MacheteSVG v1.2.4 eliminates a fatal segmentation fault (SIGSEGV) occurring during PS4 and PS5 save restoration on PlayStation 5 hardware, completely replaces unexported userland ownership calls with native chmod permissions, and enhances the visual feedback of Apollo Auto-Resigning across both the Console UI and the Web Save Station (:8383).
+
+#### Key Enhancements in v1.2.4
+1. **Restore Crash Elimination (`chown` NULL-Pointer Dereference):**
+   - Removed all calls to `chown()` in `ensure_directories_recursive`, `copy_file_buffered`, `copy_file_simple`, and `apply_permissions_recursive`.
+   - On PlayStation 5 Prospero OS, `chown` only exists as a stub in `libkernel_sys.so` and is not exported by Sony in userland `libkernel.prx`. The dynamic linker left its Global Offset Table (GOT) slot as `0x0`, causing an indirect call to address zero (`si_addr: 0`, `SIGSEGV`) during folder creation.
+   - Replaced with standard `chmod()` calls (`0777` for directories, `0666` for files) natively supported by `libkernel.prx`, ensuring full world read/write access for games (UID 1) and root daemons (UID 0) without any ownership mutations.
+2. **Prominent Apollo PS4 Auto-Resign UI Visibility:**
+   - In the Console UI, PS4 titles (`CUSAxxxxx`) now prominently display the green badge `[APOLLO RESIGN ACTIVO]` in game metadata.
+   - The primary restore button dynamically changes to `Restaurar (Modo Apollo)` / `Restore (Apollo Mode)`.
+   - The restore modal header clearly states `RESTAURAR Y RESIGNAR (MODO APOLLO PS4)`.
+   - In both Console UI and Web Save Station (:8383), backup cards for PS4 titles are explicitly labeled with `MODO APOLLO OK` and the restore button reflects `Restaurar y Resignar (Apollo)`.
+3. **Dynamic Static Initializer Elimination:**
+   - Converted global string storage roots in `web_server.cpp` to `constexpr const char *kStorageRoots[]`, removing `.init_array` heap allocations prior to main().
+4. **Verified Zero Emojis & 100% Passing Tests:**
+   - Strict zero-emoji compliance certified across 100% of the repository.
+   - 103 unit tests completed with 100% success rate.
+
+#### Package Checksums (v1.2.4)
+| File | Size | SHA-256 Checksum |
+| :--- | :--- | :--- |
+| `MacheteSVG_v1.2.4_PS5.zip` | 29.6 MB (31,010,630 bytes) | `28dfbad01a6a2556f7c9c2d3b13524af1282aacd51e9f2a51cb798cdd221d173` |
+| `eboot.bin` | 23.8 MB (24,992,736 bytes) | `2a0eda7e2908ee8aa48bcf8e2698b3efc6f8496474eeb3484d9a0569dfa8185b` |
+
+#### Installation (Easy FTP Method)
+1. Download `MacheteSVG_v1.2.4_PS5.zip`.
+2. Extract the archive on your PC to get the `PPSA99001` folder.
+3. Enable FTP on your PS5 (OnionHEN, etaHEN, etc.).
+4. Upload the `PPSA99001` folder directly to `/data/homebrew/` via FTP (resulting path: `/data/homebrew/PPSA99001/eboot.bin`).
+5. Launch MacheteSVG from your homebrew launcher or system menu.
+
+---
+
+### Version 1.2.3 - SAMU Crypto Vault, Decrypted Save Slots & Web ZIP Packaging Fix
 
 MacheteSVG v1.2.3 resolves a critical archive generation issue in the Web Save Station (:8383) where downloaded savegame ZIP archives were missing `crypto_vault.bin` (the SAMU cryptographic vault), `decrypted/` save slots, and visible metadata (`meta/` / `sce_sys/`) when extracted on macOS or Windows.
 
@@ -169,7 +204,42 @@ Upload the `PPSA99001` folder directly to `/data/homebrew/` via FTP.
 
 ## Notas de la Version en Espanol (Spanish Documentation)
 
-### Version 1.2.3 (Ultima Version) - Boveda Criptografica SAMU, Ranuras Desencriptadas y Correccion de Empaquetado ZIP Web
+### Version 1.2.4 (Ultima Version) - Correccion de Crash al Restaurar (Eliminacion de Stub Nulo chown) y Distintivos de Modo Apollo PS4
+
+MacheteSVG v1.2.4 elimina de raiz el fallo critico de segmentacion (SIGSEGV) que ocurria al restaurar partidas de PS4 y PS5 en consolas PlayStation 5 reales, sustituye por completo las llamadas no exportadas de cambio de propietario por permisos nativos chmod, y hace totalmente visible el estado del Modo de Resignado Apollo tanto en la consola como en la Estacion Web (:8383).
+
+#### Mejoras Principales en v1.2.4
+1. **Eliminacion del Crash al Restaurar (Desreferencia Nula de `chown`):**
+   - Removidas todas las invocaciones a `chown()` en `ensure_directories_recursive`, `copy_file_buffered`, `copy_file_simple` y `apply_permissions_recursive`.
+   - En el sistema operativo Prospero de PS5, `chown` solo existe como un stub en `libkernel_sys.so` y Sony no lo exporta en `libkernel.prx`. El enlazador dinamico dejaba su entrada en la tabla global de offsets (GOT) en `0x0`, provocando un salto indirecto a la direccion cero (`si_addr: 0`, `SIGSEGV`) durante la creacion de directorios.
+   - Reemplazado por llamadas a `chmod()` (`0777` para directorios, `0666` para archivos) soportadas de forma nativa por `libkernel.prx`, garantizando acceso total de lectura y escritura para juegos (UID 1) y daemons root (UID 0) sin requerir mutacion de propietario.
+2. **Visibilidad Prominente del Modo Apollo PS4 en la Interfaz:**
+   - En la consola, los titulos de PS4 (`CUSAxxxxx`) muestran ahora de forma destacada el distintivo verde `[APOLLO RESIGN ACTIVO]` junto a la etiqueta de plataforma.
+   - El boton principal de restauracion cambia dinamicamente a `Restaurar (Modo Apollo)`.
+   - El encabezado del modal de restauracion indica claramente `RESTAURAR Y RESIGNAR (MODO APOLLO PS4)`.
+   - Tanto en la consola como en la Estacion Web (:8383), las tarjetas de respaldo para juegos de PS4 muestran el distintivo `MODO APOLLO OK` y el boton de accion indica `Restaurar y Resignar (Apollo)`.
+3. **Eliminacion de Inicializadores Estaticos Dinamicos:**
+   - Convertidas las raices de almacenamiento globales en `web_server.cpp` a `constexpr const char *kStorageRoots[]`, eliminando asignaciones en el heap en `.init_array` previas a main().
+4. **Certificacion de Cero Emojis y 103 Pruebas Unitarias Exitosas:**
+   - Cumplimiento estricto de cero emojis certificado en el 100% del repositorio.
+   - 103 pruebas unitarias completadas con 100% de aprobacion.
+
+#### Sumas de Verificacion de Paquetes (v1.2.4)
+| Archivo | Tamano | Suma de Verificacion SHA-256 |
+| :--- | :--- | :--- |
+| `MacheteSVG_v1.2.4_PS5.zip` | 29.6 MB (31,010,630 bytes) | `28dfbad01a6a2556f7c9c2d3b13524af1282aacd51e9f2a51cb798cdd221d173` |
+| `eboot.bin` | 23.8 MB (24,992,736 bytes) | `2a0eda7e2908ee8aa48bcf8e2698b3efc6f8496474eeb3484d9a0569dfa8185b` |
+
+#### Instalacion (Metodo Facil via FTP)
+1. Descarga `MacheteSVG_v1.2.4_PS5.zip`.
+2. Descomprime el archivo en tu PC para obtener la carpeta `PPSA99001`.
+3. Habilita el servidor FTP en tu PS5 (OnionHEN, etaHEN, etc.).
+4. Copia la carpeta `PPSA99001` directamente en `/data/homebrew/` via FTP (ruta final: `/data/homebrew/PPSA99001/eboot.bin`).
+5. Inicia MacheteSVG directamente desde tu lanzador de homebrew o menu principal.
+
+---
+
+### Version 1.2.3 - Boveda Criptografica SAMU, Ranuras Desencriptadas y Correccion de Empaquetado ZIP Web
 
 MacheteSVG v1.2.3 soluciona un problema critico en la generacion de archivos de la Estacion Web (:8383), donde las descargas ZIP de partidas guardadas no incluian `crypto_vault.bin` (la boveda criptografica del SAMU), las ranuras desencriptadas (`decrypted/`) ni los metadatos visibles (`meta/` / `sce_sys/`) al descomprimirse en macOS o Windows.
 

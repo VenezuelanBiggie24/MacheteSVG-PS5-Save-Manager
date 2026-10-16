@@ -125,6 +125,8 @@ inline bool has_decrypted_payload(const std::string &backup_folder)
 
 inline bool copy_file_atomic(const std::string &src, const std::string &dst, uid_t uid = 0, gid_t gid = 0)
 {
+    (void)uid;
+    (void)gid;
     std::FILE *in = std::fopen(src.c_str(), "rb");
     if (!in)
         return false;
@@ -178,13 +180,13 @@ inline bool copy_file_atomic(const std::string &src, const std::string &dst, uid
     }
 
     (void)chmod(dst.c_str(), 0666);
-    if (uid != 0 || gid != 0)
-        (void)chown(dst.c_str(), uid, gid);
     return true;
 }
 
 inline void ensure_dir_tree(const std::string &path, uid_t uid = 0, gid_t gid = 0)
 {
+    (void)uid;
+    (void)gid;
     if (path.empty())
         return;
     std::string cur;
@@ -201,8 +203,6 @@ inline void ensure_dir_tree(const std::string &path, uid_t uid = 0, gid_t gid = 
                 if (mkdir(cur.c_str(), 0777) == 0)
                 {
                     (void)chmod(cur.c_str(), 0777);
-                    if (uid != 0 || gid != 0)
-                        (void)chown(cur.c_str(), uid, gid);
                 }
             }
         }

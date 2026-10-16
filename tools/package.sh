@@ -8,7 +8,7 @@ set -euo pipefail
 root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
 title_id="PPSA99001"
 app_name="MacheteSVG"
-version="1.2.3"
+version="1.2.4"
 
 echo "=================================================="
 echo "   Empaquetador de Distribución de MacheteSVG     "

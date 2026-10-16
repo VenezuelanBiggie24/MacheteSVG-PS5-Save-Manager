@@ -260,18 +260,18 @@ std::string sanitize_filename(const std::string &name)
     return out.empty() ? "save" : out;
 }
 
-const std::string kStorageRoots[] = {
-    "/data/" + std::string(storage::ROOT_DIR_NAME),
-    "/mnt/ext1/" + std::string(storage::ROOT_DIR_NAME),
-    "/mnt/ext0/" + std::string(storage::ROOT_DIR_NAME),
-    "/mnt/usb0/" + std::string(storage::ROOT_DIR_NAME),
-    "/mnt/usb1/" + std::string(storage::ROOT_DIR_NAME),
-    "/mnt/usb2/" + std::string(storage::ROOT_DIR_NAME),
-    "/mnt/usb3/" + std::string(storage::ROOT_DIR_NAME),
-    "/mnt/usb4/" + std::string(storage::ROOT_DIR_NAME),
-    "/mnt/usb5/" + std::string(storage::ROOT_DIR_NAME),
-    "/mnt/usb6/" + std::string(storage::ROOT_DIR_NAME),
-    "/mnt/usb7/" + std::string(storage::ROOT_DIR_NAME)
+constexpr const char *kStorageRoots[] = {
+    "/data/MacheteSVG",
+    "/mnt/ext1/MacheteSVG",
+    "/mnt/ext0/MacheteSVG",
+    "/mnt/usb0/MacheteSVG",
+    "/mnt/usb1/MacheteSVG",
+    "/mnt/usb2/MacheteSVG",
+    "/mnt/usb3/MacheteSVG",
+    "/mnt/usb4/MacheteSVG",
+    "/mnt/usb5/MacheteSVG",
+    "/mnt/usb6/MacheteSVG",
+    "/mnt/usb7/MacheteSVG"
 };
 
 std::string resolve_or_create_crypto_vault(const scanner::ScannedGame &game)
@@ -282,9 +282,9 @@ std::string resolve_or_create_crypto_vault(const scanner::ScannedGame &game)
     }
 
     // 1. Si ya existe un respaldo previo con crypto_vault.bin en cualquier unidad de almacenamiento
-    for (const auto &root : kStorageRoots)
+    for (const char *root : kStorageRoots)
     {
-        ScopedDir dir(opendir(root.c_str()));
+        ScopedDir dir(opendir(root));
         if (!dir.is_valid())
             continue;
 
@@ -295,7 +295,7 @@ std::string resolve_or_create_crypto_vault(const scanner::ScannedGame &game)
             std::string name = ent->d_name;
             if (name.rfind(game.title_id, 0) == 0)
             {
-                std::string cand = root + "/" + name + "/crypto_vault.bin";
+                std::string cand = std::string(root) + "/" + name + "/crypto_vault.bin";
                 if (access(cand.c_str(), F_OK) == 0)
                 {
                     return cand;
@@ -351,9 +351,9 @@ std::string resolve_or_extract_decrypted_dir(const scanner::ScannedGame &game)
     }
 
     // 1. Si ya existe carpeta decrypted/ en un respaldo previo en cualquier unidad de almacenamiento
-    for (const auto &root : kStorageRoots)
+    for (const char *root : kStorageRoots)
     {
-        ScopedDir dir(opendir(root.c_str()));
+        ScopedDir dir(opendir(root));
         if (!dir.is_valid())
             continue;
 
@@ -364,7 +364,7 @@ std::string resolve_or_extract_decrypted_dir(const scanner::ScannedGame &game)
             std::string name = ent->d_name;
             if (name.rfind(game.title_id, 0) == 0)
             {
-                std::string folder = root + "/" + name;
+                std::string folder = std::string(root) + "/" + name;
                 if (machete::pfs::has_decrypted_payload(folder))
                 {
                     return folder + "/decrypted";
@@ -423,9 +423,9 @@ std::string resolve_authentic_keystone(const scanner::ScannedGame &game)
     }
 
     // 4. Respaldos existentes en cualquier unidad
-    for (const auto &root : kStorageRoots)
+    for (const char *root : kStorageRoots)
     {
-        ScopedDir dir(opendir(root.c_str()));
+        ScopedDir dir(opendir(root));
         if (!dir.is_valid())
             continue;
 
@@ -436,7 +436,7 @@ std::string resolve_authentic_keystone(const scanner::ScannedGame &game)
             std::string name = ent->d_name;
             if (name.rfind(game.title_id, 0) == 0)
             {
-                std::string cand = root + "/" + name + "/keystone";
+                std::string cand = std::string(root) + "/" + name + "/keystone";
                 if (access(cand.c_str(), R_OK) == 0)
                 {
                     return cand;
@@ -882,7 +882,7 @@ void WebServer::handle_client(int client_fd)
     // Ruta 2: API de Estado
     if (path == "/api/status")
     {
-        std::string json = "{\"status\":\"running\",\"version\":\"1.2.3\",\"ip\":\"" + local_ip() +
+        std::string json = "{\"status\":\"running\",\"version\":\"1.2.4\",\"ip\":\"" + local_ip() +
                            "\",\"port\":" + std::to_string(port_) +
                            ",\"games_count\":" + std::to_string(get_games().size()) + "}";
         send_string_response(client_fd, 200, "OK", "application/json", json);
@@ -908,7 +908,7 @@ void WebServer::handle_client(int client_fd)
             }
         }
         send_string_response(client_fd, 200, "OK", "text/plain; charset=utf-8",
-                             "[SYSTEM] MacheteSVG v1.2.3 - No log file found on disk yet.\n");
+                             "[SYSTEM] MacheteSVG v1.2.4 - No log file found on disk yet.\n");
         return;
     }
 

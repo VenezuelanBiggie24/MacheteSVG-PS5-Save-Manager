@@ -1202,7 +1202,20 @@ class Machete final : public app::Concept
                         tag_rect.cx(), tag_rect.cy() + 6, 16,
                         Color::rgb(0x76d6ff), gfx::Align::center);
 
-            paint.label(current_game.title_id.c_str(), 1184, 276, 18, theme.text_muted);
+            const bool is_ps4_title = (current_game.platform == "PS4");
+            if (is_ps4_title)
+            {
+                const Rect apollo_tag{1178, 256, 210, 30};
+                list.rounded_rect(apollo_tag, 6.0f, Color::rgb(0x143825).with_alpha(0.9f));
+                paint.stroke(apollo_tag, 6.0f, 1.0f, Color::rgb(0x38ef7d).with_alpha(0.6f));
+                paint.label("APOLLO RESIGN ACTIVO", apollo_tag.cx(), apollo_tag.cy() + 6, 14,
+                            Color::rgb(0x38ef7d), gfx::Align::center);
+                paint.label(current_game.title_id.c_str(), 1400, 276, 18, theme.text_muted);
+            }
+            else
+            {
+                paint.label(current_game.title_id.c_str(), 1184, 276, 18, theme.text_muted);
+            }
             const std::string current_title_disp = !current_game.title.empty() ? current_game.title : current_game.title_id;
             paint.heading(current_title_disp.c_str(), 1058, 334, 38, theme.text);
 
@@ -1233,7 +1246,6 @@ class Machete final : public app::Concept
                        880, 555, 19, Color::rgb(0xa3ffcc));
 
             const bool is_es = (machete::i18n::current_language() == machete::i18n::Language::Spanish);
-            const bool is_ps4_title = (current_game.platform == "PS4");
             const bool dummy_ready = is_ps4_title || current_game.has_save_dummy || !current_game.save_path.empty();
             list.circle(860, 580, 6.0f,
                         dummy_ready ? Color::rgb(0x38ef7d) : Color::rgb(0xffaa00));
@@ -1279,7 +1291,10 @@ class Machete final : public app::Concept
                         836, 756, 17, theme.text_muted);
             paint.button(kRects[kBtnBackup], machete::i18n::tr(machete::i18n::StringId::BtnBackup),
                          ui::ButtonKind::primary, look(kBtnBackup));
-            paint.button(kRects[kBtnRestore], machete::i18n::tr(machete::i18n::StringId::BtnRestore),
+            const char *restore_btn_label = is_ps4_title
+                ? (is_es ? "Restaurar (Modo Apollo)" : "Restore (Apollo Mode)")
+                : machete::i18n::tr(machete::i18n::StringId::BtnRestore);
+            paint.button(kRects[kBtnRestore], restore_btn_label,
                          ui::ButtonKind::secondary, look(kBtnRestore));
             paint.button(kRects[kBtnWebServer], machete::i18n::tr(machete::i18n::StringId::BtnWebServer),
                          ui::ButtonKind::secondary, look(kBtnWebServer));
@@ -1541,7 +1556,10 @@ class Machete final : public app::Concept
             else
             {
                 // CABECERA MODAL RESTAURACION
-                paint.heading(is_es ? "RESTAURAR COPIA DE SEGURIDAD" : "RESTORE SAVE BACKUP",
+                const bool is_ps4_curr = !games_.empty() && (games_[static_cast<std::size_t>(selected_game_)].platform == "PS4");
+                paint.heading(is_ps4_curr
+                                  ? (is_es ? "RESTAURAR Y RESIGNAR (MODO APOLLO PS4)" : "RESTORE & RESIGN (APOLLO PS4 MODE)")
+                                  : (is_es ? "RESTAURAR COPIA DE SEGURIDAD" : "RESTORE SAVE BACKUP"),
                               500, 252, 34, theme.text);
 
                 if (available_backups_.empty())
@@ -1632,14 +1650,14 @@ class Machete final : public app::Concept
                                       item.timestamp_str.c_str(), item.file_count, item.size_str.c_str());
                         paint.label(meta_str, opt_rect.x + 140, opt_rect.cy() + 18, 16, theme.text_muted);
 
-                        // Indicador Cross-Console / Keystone
-                        if (item.has_decrypted || item.has_crypto_vault || item.has_keystone)
+                        // Indicador Cross-Console / Keystone / Apollo
+                        if (item.has_decrypted || item.has_crypto_vault || item.has_keystone || is_ps4_restore)
                         {
-                            const Rect k_badge{opt_rect.x + opt_rect.w - 175, opt_rect.cy() - 14, 160, 28};
+                            const Rect k_badge{opt_rect.x + opt_rect.w - 185, opt_rect.cy() - 14, 170, 28};
                             list.rounded_rect(k_badge, 6.0f, Color::rgb(0x123620).with_alpha(0.85f));
-                            const char *b_lbl = (item.has_decrypted || item.has_crypto_vault)
-                                ? "CROSS-CONSOLE OK"
-                                : "KEYSTONE OK";
+                            const char *b_lbl = is_ps4_restore
+                                ? "MODO APOLLO OK"
+                                : ((item.has_decrypted || item.has_crypto_vault) ? "CROSS-CONSOLE OK" : "KEYSTONE OK");
                             paint.label(b_lbl, k_badge.cx(), k_badge.cy() + 6, 13,
                                         Color::rgb(0x38ef7d), gfx::Align::center);
                         }

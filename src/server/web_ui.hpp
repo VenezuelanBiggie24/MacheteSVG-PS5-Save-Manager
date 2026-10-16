@@ -704,7 +704,7 @@ constexpr std::string_view kWebUiHtml = R"rawhtml(<!DOCTYPE html>
       <div>
         <div class="brand-title">
           <span>MacheteSVG</span>
-          <span class="version-tag">PPSA99001 v1.2.3</span>
+          <span class="version-tag">PPSA99001 v1.2.4</span>
         </div>
         <div class="brand-subtitle">Estación Web Local & Gestor de Partidas PS5 / PS4</div>
       </div>
@@ -984,7 +984,7 @@ constexpr std::string_view kWebUiHtml = R"rawhtml(<!DOCTYPE html>
         const isPs4 = g.platform === 'PS4';
         const hasDummy = Boolean(g.has_save_dummy || g.has_save || isPs4);
         const crossBadgeHtml = isPs4
-          ? `<span class="title-id-badge" style="color:#34d399; border-color:rgba(16,185,129,0.35); background:rgba(16,185,129,0.12);">APOLLO PS4 AUTO</span>`
+          ? `<span class="title-id-badge" style="color:#34d399; border-color:rgba(16,185,129,0.35); background:rgba(16,185,129,0.12);">MODO APOLLO RESIGN</span>`
           : (hasDummy
               ? `<span class="title-id-badge" style="color:#38bdf8; border-color:rgba(6,182,212,0.35); background:rgba(6,182,212,0.12);">SAVE DUMMY LISTO</span>`
               : `<span class="title-id-badge" style="color:#fbbf24; border-color:rgba(245,158,11,0.35); background:rgba(245,158,11,0.12);" title="Abre el juego 1 vez si vas a restaurar de otra PS5">ABRIR 1 VEZ (OTRA PS5)</span>`);
@@ -1137,7 +1137,8 @@ constexpr std::string_view kWebUiHtml = R"rawhtml(<!DOCTYPE html>
         } else {
           for (const b of backups) {
             const crossOk = (b.has_decrypted || b.has_crypto_vault);
-            const badgeText = crossOk ? 'CROSS-CONSOLE + PFS OK' : (b.has_keystone ? 'KEYSTONE OK' : 'ESTANDAR');
+            const badgeText = isPs4 ? 'MODO APOLLO OK' : (crossOk ? 'CROSS-CONSOLE + PFS OK' : (b.has_keystone ? 'KEYSTONE OK' : 'ESTANDAR'));
+            const btnText = isPs4 ? 'Restaurar y Resignar (Apollo)' : 'Restaurar e Inyectar';
             html += `
               <div class="file-item">
                 <div class="file-name-wrap" style="flex-direction:column; align-items:flex-start; gap:0.25rem;">
@@ -1151,7 +1152,7 @@ constexpr std::string_view kWebUiHtml = R"rawhtml(<!DOCTYPE html>
                   </div>
                 </div>
                 <button class="btn btn-primary btn-sm" onclick="triggerConsoleRestore('${escapeAttr(titleId)}', ${b.index})">
-                  <span>Restaurar e Inyectar</span>
+                  <span>${btnText}</span>
                 </button>
               </div>
             `;
