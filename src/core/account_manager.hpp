@@ -5,6 +5,7 @@
 #pragma once
 
 #include "core/logger.hpp"
+#include "core/sfo_resigner.hpp"
 
 #include <cstdint>
 #include <cstdio>
@@ -67,64 +68,39 @@ inline std::uint64_t detect_active_account_id(std::uint32_t user_id)
         }
     }
 
-    // 2. Probar en partidas existentes de PS4 (/user/home/<uid>/savedata/*/param.sfo)
-    const std::string sdata_dir = "/user/home/" + std::string(uid_hex) + "/savedata";
-    DIR *dir = opendir(sdata_dir.c_str());
-    if (dir)
+    // 2. Probar en metadatos y partidas existentes de PS4 (savedata_meta/user/* y savedata/*)
+    for (const std::string &base_sfo_dir : {
+             "/user/home/" + std::string(uid_hex) + "/savedata_meta/user",
+             "/user/home/" + std::string(uid_hex) + "/savedata"})
     {
+        DIR *dir = opendir(base_sfo_dir.c_str());
+        if (!dir)
+            continue;
+
         while (const dirent *ent = readdir(dir))
         {
             if (ent->d_name[0] == '.')
                 continue;
-            const std::string sfo = sdata_dir + "/" + ent->d_name + "/sce_sys/param.sfo";
-            if (access(sfo.c_str(), R_OK) == 0)
+            const std::string game_dir = base_sfo_dir + "/" + ent->d_name;
+            for (const std::string &sfo_cand : {
+                     game_dir + "/param.sfo",
+                     game_dir + "/sce_sys/param.sfo"})
             {
-                // Buscar la cadena ACCOUNT_ID dentro de param.sfo
-                std::FILE *f = std::fopen(sfo.c_str(), "rb");
-                if (f)
+                std::uint64_t acc = 0;
+                if (sfo::read_account_id_from_sfo(sfo_cand, acc) && acc != 0 && acc != ~0ULL)
                 {
-                    std::vector<char> buf(8192);
-                    std::size_t n = std::fread(buf.data(), 1, buf.size(), f);
-                    std::fclose(f);
-                    for (std::size_t i = 0; i + 24 < n; i++)
-                    {
-                        if (std::memcmp(buf.data() + i, "ACCOUNT_ID", 10) == 0)
-                        {
-                            // En SFO, tras el tag suele venir el valor en hex (16 chars)
-                            for (std::size_t j = i + 10; j + 16 <= n; j++)
-                            {
-                                bool is_hex = true;
-                                for (int k = 0; k < 16; k++)
-                                {
-                                    char c = buf[j + k];
-                                    if (!((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F')))
-                                    {
-                                        is_hex = false;
-                                        break;
-                                    }
-                                }
-                                if (is_hex)
-                                {
-                                    std::string hex_str(buf.data() + j, 16);
-                                    std::uint64_t acc = std::strtoull(hex_str.c_str(), nullptr, 16);
-                                    if (acc != 0)
-                                    {
-                                        MACHETE_LOG("[ACCOUNT]", "Account ID recovered from existing SFO (%s): 0x%04llx...%04llx",
-                                                    sfo.c_str(),
-                                                    static_cast<unsigned long long>((acc >> 48) & 0xffff),
-                                                    static_cast<unsigned long long>(acc & 0xffff));
-                                        closedir(dir);
-                                        return acc;
-                                    }
-                                }
-                            }
-                        }
-                    }
+                    MACHETE_LOG("[ACCOUNT]", "Account ID recovered from existing SFO (%s): 0x%04llx...%04llx",
+                                sfo_cand.c_str(),
+                                static_cast<unsigned long long>((acc >> 48) & 0xffff),
+                                static_cast<unsigned long long>(acc & 0xffff));
+                    closedir(dir);
+                    return acc;
                 }
             }
         }
         closedir(dir);
     }
+
 
     // 3. Probar en las bases de datos del sistema si estan accesibles
     for (const std::string &db_path : {

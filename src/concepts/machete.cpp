@@ -1220,16 +1220,31 @@ class Machete final : public app::Concept
             // Separador
             list.line(836, 480, 1784, 480, 1.0f, theme.text_muted.with_alpha(0.2f));
 
-            // Estado del Keystone
+            // Estado del Keystone e Inyeccion Cross-Console / Apollo
             paint.label(machete::i18n::tr(machete::i18n::StringId::KeystoneStatusHeader),
-                        836, 520, 17, theme.text_muted);
-            list.rounded_rect({836, 536, 948, 54}, 8.0f, Color::rgb(0x142b1f).with_alpha(0.6f));
-            list.circle(860, 563, 6.0f,
+                        836, 512, 17, theme.text_muted);
+            list.rounded_rect({836, 526, 948, 78}, 8.0f, Color::rgb(0x142b1f).with_alpha(0.6f));
+            list.circle(860, 548, 6.0f,
                         current_game.has_keystone ? Color::rgb(0x38ef7d) : Color::rgb(0xffaa00));
             paint.body(current_game.has_keystone
                            ? machete::i18n::tr(machete::i18n::StringId::KeystoneStatusOk)
                            : machete::i18n::tr(machete::i18n::StringId::KeystoneStatusPending),
-                       880, 570, 20, Color::rgb(0xa3ffcc));
+                       880, 555, 19, Color::rgb(0xa3ffcc));
+
+            const bool is_es = (machete::i18n::current_language() == machete::i18n::Language::Spanish);
+            const bool is_ps4_title = (current_game.platform == "PS4");
+            const bool dummy_ready = is_ps4_title || current_game.has_save_dummy || !current_game.save_path.empty();
+            list.circle(860, 580, 6.0f,
+                        dummy_ready ? Color::rgb(0x38ef7d) : Color::rgb(0xffaa00));
+            const char *cross_msg = is_ps4_title
+                ? (is_es ? "Modo Apollo PS4: Resignado Automatico Activo (Account ID + Keystone + PFS)"
+                         : "Apollo PS4 Mode: Auto-Resign Active (Account ID + Keystone + PFS)")
+                : (dummy_ready
+                       ? (is_es ? "Save Dummy PS5: LISTO (Inyeccion Cross-Console Activa sin corrupcion)"
+                                : "PS5 Save Dummy: READY (Zero-Corruption Cross-Console Injection Active)")
+                       : (is_es ? "Save Dummy PS5: Abre el juego 1 vez antes de restaurar de otra consola"
+                                : "PS5 Save Dummy: Launch game once before restoring from another console"));
+            paint.body(cross_msg, 880, 587, 18, dummy_ready ? Color::rgb(0x76d6ff) : Color::rgb(0xffd276));
 
             // Destinos de almacenamiento disponibles
             paint.label(machete::i18n::tr(machete::i18n::StringId::StorageLocationsHeader),
@@ -1516,12 +1531,21 @@ class Machete final : public app::Concept
                 else
                 {
                     // LISTA DE COPIAS DISPONIBLES
-                    char sub[160];
-                    std::snprintf(sub, sizeof(sub),
-                                  is_es ? "Selecciona la version a restaurar en %s:"
-                                        : "Select version to restore into %s:",
-                                  curr_title.c_str());
-                    paint.body(sub, 500, 288, 20, theme.text_muted);
+                    const bool has_curr = !games_.empty();
+                    const bool is_ps4_restore = has_curr && (games_[static_cast<std::size_t>(selected_game_)].platform == "PS4");
+                    const bool has_dummy_restore = is_ps4_restore ||
+                        (has_curr && (games_[static_cast<std::size_t>(selected_game_)].has_save_dummy ||
+                                      !games_[static_cast<std::size_t>(selected_game_)].save_path.empty()));
+                    const char *guide_line = is_ps4_restore
+                        ? (is_es ? "Modo Apollo PS4: Resigna Account ID, PSID y Keystone automaticamente al restaurar."
+                                 : "Apollo PS4 Mode: Automatically resigns Account ID, PSID and Keystone on restore.")
+                        : (has_dummy_restore
+                               ? (is_es ? "Save Dummy Detectado: Inyeccion PFS automatica lista para esta u otra PS5."
+                                        : "Save Dummy Detected: Automatic PFS injection ready for this or another PS5.")
+                               : (is_es ? "ATENCION: Si restauras de otra PS5, abre el juego 1 vez primero para crear Save Dummy."
+                                        : "NOTICE: If restoring from another PS5, launch game once first to create Save Dummy."));
+                    paint.body(guide_line, 500, 288, 18,
+                               has_dummy_restore ? Color::rgb(0x76d6ff) : Color::rgb(0xffaa00));
 
                     const int opt_count = static_cast<int>(available_backups_.size());
                     const float item_h = 74.0f;
@@ -1562,12 +1586,15 @@ class Machete final : public app::Concept
                                       item.timestamp_str.c_str(), item.file_count, item.size_str.c_str());
                         paint.label(meta_str, opt_rect.x + 140, opt_rect.cy() + 18, 16, theme.text_muted);
 
-                        // Indicador Keystone
-                        if (item.has_keystone)
+                        // Indicador Cross-Console / Keystone
+                        if (item.has_decrypted || item.has_crypto_vault || item.has_keystone)
                         {
-                            const Rect k_badge{opt_rect.x + opt_rect.w - 145, opt_rect.cy() - 14, 130, 28};
+                            const Rect k_badge{opt_rect.x + opt_rect.w - 175, opt_rect.cy() - 14, 160, 28};
                             list.rounded_rect(k_badge, 6.0f, Color::rgb(0x123620).with_alpha(0.85f));
-                            paint.label("KEYSTONE OK", k_badge.cx(), k_badge.cy() + 6, 14,
+                            const char *b_lbl = (item.has_decrypted || item.has_crypto_vault)
+                                ? "CROSS-CONSOLE OK"
+                                : "KEYSTONE OK";
+                            paint.label(b_lbl, k_badge.cx(), k_badge.cy() + 6, 13,
                                         Color::rgb(0x38ef7d), gfx::Align::center);
                         }
                     }

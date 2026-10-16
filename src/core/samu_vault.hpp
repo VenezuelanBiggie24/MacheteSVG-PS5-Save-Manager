@@ -55,12 +55,76 @@ inline bool read_sealed_blob(const std::string &path, off_t offset, std::uint8_t
 // Descifra el blob sellado a traves del driver de kernel /dev/pfsmgr utilizando SAMU
 inline bool decrypt_blob_via_pfsmgr(const std::uint8_t in_blob[96], std::uint8_t out_plain_key[32])
 {
-    (void)in_blob;
-    (void)out_plain_key;
-    // Calling raw ioctl on /dev/pfsmgr from unprivileged userland triggers SIGSEGV/kernel traps on stock jailbreaks.
-    // The authentic 96-byte hardware-sealed SAMU key blob is safely captured in record.sealed_blob.
-    return false;
+    if (!in_blob || !out_plain_key)
+        return false;
+
+    // Solo invocar /dev/pfsmgr cuando el proceso ya cuenta con privilegios root (lapy_jb_daemon)
+    if (getuid() != 0 || access("/dev/pfsmgr", F_OK) != 0)
+        return false;
+
+    int pfd = open("/dev/pfsmgr", O_RDWR);
+    if (pfd < 0)
+        return false;
+
+    std::vector<std::uint8_t> keybuf(512, 0);
+    std::memcpy(keybuf.data(), in_blob, 96);
+
+    int r = ioctl(pfd, PFS_DECRYPT_KEK_CMD, keybuf.data());
+    close(pfd);
+
+    if (r < 0)
+        return false;
+
+    std::int32_t status = 0;
+    std::memcpy(&status, keybuf.data() + 0x80, sizeof(status));
+    if (status != 0)
+        return false;
+
+    bool non_zero = false;
+    for (std::size_t i = 0; i < 32; ++i)
+    {
+        if (keybuf[0x60 + i] != 0)
+        {
+            non_zero = true;
+            break;
+        }
+    }
+    if (!non_zero)
+        return false;
+
+    std::memcpy(out_plain_key, keybuf.data() + 0x60, 32);
+    MACHETE_LOG("[VAULT]", "SAMU decrypted 32-byte PFS AES key via /dev/pfsmgr successfully");
+    return true;
 }
+
+// Lee y valida un archivo crypto_vault.bin desde una carpeta de respaldo
+inline bool read_vault_record(const std::string &backup_folder, CryptoVaultRecord &out_record)
+{
+    const std::string vpath = backup_folder + "/crypto_vault.bin";
+    std::FILE *f = std::fopen(vpath.c_str(), "rb");
+    if (!f)
+        return false;
+
+    CryptoVaultRecord rec{};
+    std::size_t n = std::fread(&rec, 1, sizeof(rec), f);
+    std::fclose(f);
+
+    if (n != sizeof(rec) || rec.magic != VAULT_MAGIC)
+        return false;
+
+    std::uint8_t expected_hash[32] = {0};
+    crypto::Sha256 sha;
+    sha.update(reinterpret_cast<const std::uint8_t *>(&rec),
+               sizeof(rec) - sizeof(rec.integrity_sha256));
+    sha.finish(expected_hash);
+
+    if (std::memcmp(expected_hash, rec.integrity_sha256, 32) != 0)
+        return false;
+
+    out_record = rec;
+    return true;
+}
+
 
 // Obtiene el OpenPSID de 16 bytes de la consola fisica
 inline bool get_console_open_psid(std::uint8_t out_psid[16])

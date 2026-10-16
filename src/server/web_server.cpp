@@ -6,7 +6,10 @@
 #include "server/web_ui.hpp"
 #include "server/zip_writer.hpp"
 #include "core/logger.hpp"
+#include "core/pfs_mount_manager.hpp"
 #include "core/samu_vault.hpp"
+#include "core/save_manager.hpp"
+#include "core/storage.hpp"
 
 #include <arpa/inet.h>
 #include <csignal>
@@ -297,6 +300,54 @@ std::string resolve_or_create_crypto_vault(const scanner::ScannedGame &game)
         if (access(out_file.c_str(), F_OK) == 0)
         {
             return out_file;
+        }
+    }
+
+    return "";
+}
+
+std::string resolve_or_extract_decrypted_dir(const scanner::ScannedGame &game)
+{
+    if (game.save_path.empty())
+    {
+        return "";
+    }
+
+    // 1. Si ya existe carpeta decrypted/ en un respaldo local previo
+    DIR *base_dir = opendir("/data/MacheteSVG");
+    if (base_dir)
+    {
+        while (const dirent *ent = readdir(base_dir))
+        {
+            if (ent->d_name[0] == '.')
+                continue;
+            std::string name = ent->d_name;
+            if (name.rfind(game.title_id, 0) == 0)
+            {
+                std::string cand = "/data/MacheteSVG/" + name + "/decrypted";
+                if (machete::pfs::has_decrypted_payload("/data/MacheteSVG/" + name))
+                {
+                    closedir(base_dir);
+                    return cand;
+                }
+            }
+        }
+        closedir(base_dir);
+    }
+
+    // 2. Si no, intentar extraer al vuelo mediante /dev/pfsmgr + ScopedPfsMount
+    std::string vault_base = "/tmp/machete_vault";
+    mkdir(vault_base.c_str(), 0777);
+    std::string game_vault_dir = vault_base + "/" + game.title_id;
+    mkdir(game_vault_dir.c_str(), 0777);
+
+    const bool is_ps4 = (game.platform == "PS4");
+    if (machete::pfs::extract_decrypted_slots_to_backup(game.save_path, game_vault_dir, game.title_id, !is_ps4) > 0)
+    {
+        std::string dec_dir = game_vault_dir + "/decrypted";
+        if (access(dec_dir.c_str(), F_OK) == 0)
+        {
+            return dec_dir;
         }
     }
 
@@ -758,6 +809,8 @@ void WebServer::handle_client(int client_fd)
         {
             const auto &g = games[i];
             const bool has_save = (!g.save_path.empty() && access(g.save_path.c_str(), F_OK) == 0);
+            const bool has_dummy = (g.platform == "PS4") || g.has_save_dummy || has_save ||
+                                   machete::save::has_local_save_dummy_for_game(g);
 
             if (i > 0) json += ",";
             json += "{";
@@ -766,6 +819,7 @@ void WebServer::handle_client(int client_fd)
             json += "\"platform\":\"" + json_escape(g.platform) + "\",";
             json += "\"save_path\":\"" + json_escape(g.save_path) + "\",";
             json += "\"has_save\":" + std::string(has_save ? "true" : "false") + ",";
+            json += "\"has_save_dummy\":" + std::string(has_dummy ? "true" : "false") + ",";
             json += "\"size_bytes\":" + std::to_string(g.total_bytes) + ",";
             json += "\"size_str\":\"" + json_escape(g.size_str) + "\",";
             json += "\"timestamp_str\":\"" + json_escape(g.timestamp_str) + "\"";
@@ -884,7 +938,7 @@ void WebServer::handle_client(int client_fd)
         ZipWriter zip;
         zip.add_directory(target_game.save_path, target_game.title_id);
 
-        // Si es PS5, incluir tambien metadatos si existen en savedata_prospero_meta
+        // Si es PS5 o PS4, incluir tambien metadatos (.meta / sce_meta)
         std::string meta_path = target_game.save_path;
         std::size_t pos = meta_path.find("savedata_prospero");
         if (pos != std::string::npos)
@@ -892,7 +946,19 @@ void WebServer::handle_client(int client_fd)
             meta_path.replace(pos, 17, "savedata_prospero_meta");
             if (access(meta_path.c_str(), F_OK) == 0)
             {
-                zip.add_directory(meta_path, target_game.title_id + "/sce_meta");
+                zip.add_directory(meta_path, target_game.title_id + "/.meta");
+            }
+        }
+        else
+        {
+            std::size_t pos4 = meta_path.find("/savedata/");
+            if (pos4 != std::string::npos)
+            {
+                meta_path.replace(pos4, 10, "/savedata_meta/user/");
+                if (access(meta_path.c_str(), F_OK) == 0)
+                {
+                    zip.add_directory(meta_path, target_game.title_id + "/.meta");
+                }
             }
         }
 
@@ -908,6 +974,13 @@ void WebServer::handle_client(int client_fd)
         if (!vault_path.empty() && access(vault_path.c_str(), F_OK) == 0)
         {
             zip.add_file(vault_path, target_game.title_id + "/crypto_vault.bin");
+        }
+
+        // Archivos Desencriptados en Claro (PFS Mount): incluir decrypted/ si disponible
+        std::string dec_dir = resolve_or_extract_decrypted_dir(target_game);
+        if (!dec_dir.empty() && access(dec_dir.c_str(), F_OK) == 0)
+        {
+            zip.add_directory(dec_dir, target_game.title_id + "/decrypted");
         }
 
         zip.prepare();
@@ -972,6 +1045,13 @@ void WebServer::handle_client(int client_fd)
                 {
                     zip.add_file(vault_path, folder_name + "/crypto_vault.bin");
                 }
+
+                // Archivos Desencriptados en Claro (PFS Mount): incluir decrypted/ si disponible
+                std::string dec_dir = resolve_or_extract_decrypted_dir(g);
+                if (!dec_dir.empty() && access(dec_dir.c_str(), F_OK) == 0)
+                {
+                    zip.add_directory(dec_dir, folder_name + "/decrypted");
+                }
             }
         }
 
@@ -1002,6 +1082,160 @@ void WebServer::handle_client(int client_fd)
                 zip.stream_to_fd(client_fd);
             }
         }
+        return;
+    }
+
+    // Ruta 6B: API de Listado de Copias de Seguridad Disponibles en la Consola
+    if (path.rfind("/api/backups/", 0) == 0)
+    {
+        std::string title_id = path.substr(13);
+        if (title_id.empty() || title_id.find("..") != std::string::npos ||
+            title_id.find('/') != std::string::npos || title_id.find('\\') != std::string::npos)
+        {
+            send_string_response(client_fd, 400, "Bad Request", "application/json", "[]");
+            return;
+        }
+
+        scanner::ScannedGame target_game;
+        if (!find_game(title_id, target_game))
+        {
+            target_game.title_id = title_id;
+            target_game.title = title_id;
+            target_game.platform = (title_id.rfind("CUSA", 0) == 0) ? "PS4" : "PS5";
+        }
+
+        auto devs = machete::storage::scan_storage_devices();
+        auto backups = machete::save::find_available_backups(target_game, devs);
+        std::string json = "[";
+        for (std::size_t i = 0; i < backups.size(); ++i)
+        {
+            const auto &b = backups[i];
+            if (i > 0) json += ",";
+            json += "{";
+            json += "\"index\":" + std::to_string(i) + ",";
+            json += "\"device_label\":\"" + json_escape(b.device_label) + "\",";
+            json += "\"folder_name\":\"" + json_escape(b.folder_name) + "\",";
+            json += "\"backup_path\":\"" + json_escape(b.folder_path) + "\",";
+            json += "\"timestamp_str\":\"" + json_escape(b.timestamp_str) + "\",";
+            json += "\"size_str\":\"" + json_escape(b.size_str) + "\",";
+            json += "\"file_count\":" + std::to_string(b.file_count) + ",";
+            json += "\"has_keystone\":" + std::string(b.has_keystone ? "true" : "false") + ",";
+            json += "\"has_decrypted\":" + std::string(b.has_decrypted ? "true" : "false") + ",";
+            json += "\"has_crypto_vault\":" + std::string(b.has_crypto_vault ? "true" : "false");
+            json += "}";
+        }
+        json += "]";
+        send_string_response(client_fd, 200, "OK", "application/json", json);
+        return;
+    }
+
+    // Ruta 6C: API para Crear Respaldo en Consola desde el Navegador Web
+    if (path.rfind("/api/backup/", 0) == 0 && method_str == "POST")
+    {
+        std::string title_id = path.substr(12);
+        if (title_id.empty() || title_id.find("..") != std::string::npos ||
+            title_id.find('/') != std::string::npos || title_id.find('\\') != std::string::npos)
+        {
+            send_string_response(client_fd, 400, "Bad Request", "application/json",
+                                 "{\"success\":false,\"message\":\"Title ID invalido\"}");
+            return;
+        }
+
+        scanner::ScannedGame target_game;
+        if (!find_game(title_id, target_game))
+        {
+            auto scanned = scanner::scan_installed_games_and_saves();
+            update_games(scanned);
+            if (!find_game(title_id, target_game))
+            {
+                send_string_response(client_fd, 404, "Not Found", "application/json",
+                                     "{\"success\":false,\"message\":\"Juego no encontrado en la consola\"}");
+                return;
+            }
+        }
+
+        machete::storage::ensure_internal_storage();
+        auto devs = machete::storage::scan_storage_devices();
+        machete::storage::StorageDevice target_dev{
+            machete::storage::StorageType::Internal,
+            "internal",
+            "Almacenamiento Interno SSD",
+            "/data",
+            "/data/MacheteSVG",
+            true,
+            1024ULL * 1024ULL * 1024ULL,
+            1024ULL * 1024ULL * 1024ULL};
+        for (const auto &d : devs)
+        {
+            if (d.connected)
+            {
+                target_dev = d;
+                break;
+            }
+        }
+
+        auto res = machete::save::backup_game_save(target_game, target_dev);
+        std::string json = "{\"success\":" + std::string(res.success ? "true" : "false") +
+                           ",\"message\":\"" + json_escape(res.message) + "\"}";
+        send_string_response(client_fd, 200, "OK", "application/json", json);
+        return;
+    }
+
+    // Ruta 6D: API para Restaurar / Resignar (Apollo PS4 & Cross-Console PS5 Save Dummy) desde el Navegador Web
+    if (path.rfind("/api/restore/", 0) == 0 && method_str == "POST")
+    {
+        std::string title_id = path.substr(13);
+        if (title_id.empty() || title_id.find("..") != std::string::npos ||
+            title_id.find('/') != std::string::npos || title_id.find('\\') != std::string::npos)
+        {
+            send_string_response(client_fd, 400, "Bad Request", "application/json",
+                                 "{\"success\":false,\"message\":\"Title ID invalido\"}");
+            return;
+        }
+
+        std::size_t idx = 0;
+        if (query_pos != std::string::npos)
+        {
+            std::string qs = decoded_path.substr(query_pos + 1);
+            std::size_t ipos = qs.find("index=");
+            if (ipos != std::string::npos)
+            {
+                idx = static_cast<std::size_t>(std::strtoul(qs.c_str() + ipos + 6, nullptr, 10));
+            }
+        }
+
+        scanner::ScannedGame target_game;
+        if (!find_game(title_id, target_game))
+        {
+            auto scanned = scanner::scan_installed_games_and_saves();
+            update_games(scanned);
+            if (!find_game(title_id, target_game))
+            {
+                target_game.title_id = title_id;
+                target_game.title = title_id;
+                target_game.platform = (title_id.rfind("CUSA", 0) == 0) ? "PS4" : "PS5";
+            }
+        }
+
+        auto devs = machete::storage::scan_storage_devices();
+        auto backups = machete::save::find_available_backups(target_game, devs);
+        if (backups.empty() || idx >= backups.size())
+        {
+            send_string_response(client_fd, 404, "Not Found", "application/json",
+                                 "{\"success\":false,\"message\":\"No se encontro la copia de seguridad solicitada en /data/MacheteSVG ni en USB\"}");
+            return;
+        }
+
+        auto res = machete::save::restore_backup_item(target_game, backups[idx]);
+        if (res.success)
+        {
+            auto scanned = scanner::scan_installed_games_and_saves();
+            update_games(scanned);
+        }
+
+        std::string json = "{\"success\":" + std::string(res.success ? "true" : "false") +
+                           ",\"message\":\"" + json_escape(res.message) + "\"}";
+        send_string_response(client_fd, 200, "OK", "application/json", json);
         return;
     }
 

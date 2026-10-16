@@ -714,7 +714,15 @@ constexpr std::string_view kWebUiHtml = R"rawhtml(<!DOCTYPE html>
         <span class="status-dot"></span>
         <span id="console-ip">Conectando...</span>
       </div>
-      <button class="btn btn-secondary btn-sm" id="btn-copy-url" title="Copiar enlace de conexión al portapapeles">
+      <button class="btn btn-secondary btn-sm" id="btn-guide" onclick="openGuideModal()" title="Como restaurar partidas de otra PS5 o PS4 sin corrupcion">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
+          <circle cx="12" cy="12" r="10"></circle>
+          <path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"></path>
+          <line x1="12" y1="17" x2="12.01" y2="17"></line>
+        </svg>
+        <span>Guia Multi-Consola (PS5 & PS4)</span>
+      </button>
+      <button class="btn btn-secondary btn-sm" id="btn-copy-url" title="Copiar enlace de conexion al portapapeles">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
           <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
           <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
@@ -799,8 +807,8 @@ constexpr std::string_view kWebUiHtml = R"rawhtml(<!DOCTYPE html>
           <circle cx="11" cy="11" r="8"></circle>
           <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
         </svg>
-        <input type="text" id="search" class="search-input" placeholder="Buscar por título o Title ID (ej. Spider-Man, PPSA01411)... [Presiona /]">
-        <button id="search-clear" class="search-clear" title="Limpiar búsqueda">
+        <input type="text" id="search" class="search-input" placeholder="Buscar por titulo o Title ID (ej. Spider-Man, PPSA01411)... [Presiona /]">
+        <button id="search-clear" class="search-clear" title="Limpiar busqueda">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor">
             <line x1="18" y1="6" x2="6" y2="18"></line>
             <line x1="6" y1="6" x2="18" y2="18"></line>
@@ -826,7 +834,7 @@ constexpr std::string_view kWebUiHtml = R"rawhtml(<!DOCTYPE html>
 
     <!-- Games Grid -->
     <div id="games-grid" class="grid">
-      <!-- Inyectado dinámicamente -->
+      <!-- Inyectado dinamicamente -->
     </div>
 
     <!-- Empty State -->
@@ -836,11 +844,11 @@ constexpr std::string_view kWebUiHtml = R"rawhtml(<!DOCTYPE html>
         <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
       </svg>
       <h3>No se encontraron coincidencias</h3>
-      <p>Intenta con otro término de búsqueda o cambia el filtro de plataforma.</p>
+      <p>Intenta con otro termino de busqueda o cambia el filtro de plataforma.</p>
     </div>
   </main>
 
-  <!-- Modal Explorador de Archivos -->
+  <!-- Modal Principal (Archivos / Restaurar / Guia) -->
   <div id="modal" class="modal-backdrop">
     <div class="modal-card">
       <div class="modal-header">
@@ -856,7 +864,7 @@ constexpr std::string_view kWebUiHtml = R"rawhtml(<!DOCTYPE html>
         </button>
       </div>
       <div id="modal-body" class="modal-body">
-        <!-- Inyectado dinámicamente -->
+        <!-- Inyectado dinamicamente -->
       </div>
     </div>
   </div>
@@ -866,7 +874,7 @@ constexpr std::string_view kWebUiHtml = R"rawhtml(<!DOCTYPE html>
 
   <!-- Footer -->
   <footer>
-    MacheteSVG • Diseñado para PlayStation 5 con Jailbreak • Arquitectura Cero Corrupción
+    MacheteSVG • Disenado para PlayStation 5 con Jailbreak • Arquitectura Cero Corrupcion (PFS Mount + Apollo Resign)
   </footer>
 
   <script>
@@ -889,7 +897,7 @@ constexpr std::string_view kWebUiHtml = R"rawhtml(<!DOCTYPE html>
         toast.style.transform = 'translateY(10px)';
         toast.style.transition = 'all 0.25s ease';
         setTimeout(() => toast.remove(), 250);
-      }, 3000);
+      }, 3500);
     }
 
     async function loadStatus() {
@@ -913,7 +921,7 @@ constexpr std::string_view kWebUiHtml = R"rawhtml(<!DOCTYPE html>
         renderStats();
         renderGames();
       } catch (e) {
-        console.error('Error cargando títulos:', e);
+        console.error('Error cargando titulos:', e);
       }
     }
 
@@ -962,6 +970,14 @@ constexpr std::string_view kWebUiHtml = R"rawhtml(<!DOCTYPE html>
         const saveIndicatorClass = g.has_save ? 'active' : 'inactive';
         const saveStatusText = g.has_save ? `Partida: ${g.size_str}` : 'Sin datos guardados';
 
+        const isPs4 = g.platform === 'PS4';
+        const hasDummy = Boolean(g.has_save_dummy || g.has_save || isPs4);
+        const crossBadgeHtml = isPs4
+          ? `<span class="title-id-badge" style="color:#34d399; border-color:rgba(16,185,129,0.35); background:rgba(16,185,129,0.12);">APOLLO PS4 AUTO</span>`
+          : (hasDummy
+              ? `<span class="title-id-badge" style="color:#38bdf8; border-color:rgba(6,182,212,0.35); background:rgba(6,182,212,0.12);">SAVE DUMMY LISTO</span>`
+              : `<span class="title-id-badge" style="color:#fbbf24; border-color:rgba(245,158,11,0.35); background:rgba(245,158,11,0.12);" title="Abre el juego 1 vez si vas a restaurar de otra PS5">ABRIR 1 VEZ (OTRA PS5)</span>`);
+
         card.innerHTML = `
           <div class="game-header">
             <div class="game-icon-wrap">
@@ -982,6 +998,7 @@ constexpr std::string_view kWebUiHtml = R"rawhtml(<!DOCTYPE html>
               <div class="game-badge-row">
                 <span class="badge ${platformBadgeClass}">${escapeHtml(g.platform)}</span>
                 <span class="title-id-badge">${escapeHtml(g.title_id)}</span>
+                ${crossBadgeHtml}
               </div>
               <div class="game-title" title="${escapeHtml(g.title)}">${escapeHtml(g.title)}</div>
               <div class="game-save-meta">
@@ -992,7 +1009,7 @@ constexpr std::string_view kWebUiHtml = R"rawhtml(<!DOCTYPE html>
           </div>
           <div class="game-actions">
             ${g.has_save ? `
-              <a href="/api/download/${encodeURIComponent(g.title_id)}" class="btn btn-primary btn-sm" onclick="showToast('Iniciando descarga ZIP de ${escapeAttr(g.title)}...')">
+              <a href="/api/download/${encodeURIComponent(g.title_id)}" class="btn btn-primary btn-sm" onclick="showToast('Iniciando descarga ZIP con archivos desencriptados de ${escapeAttr(g.title)}...')">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
                   <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
                   <polyline points="7 10 12 15 17 10"></polyline>
@@ -1000,15 +1017,26 @@ constexpr std::string_view kWebUiHtml = R"rawhtml(<!DOCTYPE html>
                 </svg>
                 <span>Descargar ZIP</span>
               </a>
-              <button class="btn btn-secondary btn-sm" onclick="openFilesModal('${escapeAttr(g.title_id)}', '${escapeAttr(g.title)}')">
+              <button class="btn btn-secondary btn-sm" onclick="openRestoreModal('${escapeAttr(g.title_id)}', '${escapeAttr(g.title)}', '${escapeAttr(g.platform)}', ${hasDummy})">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                  <polyline points="1 4 1 10 7 10"></polyline>
+                  <path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10"></path>
+                </svg>
+                <span>Restaurar / Resignar</span>
+              </button>
+              <button class="btn btn-secondary btn-sm" style="grid-column: 1 / -1;" onclick="openFilesModal('${escapeAttr(g.title_id)}', '${escapeAttr(g.title)}')">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
                   <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path>
                 </svg>
-                <span>Archivos</span>
+                <span>Explorar Archivos Individuales (Keystone & Crypto Vault)</span>
               </button>
             ` : `
-              <button class="btn btn-secondary btn-sm" style="grid-column: 1 / -1; opacity: 0.5; cursor: not-allowed;" disabled>
-                <span>Sin partida en consola</span>
+              <button class="btn btn-secondary btn-sm" style="grid-column: 1 / -1;" onclick="openRestoreModal('${escapeAttr(g.title_id)}', '${escapeAttr(g.title)}', '${escapeAttr(g.platform)}', ${hasDummy})">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                  <polyline points="1 4 1 10 7 10"></polyline>
+                  <path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10"></path>
+                </svg>
+                <span>Restaurar / Resignar Copia en Consola</span>
               </button>
             `}
           </div>
@@ -1017,6 +1045,140 @@ constexpr std::string_view kWebUiHtml = R"rawhtml(<!DOCTYPE html>
       }
 
       emptyState.style.display = visible === 0 ? 'block' : 'none';
+    }
+
+    function openGuideModal() {
+      const modal = document.getElementById('modal');
+      document.getElementById('modal-title').textContent = 'Guia de Restauracion Multi-Consola (PS5 & PS4)';
+      document.getElementById('modal-subtitle').textContent = 'Arquitectura PFS Mount + Save Dummy Injection + Apollo Resigner';
+      const modalBody = document.getElementById('modal-body');
+
+      modalBody.innerHTML = `
+        <div class="file-item" style="flex-direction:column; align-items:flex-start; gap:0.5rem; border-color:rgba(16,185,129,0.4);">
+          <div style="font-weight:700; color:#34d399; font-size:0.95rem;">1. Partidas de PS4 (CUSAxxxxx) — Modo Apollo 100% Automatico</div>
+          <div style="font-size:0.85rem; color:var(--text-muted); line-height:1.5;">
+            <strong>Que hace MacheteSVG automaticamente:</strong> Resigna el <code>ACCOUNT_ID</code> de 64 bits de tu perfil actual, actualiza el <code>user_id</code> local, recalcula el hash <code>PARAMS.psid_hmac</code> en todos los archivos <code>param.sfo</code> (tanto en <code>savedata_meta</code> como dentro del contenedor PFS montado), e inyecta el <code>keystone</code> autentico de 96 bytes.<br>
+            <strong>Que debes hacer tu:</strong> Absolutamente nada extra. Solo coloca la copia en <code>/data/MacheteSVG/</code> o en tu USB (<code>/mnt/usb0/MacheteSVG/</code>) y pulsa <strong>Restaurar</strong> desde la app en la consola o desde esta pagina web.
+          </div>
+        </div>
+        <div class="file-item" style="flex-direction:column; align-items:flex-start; gap:0.5rem; border-color:rgba(6,182,212,0.4);">
+          <div style="font-weight:700; color:#38bdf8; font-size:0.95rem;">2. Partidas de PS5 (PPSAxxxxx) — Inyeccion Cross-Console con Save Dummy</div>
+          <div style="font-size:0.85rem; color:var(--text-muted); line-height:1.5;">
+            <strong>Por que antes daba error de Datos Danados:</strong> Cada consola PS5 cifra el archivo <code>sdimg_*</code> con una clave unica de su chip SAMU. Si copias un <code>sdimg_*</code> de otra consola encima del tuyo, el SAMU lo rechaza.<br>
+            <strong>Como lo resuelve MacheteSVG ahora:</strong> Al hacer un respaldo, MacheteSVG monta el contenedor PFS con <code>/dev/pfsmgr</code> y guarda los archivos en claro dentro de <code>decrypted/</code> junto con <code>crypto_vault.bin</code>.<br>
+            <strong>Pasos para restaurar en OTRA PS5:</strong><br>
+            1) Si el juego dice <em>ABRIR 1 VEZ</em>, inicia el juego una sola vez en la PS5 destino hasta que cree su primer autoguardado (<strong>Save Dummy</strong>) y cierralo.<br>
+            2) Pulsa <strong>Restaurar</strong> en MacheteSVG (consola o web). MacheteSVG conserva tu Save Dummy local, lo monta en caliente, inyecta dentro los archivos desencriptados y el <code>keystone</code> original, actualiza el tamano en <code>param.json</code> y el SAMU de tu consola lo sella sin corrupcion.
+          </div>
+        </div>
+      `;
+      modal.classList.add('open');
+    }
+
+    async function openRestoreModal(titleId, title, platform, hasDummy) {
+      const modal = document.getElementById('modal');
+      const modalTitle = document.getElementById('modal-title');
+      const modalSubtitle = document.getElementById('modal-subtitle');
+      const modalBody = document.getElementById('modal-body');
+
+      modalTitle.textContent = `Restaurar / Resignar: ${title}`;
+      modalSubtitle.textContent = `${titleId} (${platform})`;
+      modalBody.innerHTML = '<p style="color: var(--text-muted); text-align: center; padding: 2rem 0;">Consultando copias de seguridad en la consola...</p>';
+      modal.classList.add('open');
+
+      try {
+        const res = await fetch(`/api/backups/${encodeURIComponent(titleId)}`);
+        const backups = res.ok ? await res.json() : [];
+
+        const isPs4 = (platform === 'PS4');
+        const statusBanner = isPs4
+          ? `<div class="file-item" style="flex-direction:column; align-items:flex-start; gap:0.35rem; border-color:rgba(16,185,129,0.45); background:rgba(16,185,129,0.08);">
+               <div style="font-weight:700; color:#34d399; font-size:0.88rem;">Modo Apollo PS4 Activo (100% Automatico)</div>
+               <div style="font-size:0.8rem; color:var(--text-muted);">Al restaurar cualquier copia, MacheteSVG resignara automaticamente Account ID, PSID, param.sfo y Keystone dentro del contenedor PFS.</div>
+             </div>`
+          : (hasDummy
+              ? `<div class="file-item" style="flex-direction:column; align-items:flex-start; gap:0.35rem; border-color:rgba(6,182,212,0.45); background:rgba(6,182,212,0.08);">
+                   <div style="font-weight:700; color:#38bdf8; font-size:0.88rem;">Save Dummy Local Detectado — Listo para Inyeccion Cross-Console</div>
+                   <div style="font-size:0.8rem; color:var(--text-muted);">MacheteSVG conservara tu contenedor PFS local (sdimg_*), inyectara los datos desencriptados y el SAMU de esta PS5 sellara la partida sin corrupcion.</div>
+                 </div>`
+              : `<div class="file-item" style="flex-direction:column; align-items:flex-start; gap:0.35rem; border-color:rgba(245,158,11,0.5); background:rgba(245,158,11,0.1);">
+                   <div style="font-weight:700; color:#fbbf24; font-size:0.88rem;">Paso Previo Requerido si la partida viene de OTRA PS5</div>
+                   <div style="font-size:0.8rem; color:var(--text-muted);">Esta consola aun no tiene un Save Dummy para este juego. Si la copia proviene de otra PS5, abre primero el juego 1 vez para que cree una partida vacia, cierralo y vuelve a pulsar Restaurar.</div>
+                 </div>`);
+
+        let html = statusBanner;
+        html += `
+          <div style="display:flex; justify-content:space-between; align-items:center; margin:0.35rem 0;">
+            <span style="font-size:0.82rem; color:var(--text-muted); font-weight:600;">Copias en /data/MacheteSVG y USB (${backups.length})</span>
+            <button class="btn btn-secondary btn-sm" onclick="triggerConsoleBackup('${escapeAttr(titleId)}', '${escapeAttr(title)}', '${escapeAttr(platform)}', ${hasDummy})">
+              <span>+ Crear Nuevo Respaldo en Consola</span>
+            </button>
+          </div>
+        `;
+
+        if (backups.length === 0) {
+          html += `
+            <div style="padding:1.75rem; text-align:center; color:var(--text-muted); font-size:0.86rem; border:1px dashed var(--border); border-radius:var(--radius-sm);">
+              No hay copias guardadas para <strong>${escapeHtml(titleId)}</strong> en <code>/data/MacheteSVG/</code> ni en <code>/mnt/usb0/MacheteSVG/</code>.<br><br>
+              Puedes pulsar <strong>+ Crear Nuevo Respaldo en Consola</strong> arriba o copiar una carpeta de respaldo en tu USB.
+            </div>
+          `;
+        } else {
+          for (const b of backups) {
+            const crossOk = (b.has_decrypted || b.has_crypto_vault);
+            const badgeText = crossOk ? 'CROSS-CONSOLE + PFS OK' : (b.has_keystone ? 'KEYSTONE OK' : 'ESTANDAR');
+            html += `
+              <div class="file-item">
+                <div class="file-name-wrap" style="flex-direction:column; align-items:flex-start; gap:0.25rem;">
+                  <div style="display:flex; align-items:center; gap:0.5rem; flex-wrap:wrap;">
+                    <span class="badge badge-ps4" style="font-size:0.68rem;">${escapeHtml(b.device_label)}</span>
+                    <span class="file-name">${escapeHtml(b.folder_name)}</span>
+                    <span class="title-id-badge" style="color:#34d399; border-color:rgba(16,185,129,0.35);">${badgeText}</span>
+                  </div>
+                  <div style="font-size:0.76rem; color:var(--text-muted);">
+                    ${escapeHtml(b.timestamp_str)} | ${b.file_count} archivos | ${escapeHtml(b.size_str)}
+                  </div>
+                </div>
+                <button class="btn btn-primary btn-sm" onclick="triggerConsoleRestore('${escapeAttr(titleId)}', ${b.index})">
+                  <span>Restaurar e Inyectar</span>
+                </button>
+              </div>
+            `;
+          }
+        }
+
+        modalBody.innerHTML = html;
+      } catch (e) {
+        modalBody.innerHTML = '<p style="color: #ef4444; text-align: center;">Error de conexion con la consola.</p>';
+      }
+    }
+
+    async function triggerConsoleBackup(titleId, title, platform, hasDummy) {
+      showToast(`Creando respaldo con extraccion PFS para ${titleId}...`);
+      try {
+        const res = await fetch(`/api/backup/${encodeURIComponent(titleId)}`, { method: 'POST' });
+        const data = await res.json();
+        showToast(data.message || 'Operacion finalizada');
+        await loadGames();
+        openRestoreModal(titleId, title, platform, hasDummy);
+      } catch (e) {
+        showToast('Error al ejecutar respaldo en consola', 'error');
+      }
+    }
+
+    async function triggerConsoleRestore(titleId, index) {
+      showToast(`Restaurando e inyectando partida en ${titleId}...`);
+      try {
+        const res = await fetch(`/api/restore/${encodeURIComponent(titleId)}?index=${index}`, { method: 'POST' });
+        const data = await res.json();
+        showToast(data.message || 'Restauracion completada');
+        if (data.success) {
+          document.getElementById('modal').classList.remove('open');
+          await loadGames();
+        }
+      } catch (e) {
+        showToast('Error de red al restaurar partida', 'error');
+      }
     }
 
     async function openFilesModal(titleId, title) {
@@ -1045,6 +1207,7 @@ constexpr std::string_view kWebUiHtml = R"rawhtml(<!DOCTYPE html>
 
         modalBody.innerHTML = '';
         for (const f of files) {
+          const sizeDisp = f.size_formatted || f.size_str || '';
           const item = document.createElement('div');
           item.className = 'file-item';
           item.innerHTML = `
@@ -1058,7 +1221,7 @@ constexpr std::string_view kWebUiHtml = R"rawhtml(<!DOCTYPE html>
               <span class="file-name" title="${escapeHtml(f.name)}">${escapeHtml(f.name)}</span>
             </div>
             <div style="display: flex; align-items: center; gap: 1rem;">
-              <span class="file-size">${escapeHtml(f.size_str)}</span>
+              <span class="file-size">${escapeHtml(sizeDisp)}</span>
               <a href="/api/file/${encodeURIComponent(titleId)}/${encodeURIComponent(f.name)}"
                  class="btn btn-secondary btn-sm"
                  download="${escapeAttr(f.name)}"
@@ -1075,7 +1238,7 @@ constexpr std::string_view kWebUiHtml = R"rawhtml(<!DOCTYPE html>
           modalBody.appendChild(item);
         }
       } catch (e) {
-        modalBody.innerHTML = '<p style="color: #ef4444; text-align: center;">Error de conexión.</p>';
+        modalBody.innerHTML = '<p style="color: #ef4444; text-align: center;">Error de conexion.</p>';
       }
     }
 

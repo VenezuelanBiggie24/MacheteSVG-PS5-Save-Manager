@@ -8,6 +8,7 @@
 #include "core/jailbreak.hpp"
 #include "core/keystone_manager.hpp"
 #include "core/logger.hpp"
+#include "core/pfs_mount_manager.hpp"
 #include "core/samu_vault.hpp"
 #include "core/sfo_resigner.hpp"
 
@@ -414,9 +415,10 @@ bool copy_directory_recursive(const std::string &src_dir, const std::string &dst
         if (std::strcmp(entry->d_name, ".") == 0 || std::strcmp(entry->d_name, "..") == 0)
             continue;
 
-        // No transferir directamente metadatos especiales en el flujo generico de partidas
+        // No transferir directamente metadatos especiales ni la carpeta decrypted/ en el flujo generico de contenedores
         if (std::strcmp(entry->d_name, ".meta") == 0 ||
-            std::strcmp(entry->d_name, "crypto_vault.bin") == 0)
+            std::strcmp(entry->d_name, "crypto_vault.bin") == 0 ||
+            (depth == 0 && std::strcmp(entry->d_name, "decrypted") == 0))
             continue;
 
         const std::string src_path = src_dir + "/" + entry->d_name;
@@ -598,16 +600,68 @@ void reconstruct_prospero_metadata(const std::string &title_id,
     }
 }
 
+void resign_sfo_directory_recursive(const std::string &dir_path,
+                                    const machete::sfo::ResignParams &rp,
+                                    bool &any_resigned,
+                                    int depth = 0)
+{
+    if (depth >= 4)
+        return;
+
+    ScopedDir dir(dir_path);
+    if (!dir.is_valid())
+        return;
+
+    while (const dirent *ent = readdir(dir.get()))
+    {
+        if (std::strcmp(ent->d_name, ".") == 0 || std::strcmp(ent->d_name, "..") == 0)
+            continue;
+        const std::string full = dir_path + "/" + ent->d_name;
+        struct stat st{};
+        if (stat(full.c_str(), &st) != 0)
+            continue;
+
+        if (S_ISDIR(st.st_mode))
+        {
+            resign_sfo_directory_recursive(full, rp, any_resigned, depth + 1);
+        }
+        else if (S_ISREG(st.st_mode))
+        {
+            const std::string name = ent->d_name;
+            if ((name.size() >= 4 &&
+                 (name.substr(name.size() - 4) == ".sfo" || name.substr(name.size() - 4) == ".SFO")) ||
+                name == "param.sfo" || name == "PARAM.SFO")
+            {
+                if (machete::sfo::resign_param_sfo(full, rp))
+                {
+                    any_resigned = true;
+                    MACHETE_LOG("[RESTORE]", "Resigned PS4 metadata SFO: %s", full.c_str());
+                }
+            }
+        }
+    }
+}
+
 void post_process_restored_save(const scanner::ScannedGame &game,
                                 const std::string &dst_target,
                                 const std::string &backup_folder,
-                                uid_t target_uid, gid_t target_gid)
+                                const std::string &preserved_dummy_dir,
+                                bool had_local_dummy,
+                                uid_t target_uid, gid_t target_gid,
+                                pfs::PfsRestoreReport *out_report = nullptr)
 {
     const bool is_ps5 = (game.platform == "PS5" || game.title_id.rfind("PPSA", 0) == 0);
+    const std::uint32_t user_id = extract_user_id_from_path(dst_target);
+    const std::uint64_t active_account_id = machete::account::detect_active_account_id(user_id);
+
+    // 1. Ejecutar motor PFS: Inyeccion en Save Dummy (Cross-Console) y Resignado en caliente (Apollo PS4)
+    pfs::PfsRestoreReport pfs_rep = machete::pfs::inject_and_resign_save(
+        game.title_id, is_ps5, dst_target, backup_folder, preserved_dummy_dir, had_local_dummy,
+        user_id, active_account_id, target_uid, target_gid);
 
     if (is_ps5)
     {
-        // 1. Limpieza de archivos temporales residuales (.tmp) que bloquean los descriptores PFS en el kernel
+        // 2. Limpieza de archivos temporales residuales (.tmp) que bloquean los descriptores PFS en el kernel
         ScopedDir ddst(dst_target);
         if (ddst.is_valid())
         {
@@ -622,11 +676,10 @@ void post_process_restored_save(const scanner::ScannedGame &game,
             }
         }
 
-        // 2. Resolver rutas de metadatos de PS5:
+        // 3. Resolver rutas de metadatos de PS5:
         // Tanto /user/home/<uid>/savedata_prospero_meta/<TitleID> como /user/home/<uid>/savedata_prospero_meta/user/<TitleID>
-        std::uint32_t uid_val = extract_user_id_from_path(dst_target);
         char uid_hex[32];
-        std::snprintf(uid_hex, sizeof(uid_hex), "%x", uid_val);
+        std::snprintf(uid_hex, sizeof(uid_hex), "%x", user_id);
 
         const std::string meta_target_direct = std::string("/user/home/") + uid_hex + "/savedata_prospero_meta/" + game.title_id;
         const std::string meta_target_user = std::string("/user/home/") + uid_hex + "/savedata_prospero_meta/user/" + game.title_id;
@@ -642,7 +695,7 @@ void post_process_restored_save(const scanner::ScannedGame &game,
             ensure_directories_recursive(meta_target, target_uid, target_gid);
             ensure_directories_recursive(meta_target + "/sce_sys", target_uid, target_gid);
 
-            if (access(backup_meta.c_str(), F_OK) == 0)
+            if (!pfs_rep.used_save_dummy && access(backup_meta.c_str(), F_OK) == 0)
             {
                 int m_files = 0;
                 std::uint64_t m_bytes = 0;
@@ -655,7 +708,7 @@ void post_process_restored_save(const scanner::ScannedGame &game,
             apply_permissions_recursive(meta_target, target_uid, target_gid);
         }
 
-        // 3. Limpiar directorio residual de cloud-sync para forzar al sistema a tratar la partida local como autoritativa
+        // 4. Limpiar directorio residual de cloud-sync para forzar al sistema a tratar la partida local como autoritativa
         const std::string cloud_sync_dir = std::string("/user/home/") + uid_hex + "/savedata_prospero_for_cloud/" + game.title_id;
         if (access(cloud_sync_dir.c_str(), F_OK) == 0)
         {
@@ -665,12 +718,12 @@ void post_process_restored_save(const scanner::ScannedGame &game,
     }
     else
     {
-        // 2. Partidas PS4: Inyeccion de Keystone autentico y Resignado SFO para la cuenta activa
+        // 2. Partidas PS4: Inyeccion de Keystone autentico y Resignado SFO para la cuenta activa (Modo Apollo)
         MACHETE_LOG("[RESTORE]", "Processing PS4 save for active account: Keystone & param.sfo...");
-        (void)machete::keystone::inject_authentic_keystone(dst_target, game.title_id, backup_folder);
-
-        std::uint32_t user_id = extract_user_id_from_path(dst_target);
-        std::uint64_t active_account_id = machete::account::detect_active_account_id(user_id);
+        if (machete::keystone::inject_authentic_keystone(dst_target, game.title_id, backup_folder))
+        {
+            pfs_rep.keystone_injected = true;
+        }
 
         std::uint8_t console_psid[16] = {0};
         const bool has_psid = machete::vault::get_console_open_psid(console_psid);
@@ -678,37 +731,38 @@ void post_process_restored_save(const scanner::ScannedGame &game,
         machete::sfo::ResignParams rp;
         rp.target_user_id = user_id;
         rp.target_account_id = active_account_id;
+        rp.apply_account_id = true;
         if (has_psid)
         {
             rp.psid = console_psid;
             MACHETE_LOG("[RESTORE]", "Console OpenPSID retrieved for HMAC recalculation");
         }
 
-        for (const std::string &sfo_path : {
-                 dst_target + "/param.sfo",
-                 dst_target + "/sce_sys/param.sfo",
-                 dst_target + "/sce_sys/PARAM.SFO"})
-        {
-            if (access(sfo_path.c_str(), F_OK) == 0)
-            {
-                if (machete::sfo::resign_param_sfo(sfo_path, rp))
-                {
-                    MACHETE_LOG("[RESTORE]", "param.sfo resigned successfully (UserID=0x%08x, AccountID=0x%04llx...%04llx) in %s",
-                                user_id,
-                                static_cast<unsigned long long>((active_account_id >> 48) & 0xffff),
-                                static_cast<unsigned long long>(active_account_id & 0xffff),
-                                sfo_path.c_str());
-                }
-            }
-        }
+        resign_sfo_directory_recursive(dst_target, rp, pfs_rep.sfo_resigned);
 
-        // Replicar metadatos de PS4 en savedata_meta si existen
+        // Replicar y resignar metadatos de PS4 en savedata_meta/user/<TitleID>
         char uid_hex[32];
         std::snprintf(uid_hex, sizeof(uid_hex), "%x", user_id);
         const std::string meta_ps4_user = std::string("/user/home/") + uid_hex + "/savedata_meta/user/" + game.title_id;
         ensure_directories_recursive(meta_ps4_user, target_uid, target_gid);
+
+        std::string backup_meta = backup_folder + "/.meta";
+        if (access(backup_meta.c_str(), F_OK) != 0)
+            backup_meta = backup_folder + "/meta";
+
+        if (!pfs_rep.used_save_dummy && access(backup_meta.c_str(), F_OK) == 0)
+        {
+            int m_files = 0;
+            std::uint64_t m_bytes = 0;
+            (void)copy_directory_recursive(backup_meta, meta_ps4_user, m_files, m_bytes, 0, nullptr, target_uid, target_gid);
+        }
+
+        resign_sfo_directory_recursive(meta_ps4_user, rp, pfs_rep.sfo_resigned);
         apply_permissions_recursive(meta_ps4_user, target_uid, target_gid);
     }
+
+    if (out_report)
+        *out_report = pfs_rep;
 
     // 3. Garantizar permisos 0777 (directorios) y 0666 (archivos) en todo el arbol restaurado
     apply_permissions_recursive(dst_target, target_uid, target_gid);
@@ -743,6 +797,30 @@ std::string resolve_default_save_path(const scanner::ScannedGame &game)
 }
 
 } // namespace
+
+bool has_local_save_dummy_for_game(const scanner::ScannedGame &game)
+{
+    std::string target = game.save_path;
+    if (target.empty())
+    {
+        ScopedDir home("/user/home");
+        if (home.is_valid())
+        {
+            while (const dirent *ent = readdir(home.get()))
+            {
+                if (ent->d_name[0] == '.')
+                    continue;
+                const bool is_ps5 = (game.platform == "PS5" || game.title_id.rfind("PPSA", 0) == 0);
+                const std::string cand = std::string("/user/home/") + ent->d_name + "/" +
+                                         (is_ps5 ? "savedata_prospero/" : "savedata/") + game.title_id;
+                if (pfs::has_local_save_dummy(cand))
+                    return true;
+            }
+        }
+        return false;
+    }
+    return pfs::has_local_save_dummy(target);
+}
 
 OperationResult backup_game_save(const scanner::ScannedGame &game,
                                  const storage::StorageDevice &dest_device,
@@ -833,10 +911,45 @@ OperationResult backup_game_save(const scanner::ScannedGame &game,
                 }
             }
         }
+        else
+        {
+            std::string meta_path = game.save_path;
+            std::size_t pos = meta_path.find("/savedata/");
+            if (pos != std::string::npos)
+            {
+                meta_path.replace(pos, 10, "/savedata_meta/user/");
+                if (access(meta_path.c_str(), F_OK) == 0)
+                {
+                    int meta_files = 0;
+                    std::uint64_t meta_bytes = 0;
+                    std::string dest_meta = dest_game_folder + "/.meta";
+                    ensure_directories_recursive(dest_meta);
+                    copy_directory_recursive(meta_path, dest_meta, meta_files, meta_bytes, 0, nullptr);
+                    files_count += meta_files;
+                    bytes_copied += meta_bytes;
+                }
+            }
+        }
 
+        // Archivar boveda criptografica SAMU (incluyendo decrypted_pfs_key si /dev/pfsmgr esta disponible)
         std::uint32_t active_user_id = extract_user_id_from_path(game.save_path);
         (void)machete::vault::archive_crypto_vault(dest_game_folder, game.title_id, game.platform,
                                                    game.save_path, active_user_id);
+
+        // Extraer archivos desencriptados (decrypted/<slot>/) mediante montaje PFS para soporte Cross-Console universal
+        const int dec_extracted = machete::pfs::extract_decrypted_slots_to_backup(
+            game.save_path, dest_game_folder, game.title_id, is_ps5);
+        if (dec_extracted > 0)
+        {
+            files_count += dec_extracted;
+        }
+
+        // Asegurar copia del keystone autentico en el respaldo
+        if (access((dest_game_folder + "/keystone").c_str(), F_OK) != 0)
+        {
+            (void)machete::keystone::inject_authentic_keystone(dest_game_folder, game.title_id, game.save_path);
+        }
+
         ::sync();
 
         if (progress_cb)
@@ -856,13 +969,16 @@ OperationResult backup_game_save(const scanner::ScannedGame &game,
 
         if (res.success)
         {
+            const std::string dec_tag = (dec_extracted > 0)
+                ? (is_es ? " [Incluye datos desencriptados Cross-Console]" : " [Includes Cross-Console decrypted data]")
+                : "";
             res.message = is_es
                               ? ("Respaldo completado (" + std::to_string(files_count) +
-                                 " archivos) en " + dest_game_folder)
+                                 " archivos) en " + dest_game_folder + dec_tag)
                               : ("Backup completed (" + std::to_string(files_count) +
-                                 " files) at " + dest_game_folder);
-            MACHETE_LOG("[BACKUP]", "Backup successful: %d files, %llu bytes",
-                        files_count, static_cast<unsigned long long>(bytes_copied));
+                                 " files) at " + dest_game_folder + dec_tag);
+            MACHETE_LOG("[BACKUP]", "Backup successful: %d files, %llu bytes (decrypted_files=%d)",
+                        files_count, static_cast<unsigned long long>(bytes_copied), dec_extracted);
         }
         else
         {
@@ -894,9 +1010,10 @@ OperationResult backup_game_save(const scanner::ScannedGame &game,
 #endif
 }
 
-OperationResult restore_game_save(const scanner::ScannedGame &game,
-                                  const storage::StorageDevice &source_device,
-                                  ProgressCallback progress_cb)
+OperationResult restore_from_folder(const scanner::ScannedGame &game,
+                                    const std::string &backup_folder,
+                                    const std::string &source_label,
+                                    ProgressCallback progress_cb)
 {
 #if defined(__cpp_exceptions) || defined(__EXCEPTIONS) || defined(_CPPUNWIND)
     try
@@ -921,34 +1038,22 @@ OperationResult restore_game_save(const scanner::ScannedGame &game,
             }
         }
 
-        // Buscar carpeta de respaldo existente (soporta coincidencia exacta o con nombre del juego)
-        std::string backup_game_folder =
-            source_device.root_dir + "/" + game.title_id + " - " + sanitize_name(game.title);
-
-        if (access(backup_game_folder.c_str(), F_OK) != 0)
-        {
-            // Probar si solo tiene el title_id
-            std::string fallback_folder = source_device.root_dir + "/" + game.title_id;
-            if (access(fallback_folder.c_str(), F_OK) == 0)
-                backup_game_folder = fallback_folder;
-        }
-
-        if (access(backup_game_folder.c_str(), F_OK) != 0)
+        if (access(backup_folder.c_str(), F_OK) != 0)
         {
             res.success = false;
-            res.message = is_es ? ("No se encontro respaldo previo en " + source_device.label)
-                                : ("No previous backup found on " + source_device.label);
-            MACHETE_LOG("[RESTORE]", "Backup folder not found: %s", backup_game_folder.c_str());
+            res.message = is_es ? ("No se encontro la carpeta de respaldo: " + backup_folder)
+                                : ("Backup folder not found: " + backup_folder);
+            MACHETE_LOG("[RESTORE]", "Backup folder inaccessible: %s", backup_folder.c_str());
             return res;
         }
 
-        const std::uint64_t total_dir_bytes = calculate_directory_size(backup_game_folder);
+        const std::uint64_t total_dir_bytes = calculate_directory_size(backup_folder);
         if (total_dir_bytes == 0)
         {
             res.success = false;
             res.message = is_es ? "La carpeta de respaldo esta vacia (0 bytes)"
                                 : "Backup folder is empty (0 bytes)";
-            MACHETE_LOG("[RESTORE]", "Error: empty backup at %s (0 bytes)", backup_game_folder.c_str());
+            MACHETE_LOG("[RESTORE]", "Empty backup folder (0 bytes): %s", backup_folder.c_str());
             return res;
         }
 
@@ -965,7 +1070,7 @@ OperationResult restore_game_save(const scanner::ScannedGame &game,
             res.success = false;
             res.message = is_es ? "Ruta de guardado del juego no localizada en la consola"
                                 : "Game save path not located on console";
-            MACHETE_LOG("[RESTORE]", "Could not determine destination for %s", game.title_id.c_str());
+            MACHETE_LOG("[RESTORE]", "Could not locate save destination for %s", game.title_id.c_str());
             return res;
         }
 
@@ -975,6 +1080,23 @@ OperationResult restore_game_save(const scanner::ScannedGame &game,
             std::size_t slash = dst_target.find_last_of('/');
             if (slash != std::string::npos)
                 dst_target = dst_target.substr(0, slash);
+        }
+
+        const bool is_ps5 = (game.platform == "PS5" || game.title_id.rfind("PPSA", 0) == 0);
+        const bool had_local_dummy = pfs::has_local_save_dummy(dst_target);
+        const bool cross_console = pfs::is_backup_from_different_console(backup_folder, is_ps5);
+
+        // Si es una partida de PS5 de otra consola (o solo trae decrypted/) y NO existe un Save Dummy local en la consola,
+        // detener antes de escribir un sdimg_* foraneo corrupto e instruir al usuario como crear el Save Dummy
+        if (is_ps5 && cross_console && !had_local_dummy)
+        {
+            res.success = false;
+            res.message = is_es
+                ? "Falta Save Dummy local: Abre el juego 1 vez en esta PS5 para que cree una partida nueva (Save Dummy), cierralo y vuelve a pulsar Restaurar."
+                : "Local Save Dummy missing: Launch the game once on this PS5 to create a new save (Save Dummy), close it, and press Restore again.";
+            MACHETE_LOG("[RESTORE]", "Cross-console PS5 save detected for %s without local Save Dummy in %s",
+                        game.title_id.c_str(), dst_target.c_str());
+            return res;
         }
 
         uid_t target_uid = 0;
@@ -987,21 +1109,38 @@ OperationResult restore_game_save(const scanner::ScannedGame &game,
         }
         ensure_directories_recursive(dst_target, target_uid, target_gid);
 
+        // Preservar el Save Dummy local (sdimg_* sellado por el SAMU de esta consola) antes de copiar archivos
+        const std::string preserved_dummy_dir =
+            std::string(pfs::SAVE_STAGING_DIR) + "/preserved_dummy_" + game.title_id;
+        pfs::remove_dir_recursive_simple(preserved_dummy_dir);
+        if (had_local_dummy)
+        {
+            (void)pfs::preserve_local_save_dummy(dst_target, preserved_dummy_dir);
+        }
+
         int files_count = 0;
         std::uint64_t bytes_copied = 0;
-        MACHETE_LOG("[RESTORE]", "Restoring from %s -> %s (uid=%d, gid=%d)",
-                    backup_game_folder.c_str(), dst_target.c_str(),
-                    static_cast<int>(target_uid), static_cast<int>(target_gid));
-        const bool ok = copy_directory_recursive(backup_game_folder, dst_target, files_count,
+        MACHETE_LOG("[RESTORE]", "Starting restore from %s -> %s (uid=%d, gid=%d, local_dummy=%d, cross_console=%d)",
+                    backup_folder.c_str(), dst_target.c_str(),
+                    static_cast<int>(target_uid), static_cast<int>(target_gid),
+                    had_local_dummy ? 1 : 0, cross_console ? 1 : 0);
+
+        const bool ok = copy_directory_recursive(backup_folder, dst_target, files_count,
                                                  bytes_copied, total_dir_bytes, progress_cb,
                                                  target_uid, target_gid);
-        post_process_restored_save(game, dst_target, backup_game_folder, target_uid, target_gid);
+
+        pfs::PfsRestoreReport pfs_report{};
+        post_process_restored_save(game, dst_target, backup_folder, preserved_dummy_dir,
+                                   had_local_dummy, target_uid, target_gid, &pfs_report);
+        pfs::remove_dir_recursive_simple(preserved_dummy_dir);
         ::sync();
+
+        files_count += pfs_report.injected_files;
 
         if (progress_cb)
         {
             OperationProgress p;
-            p.bytes_transferred = bytes_copied;
+            p.bytes_transferred = bytes_copied > 0 ? bytes_copied : total_dir_bytes;
             p.total_bytes = total_dir_bytes > 0 ? total_dir_bytes : bytes_copied;
             p.files_transferred = files_count;
             p.progress = 1.0f;
@@ -1009,22 +1148,43 @@ OperationResult restore_game_save(const scanner::ScannedGame &game,
             progress_cb(p);
         }
 
-        res.success = ok && (files_count > 0);
+        res.success = ok && (files_count > 0 || pfs_report.used_save_dummy || pfs_report.used_pfs_mount);
         res.files_transferred = files_count;
-        res.bytes_transferred = bytes_copied;
+        res.bytes_transferred = bytes_copied > 0 ? bytes_copied : total_dir_bytes;
 
         if (res.success)
         {
-            res.message = is_es
-                              ? ("Restauracion exitosa (" + std::to_string(files_count) + " archivos)")
-                              : ("Restore successful (" + std::to_string(files_count) + " files)");
-            MACHETE_LOG("[RESTORE]", "Restore completed successfully: %d files", files_count);
+            if (pfs_report.used_save_dummy)
+            {
+                res.message = is_es
+                    ? ("Restauracion Cross-Console completada en Save Dummy (" + std::to_string(files_count) +
+                       " archivos) desde " + source_label)
+                    : ("Cross-Console restore completed via Save Dummy (" + std::to_string(files_count) +
+                       " files) from " + source_label);
+            }
+            else if (!is_ps5 && (pfs_report.sfo_resigned || pfs_report.keystone_injected))
+            {
+                res.message = is_es
+                    ? ("Partida PS4 restaurada y resignada [Modo Apollo: Account ID + Keystone] (" +
+                       std::to_string(files_count) + " archivos)")
+                    : ("PS4 save restored & resigned [Apollo Mode: Account ID + Keystone] (" +
+                       std::to_string(files_count) + " files)");
+            }
+            else
+            {
+                res.message = is_es
+                    ? ("Restauracion exitosa (" + std::to_string(files_count) + " archivos) desde " + source_label)
+                    : ("Restore successful (" + std::to_string(files_count) + " files) from " + source_label);
+            }
+            MACHETE_LOG("[RESTORE]", "Restore successful: %d files transferred (used_dummy=%d, pfs_mount=%d)",
+                        files_count, pfs_report.used_save_dummy ? 1 : 0, pfs_report.used_pfs_mount ? 1 : 0);
         }
         else
         {
             res.message = is_es ? ("Fallo al restaurar archivos en " + dst_target)
                                 : ("Failed to restore files at " + dst_target);
-            MACHETE_LOG("[RESTORE]", "Error restoring files at %s", dst_target.c_str());
+            MACHETE_LOG("[RESTORE]", "Failed to restore files at %s (files copied: %d)",
+                        dst_target.c_str(), files_count);
         }
 
         return res;
@@ -1047,6 +1207,33 @@ OperationResult restore_game_save(const scanner::ScannedGame &game,
         return res;
     }
 #endif
+}
+
+OperationResult restore_game_save(const scanner::ScannedGame &game,
+                                  const storage::StorageDevice &source_device,
+                                  ProgressCallback progress_cb)
+{
+    const bool is_es = (machete::i18n::current_language() == machete::i18n::Language::Spanish);
+    std::string backup_game_folder =
+        source_device.root_dir + "/" + game.title_id + " - " + sanitize_name(game.title);
+
+    if (access(backup_game_folder.c_str(), F_OK) != 0)
+    {
+        std::string fallback_folder = source_device.root_dir + "/" + game.title_id;
+        if (access(fallback_folder.c_str(), F_OK) == 0)
+            backup_game_folder = fallback_folder;
+    }
+
+    if (access(backup_game_folder.c_str(), F_OK) != 0)
+    {
+        OperationResult res;
+        res.success = false;
+        res.message = is_es ? ("No se encontro respaldo previo en " + source_device.label)
+                            : ("No previous backup found on " + source_device.label);
+        return res;
+    }
+
+    return restore_from_folder(game, backup_game_folder, source_device.label, progress_cb);
 }
 
 std::vector<BackupItem> find_available_backups(const scanner::ScannedGame &game,
@@ -1180,6 +1367,8 @@ std::vector<BackupItem> find_available_backups(const scanner::ScannedGame &game,
                         {
                             files++;
                             total_size += static_cast<std::uint64_t>(sst.st_size);
+                            if (std::strcmp(se->d_name, "keystone") == 0)
+                                keystone_found = true;
                         }
                         else if (S_ISDIR(sst.st_mode))
                         {
@@ -1209,6 +1398,8 @@ std::vector<BackupItem> find_available_backups(const scanner::ScannedGame &game,
             item.file_count = files;
             item.total_bytes = total_size;
             item.has_keystone = keystone_found;
+            item.has_decrypted = pfs::has_decrypted_payload(full_path);
+            item.has_crypto_vault = (access((full_path + "/crypto_vault.bin").c_str(), R_OK) == 0);
 
             const double mb = static_cast<double>(total_size) / (1024.0 * 1024.0);
             char size_buf[32];
@@ -1231,151 +1422,7 @@ OperationResult restore_backup_item(const scanner::ScannedGame &game,
                                     const BackupItem &backup,
                                     ProgressCallback progress_cb)
 {
-#if defined(__cpp_exceptions) || defined(__EXCEPTIONS) || defined(_CPPUNWIND)
-    try
-    {
-#endif
-        OperationResult res;
-        const bool is_es = (machete::i18n::current_language() == machete::i18n::Language::Spanish);
-
-        if (!jailbreak::verify_root_access(static_cast<int>(getpid())))
-        {
-            MACHETE_LOG("[RESTORE]", "Root privileges absent (UID=%d, EUID=%d). Requesting elevation...",
-                        static_cast<int>(getuid()), static_cast<int>(geteuid()));
-            const auto jb = jailbreak::request_jailbreak();
-            if (!jb.root_access)
-            {
-                res.success = false;
-                res.message = is_es
-                    ? "Fallo de privilegios: se requiere jailbreak (UID 0) para restaurar en /user/home"
-                    : "Privilege failure: jailbreak (UID 0) required to restore to /user/home";
-                MACHETE_LOG("[RESTORE]", "Elevation failed. Safe operation aborted.");
-                return res;
-            }
-        }
-
-        if (access(backup.folder_path.c_str(), F_OK) != 0)
-        {
-            res.success = false;
-            res.message = is_es ? ("No se encontro la carpeta de respaldo: " + backup.folder_path)
-                                : ("Backup folder not found: " + backup.folder_path);
-            MACHETE_LOG("[RESTORE]", "Backup folder inaccessible: %s", backup.folder_path.c_str());
-            return res;
-        }
-
-        const std::uint64_t total_dir_bytes = calculate_directory_size(backup.folder_path);
-        if (total_dir_bytes == 0)
-        {
-            res.success = false;
-            res.message = is_es ? "La carpeta de respaldo esta vacia (0 bytes)"
-                                : "Backup folder is empty (0 bytes)";
-            MACHETE_LOG("[RESTORE]", "Empty backup folder (0 bytes): %s", backup.folder_path.c_str());
-            return res;
-        }
-
-        std::string dst_target = game.save_path;
-        if (dst_target.empty())
-        {
-            dst_target = resolve_default_save_path(game);
-            MACHETE_LOG("[RESTORE]", "Target path resolved dynamically for %s: %s",
-                        game.title_id.c_str(), dst_target.c_str());
-        }
-
-        if (dst_target.empty())
-        {
-            res.success = false;
-            res.message = is_es ? "Ruta de guardado del juego no localizada en la consola"
-                                : "Game save path not located on console";
-            MACHETE_LOG("[RESTORE]", "Could not locate save destination for %s", game.title_id.c_str());
-            return res;
-        }
-
-        struct stat save_st{};
-        if (stat(dst_target.c_str(), &save_st) == 0 && S_ISREG(save_st.st_mode))
-        {
-            std::size_t slash = dst_target.find_last_of('/');
-            if (slash != std::string::npos)
-                dst_target = dst_target.substr(0, slash);
-        }
-
-        uid_t target_uid = 0;
-        gid_t target_gid = 0;
-        resolve_path_ownership(dst_target, target_uid, target_gid);
-        if (target_uid == 0 && target_gid == 0)
-        {
-            target_uid = 1;
-            target_gid = 1;
-        }
-        ensure_directories_recursive(dst_target, target_uid, target_gid);
-
-        std::uint64_t total_bytes = backup.total_bytes;
-        if (total_bytes == 0)
-            total_bytes = total_dir_bytes;
-
-        int files_count = 0;
-        std::uint64_t bytes_copied = 0;
-        MACHETE_LOG("[RESTORE]", "Starting recursive copy from %s -> %s (total=%llu bytes, uid=%d, gid=%d)",
-                    backup.folder_path.c_str(), dst_target.c_str(),
-                    static_cast<unsigned long long>(total_bytes),
-                    static_cast<int>(target_uid), static_cast<int>(target_gid));
-        const bool ok = copy_directory_recursive(backup.folder_path, dst_target, files_count,
-                                                 bytes_copied, total_bytes, progress_cb,
-                                                 target_uid, target_gid);
-        post_process_restored_save(game, dst_target, backup.folder_path, target_uid, target_gid);
-        ::sync();
-
-        if (progress_cb)
-        {
-            OperationProgress p;
-            p.bytes_transferred = bytes_copied;
-            p.total_bytes = total_bytes > 0 ? total_bytes : bytes_copied;
-            p.files_transferred = files_count;
-            p.progress = 1.0f;
-            p.current_file = is_es ? "Completado" : "Completed";
-            progress_cb(p);
-        }
-
-        res.success = ok && (files_count > 0);
-        res.files_transferred = files_count;
-        res.bytes_transferred = bytes_copied;
-
-        if (res.success)
-        {
-            res.message = is_es
-                              ? ("Restauracion exitosa (" + std::to_string(files_count) +
-                                 " archivos, " + backup.size_str + ") desde " + backup.device_label)
-                              : ("Restore successful (" + std::to_string(files_count) +
-                                 " files, " + backup.size_str + ") from " + backup.device_label);
-            MACHETE_LOG("[RESTORE]", "Restore successful: %d files transferred", files_count);
-        }
-        else
-        {
-            res.message = is_es ? ("Fallo al restaurar archivos en " + dst_target)
-                                : ("Failed to restore files at " + dst_target);
-            MACHETE_LOG("[RESTORE]", "Failed to restore files at %s (files copied: %d)",
-                        dst_target.c_str(), files_count);
-        }
-
-        return res;
-#if defined(__cpp_exceptions) || defined(__EXCEPTIONS) || defined(_CPPUNWIND)
-    }
-    catch (const std::exception &e)
-    {
-        MACHETE_LOG("[RESTORE]", "Exception during restore of %s: %s", game.title_id.c_str(), e.what());
-        OperationResult res;
-        res.success = false;
-        res.message = std::string("Error inesperado en restauracion: ") + e.what();
-        return res;
-    }
-    catch (...)
-    {
-        MACHETE_LOG("[RESTORE]", "Fatal unknown exception during restore of %s", game.title_id.c_str());
-        OperationResult res;
-        res.success = false;
-        res.message = "Error crítico desconocido durante la restauracion";
-        return res;
-    }
-#endif
+    return restore_from_folder(game, backup.folder_path, backup.device_label, progress_cb);
 }
 
 } // namespace machete::save

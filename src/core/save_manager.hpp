@@ -47,13 +47,24 @@ struct BackupItem
     int file_count = 0;
     std::uint64_t total_bytes = 0;
     bool has_keystone = false;
+    bool has_decrypted = false;
+    bool has_crypto_vault = false;
 };
 
+// Verifica si la consola ya cuenta con un contenedor Save Dummy local (sdimg_*) para este juego
+bool has_local_save_dummy_for_game(const scanner::ScannedGame &game);
+
 // Respalda la partida de un juego hacia el dispositivo de almacenamiento seleccionado
-// Preserva intacto el archivo keystone y sincroniza las caches vnode (fsync/sync) para evitar CE-108255-1
+// Preserva intacto el archivo keystone, archiva crypto_vault.bin y extrae archivos desencriptados (decrypted/) via PFS
 OperationResult backup_game_save(const scanner::ScannedGame &game,
                                  const storage::StorageDevice &dest_device,
                                  ProgressCallback progress_cb = nullptr);
+
+// Restaura una copia de seguridad desde cualquier carpeta hacia la ubicacion activa del juego
+OperationResult restore_from_folder(const scanner::ScannedGame &game,
+                                    const std::string &backup_folder,
+                                    const std::string &source_label,
+                                    ProgressCallback progress_cb = nullptr);
 
 // Restaura una copia de seguridad hacia la ubicacion activa del juego en /user/home/.../savedata/
 OperationResult restore_game_save(const scanner::ScannedGame &game,
@@ -70,3 +81,4 @@ OperationResult restore_backup_item(const scanner::ScannedGame &game,
                                     ProgressCallback progress_cb = nullptr);
 
 } // namespace machete::save
+

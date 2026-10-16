@@ -57,10 +57,81 @@ struct SfoParamsField
 
 struct ResignParams
 {
-    std::uint32_t target_user_id = 0;   // User ID local de la PS5 (ej. 0x105f615a)
-    std::uint64_t target_account_id = 0; // 64-bit Account ID
-    const std::uint8_t *psid = nullptr; // 16 bytes OpenPSID si se conoce
+    std::uint32_t target_user_id = 0;    // User ID local de la PS5 (ej. 0x105f615a)
+    std::uint64_t target_account_id = 0; // 64-bit Account ID (0 para cuenta offline no activada)
+    bool apply_account_id = true;        // Escribir target_account_id incluso si es 0 (modo Apollo offline)
+    const std::uint8_t *psid = nullptr;  // 16 bytes OpenPSID si se conoce
 };
+
+inline bool read_account_id_from_sfo(const std::string &sfo_path, std::uint64_t &out_account_id)
+{
+    std::FILE *in = std::fopen(sfo_path.c_str(), "rb");
+    if (!in)
+        return false;
+
+    std::fseek(in, 0, SEEK_END);
+    const long fsize = std::ftell(in);
+    std::fseek(in, 0, SEEK_SET);
+
+    if (fsize <= 0 || fsize > 2 * 1024 * 1024)
+    {
+        std::fclose(in);
+        return false;
+    }
+
+    std::vector<std::uint8_t> buffer(static_cast<std::size_t>(fsize));
+    const std::size_t read_bytes = std::fread(buffer.data(), 1, buffer.size(), in);
+    std::fclose(in);
+
+    if (read_bytes != buffer.size() || buffer.size() < sizeof(SfoHeader))
+        return false;
+
+    const auto *header = reinterpret_cast<const SfoHeader *>(buffer.data());
+    if (header->magic != SFO_MAGIC)
+        return false;
+
+    const std::size_t total_buf_size = buffer.size();
+    if (header->key_table_offset >= total_buf_size ||
+        header->data_table_offset >= total_buf_size ||
+        header->data_table_offset < header->key_table_offset)
+        return false;
+
+    const std::size_t entries_bytes = static_cast<std::size_t>(header->num_entries) * sizeof(SfoIndexEntry);
+    if (sizeof(SfoHeader) + entries_bytes > header->key_table_offset)
+        return false;
+
+    const auto *entries = reinterpret_cast<const SfoIndexEntry *>(buffer.data() + sizeof(SfoHeader));
+    const char *key_table = reinterpret_cast<const char *>(buffer.data() + header->key_table_offset);
+    const std::size_t key_table_size = header->data_table_offset - header->key_table_offset;
+    const std::uint8_t *data_table = buffer.data() + header->data_table_offset;
+    const std::size_t data_table_size = total_buf_size - header->data_table_offset;
+
+    for (std::uint32_t i = 0; i < header->num_entries; ++i)
+    {
+        if (entries[i].key_offset >= key_table_size)
+            continue;
+        const char *key = key_table + entries[i].key_offset;
+        bool key_null_terminated = false;
+        for (std::size_t k = entries[i].key_offset; k < key_table_size; ++k)
+        {
+            if (key_table[k] == '\0')
+            {
+                key_null_terminated = true;
+                break;
+            }
+        }
+        if (!key_null_terminated || entries[i].data_offset >= data_table_size)
+            continue;
+
+        const std::size_t remaining = data_table_size - entries[i].data_offset;
+        if (std::strcmp(key, "ACCOUNT_ID") == 0 && entries[i].param_max_length >= 8 && remaining >= 8)
+        {
+            std::memcpy(&out_account_id, data_table + entries[i].data_offset, 8);
+            return true;
+        }
+    }
+    return false;
+}
 
 inline bool resign_param_sfo(const std::string &sfo_path, const ResignParams &params)
 {
@@ -136,7 +207,7 @@ inline bool resign_param_sfo(const std::string &sfo_path, const ResignParams &pa
             entries[i].param_max_length >= 8 &&
             remaining_data_space >= 8)
         {
-            if (params.target_account_id != 0)
+            if (params.apply_account_id)
             {
                 std::memcpy(val_ptr, &params.target_account_id, 8);
                 modified = true;
@@ -146,6 +217,7 @@ inline bool resign_param_sfo(const std::string &sfo_path, const ResignParams &pa
                             sfo_path.c_str());
             }
         }
+
 
         // 2. Modificar PARAMS (user_id, psid_hmac, title_id_2) de forma segura
         if (std::strcmp(key, "PARAMS") == 0 &&

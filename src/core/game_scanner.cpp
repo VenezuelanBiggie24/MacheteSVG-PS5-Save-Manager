@@ -883,6 +883,7 @@ std::vector<ScannedGame> scan_installed_games_and_saves()
                     if (bytes > 0)
                     {
                         game.total_bytes += bytes;
+                        game.has_save_dummy = true;
                         game.size_str = format_bytes(game.total_bytes);
                         if (mtime > latest_mtimes[title_id])
                         {

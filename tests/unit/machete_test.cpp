@@ -14,6 +14,7 @@
 #include "core/sha256_hmac.hpp"
 #include "core/sfo_resigner.hpp"
 #include "core/keystone_manager.hpp"
+#include "core/pfs_mount_manager.hpp"
 #include "core/samu_vault.hpp"
 #include "core/account_manager.hpp"
 
@@ -725,6 +726,137 @@ TEST(MacheteServerTest, ThreadSafeFindGame)
         EXPECT_TRUE(server.find_game(games[0].title_id, found));
         EXPECT_EQ(found.title_id, games[0].title_id);
     }
+}
+
+TEST(MachetePfsTest, SaveDummyPreservationAndParamJsonUpdate)
+{
+    const std::string test_root = "/tmp/machete_pfs_unit_test";
+    const std::string local_save = test_root + "/local_save";
+    const std::string local_sys = local_save + "/sce_sys";
+    const std::string preserve_dir = test_root + "/preserved_dummy";
+
+    mkdir(test_root.c_str(), 0777);
+    mkdir(local_save.c_str(), 0777);
+    mkdir(local_sys.c_str(), 0777);
+
+    // 1. Sin sdimg_*, has_local_save_dummy debe devolver false
+    EXPECT_FALSE(machete::pfs::has_local_save_dummy(local_save));
+
+    // 2. Crear un Save Dummy PS5 simulado (sdimg_slot0 + sce_sys/param.json)
+    const std::string sdimg_path = local_save + "/sdimg_slot0";
+    {
+        FILE *f = std::fopen(sdimg_path.c_str(), "wb");
+        ASSERT_NE(f, nullptr);
+        std::fputs("LOCAL_CONSOLE_SAMU_SEALED_CONTAINER_DATA_1234567890", f);
+        std::fclose(f);
+    }
+    const std::string param_json_path = local_sys + "/param.json";
+    {
+        FILE *f = std::fopen(param_json_path.c_str(), "wb");
+        ASSERT_NE(f, nullptr);
+        std::fputs("{\"titleId\":\"PPSA01411\",\"fileSize\":1024,\"mtime\":\"2026-01-01T00:00:00Z\"}", f);
+        std::fclose(f);
+    }
+
+    EXPECT_TRUE(machete::pfs::has_local_save_dummy(local_save));
+
+    // 3. Preservar el Save Dummy local antes de que una copia sobrescriba la carpeta
+    EXPECT_TRUE(machete::pfs::preserve_local_save_dummy(local_save, preserve_dir));
+    EXPECT_EQ(access((preserve_dir + "/sdimg_slot0").c_str(), F_OK), 0);
+
+    // 4. Actualizar fileSize en param.json al tamano real de sdimg_slot0
+    machete::pfs::update_ps5_param_json_size(param_json_path, 51ULL);
+    {
+        FILE *f = std::fopen(param_json_path.c_str(), "rb");
+        ASSERT_NE(f, nullptr);
+        char buf[256] = {0};
+        std::fread(buf, 1, sizeof(buf) - 1, f);
+        std::fclose(f);
+        EXPECT_NE(std::string(buf).find("\"fileSize\":51"), std::string::npos);
+    }
+
+    // Limpieza
+    std::remove((preserve_dir + "/sce_sys/param.json").c_str());
+    rmdir((preserve_dir + "/sce_sys").c_str());
+    std::remove((preserve_dir + "/sdimg_slot0").c_str());
+    rmdir(preserve_dir.c_str());
+    std::remove(param_json_path.c_str());
+    rmdir(local_sys.c_str());
+    std::remove(sdimg_path.c_str());
+    rmdir(local_save.c_str());
+    rmdir(test_root.c_str());
+}
+
+TEST(MachetePfsTest, CrossConsolePs5RestoreRequiresSaveDummyWhenMissing)
+{
+    const std::string test_root = "/tmp/machete_cross_test";
+    const std::string backup_dir = test_root + "/PPSA77777";
+    const std::string dec_slot = backup_dir + "/decrypted/slot0";
+    const std::string dst_save = test_root + "/dst_savedata_empty";
+
+    mkdir(test_root.c_str(), 0777);
+    mkdir(backup_dir.c_str(), 0777);
+    mkdir((backup_dir + "/decrypted").c_str(), 0777);
+    mkdir(dec_slot.c_str(), 0777);
+
+    // Crear un archivo desencriptado en el respaldo
+    {
+        FILE *f = std::fopen((dec_slot + "/progress.dat").c_str(), "wb");
+        ASSERT_NE(f, nullptr);
+        std::fputs("DECRYPTED_GAME_PROGRESS", f);
+        std::fclose(f);
+    }
+    EXPECT_TRUE(machete::pfs::has_decrypted_payload(backup_dir));
+
+    // Crear un crypto_vault.bin simulando otra consola (open_psid diferente)
+    machete::vault::CryptoVaultRecord rec{};
+    std::memset(&rec, 0, sizeof(rec));
+    rec.magic = machete::vault::VAULT_MAGIC;
+    rec.version = machete::vault::VAULT_VERSION;
+    std::snprintf(rec.title_id, sizeof(rec.title_id), "%s", "PPSA77777");
+    std::snprintf(rec.platform, sizeof(rec.platform), "%s", "PS5");
+    rec.open_psid[0] = 0xCC;
+    rec.open_psid[1] = 0xDD;
+    {
+        machete::crypto::Sha256 sha;
+        const std::size_t hashable_len = offsetof(machete::vault::CryptoVaultRecord, integrity_sha256);
+        sha.update(reinterpret_cast<const std::uint8_t *>(&rec), hashable_len);
+        sha.finish(rec.integrity_sha256);
+
+        FILE *fv = std::fopen((backup_dir + "/crypto_vault.bin").c_str(), "wb");
+        ASSERT_NE(fv, nullptr);
+        std::fwrite(&rec, 1, sizeof(rec), fv);
+        std::fclose(fv);
+    }
+
+    machete::vault::CryptoVaultRecord verify_rec{};
+    EXPECT_TRUE(machete::vault::read_vault_record(backup_dir, verify_rec));
+    EXPECT_TRUE(machete::pfs::is_backup_from_different_console(backup_dir, true));
+
+    // Intentar restaurar en dst_save donde NO existe Save Dummy local
+    machete::scanner::ScannedGame game;
+    game.title = "Cross Console Test Game";
+    game.title_id = "PPSA77777";
+    game.platform = "PS5";
+    game.save_path = dst_save;
+
+    machete::save::BackupItem item;
+    item.title_id = "PPSA77777";
+    item.folder_path = backup_dir;
+    item.has_decrypted = true;
+    item.has_crypto_vault = true;
+
+    auto res = machete::save::restore_backup_item(game, item);
+    EXPECT_FALSE(res.success);
+    EXPECT_NE(res.message.find("Save Dummy"), std::string::npos);
+
+    // Limpieza
+    std::remove((backup_dir + "/crypto_vault.bin").c_str());
+    std::remove((dec_slot + "/progress.dat").c_str());
+    rmdir(dec_slot.c_str());
+    rmdir((backup_dir + "/decrypted").c_str());
+    rmdir(backup_dir.c_str());
+    rmdir(test_root.c_str());
 }
 
 } // namespace hui::testing
