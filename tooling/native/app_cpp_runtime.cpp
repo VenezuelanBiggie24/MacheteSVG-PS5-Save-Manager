@@ -150,3 +150,40 @@ void operator delete[](void *address, std::align_val_t, const std::nothrow_t &) 
 {
     free(address);
 }
+
+extern "C"
+{
+    int fchown(int fd, unsigned int uid, unsigned int gid)
+    {
+        (void)fd;
+        (void)uid;
+        (void)gid;
+        return 0;
+    }
+
+    int chown(const char *path, unsigned int uid, unsigned int gid)
+    {
+        (void)path;
+        (void)uid;
+        (void)gid;
+        return 0;
+    }
+
+    char *getcwd(char *buf, std::size_t size)
+    {
+        if (buf == nullptr || size < 2)
+            return nullptr;
+        buf[0] = '/';
+        buf[1] = '\0';
+        return buf;
+    }
+
+    long readlink(const char *path, char *buf, std::size_t bufsiz)
+    {
+        (void)path;
+        (void)buf;
+        (void)bufsiz;
+        return -1;
+    }
+}
+

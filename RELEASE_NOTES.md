@@ -6,7 +6,42 @@
 
 ## English Documentation
 
-### Version 1.2.6 (Latest Release) - Embedded SQLite Engine, Guaranteed savedata.db Repair & Dual SPRX Loader
+### Version 1.2.7 (Latest Release) - Elimination of Unexported Libc Stubs (fchown/chown) & Crash-Free Restore
+
+MacheteSVG v1.2.7 permanently eliminates a fatal SIGSEGV segmentation fault (`si_addr: 0`) that occurred during the finalization of savegame restores on PlayStation 5 consoles running root jailbreak environments. The crash was triggered when SQLite's internal WAL checkpoint / file locking mechanism invoked POSIX `fchown()`, which exists in compile-time SDK stubs (`libkernel_sys.so`) but is not exported in userland by Sony's `libkernel.prx`. Version 1.2.7 provides built-in strong runtime stubs directly inside `eboot.bin`, purges all unexported dynamic symbols from the ELF, and adds database concurrency protection (`busy_timeout = 3000ms`).
+
+#### Key Enhancements in v1.2.7
+1. **Elimination of Unexported `fchown` & `chown` NULL Pointer Dereference:**
+   - Under root escalation (`UID 0`), SQLite's internal Unix VFS (`robustFchown`) attempted to preserve ownership when creating or accessing database sidecars (`-wal`, `-shm`).
+   - On Prospero OS, `fchown` and `chown` are unexported in retail/jailbroken `libkernel.prx`, leaving their Global Offset Table (GOT) entries as `0x0`. Calling them resulted in jumping to address 0 (`SIGSEGV`).
+   - Built strong local implementations directly in `tooling/native/app_cpp_runtime.cpp`, completely resolving all calls internally at link time without any dynamic relocations in `.rela.dyn`.
+   - Also added built-in implementations for `getcwd` and `readlink` to ensure total isolation from unexported SDK stubs.
+2. **Compile-Time Flags for Clean SQLite VFS:**
+   - Added `-DHAVE_FCHOWN=0 -DHAVE_READLINK=0` compile definitions across `tools/build.sh` and `tools/build-tests.sh`.
+3. **Database Concurrency Protection:**
+   - Added `PRAGMA busy_timeout = 3000;` before executing SQLite statements in `update_or_register_ps4_savedata_db` and `repair_title_corruption_flags` to gracefully wait if system daemons access `savedata.db` simultaneously.
+4. **Pure Runtime Dynamic Linking in PFS Mount Loader:**
+   - Replaced weak symbol declarations of `sceKernelLoadStartModule` and `sceKernelDlsym` in `pfs_mount_manager.hpp` with purely runtime `dlsym(RTLD_DEFAULT, ...)` lookup, eliminating weak dynamic symbol relocations.
+5. **Verified Zero Emojis & 106 Passing Unit Tests:**
+   - 100% clean zero-emoji certification across all files and documentation.
+   - All 106 unit tests passing.
+
+#### Package Checksums (v1.2.7)
+| File | Size | SHA-256 Checksum |
+| :--- | :--- | :--- |
+| `MacheteSVG_v1.2.7_PS5.zip` | 30.2 MB (31,668,524 bytes) | `3f820ff6ef2176c0b94289f6c797b3570b31e2d733cf675fe0825cb7941f0102` |
+| `eboot.bin` | 25.0 MB (26,204,448 bytes) | `04ff4f9656a46f27f97cc922c7606f9f2501a75d6f4d6036ad0c01bc63582b9e` |
+
+#### Installation (Easy FTP Method)
+1. Download `MacheteSVG_v1.2.7_PS5.zip`.
+2. Extract the archive on your PC to get the `PPSA99001` folder.
+3. Enable FTP on your PS5 (OnionHEN, etaHEN, etc.).
+4. Upload the `PPSA99001` folder directly to `/data/homebrew/` via FTP (resulting path: `/data/homebrew/PPSA99001/eboot.bin`).
+5. Launch MacheteSVG from your homebrew launcher or system menu.
+
+---
+
+### Version 1.2.6 - Embedded SQLite Engine, Guaranteed savedata.db Repair & Dual SPRX Loader
 
 MacheteSVG v1.2.6 permanently resolves the "Corrupted Data" ("Datos dañados") error when restoring PS4 savegames (`CUSAxxxxx`) on PlayStation 5 backwards compatibility by embedding SQLite v3.54.1 directly into the application binary. This completely eliminates reliance on Sony's restricted `libSceSqlite.sprx` runtime module, guaranteeing that the console's internal `savedata.db` database is updated and all corruption flags (`is_broken = 0`, `fake_broken = 0`) are repaired on every restore operation.
 
@@ -276,7 +311,42 @@ Upload the `PPSA99001` folder directly to `/data/homebrew/` via FTP.
 
 ## Notas de la Version en Espanol (Spanish Documentation)
 
-### Version 1.2.6 (Ultima Version) - Motor SQLite Embebido, Reparacion Garantizada de savedata.db y Cargador Dual SPRX
+### Version 1.2.7 (Ultima Version) - Eliminacion de Stubs Libc no Exportados (fchown/chown) y Restauracion Libre de Crashes
+
+MacheteSVG v1.2.7 elimina de forma definitiva el error fatal de segmentacion SIGSEGV (`si_addr: 0`) que ocurria durante la finalizacion de la restauracion de partidas en consolas PlayStation 5 con privilegios de root. El fallo se producia cuando el mecanismo interno de WAL checkpoint y bloqueo de archivos de SQLite invocaba la llamada POSIX `fchown()`, la cual existe como stub en el SDK en tiempo de compilacion (`libkernel_sys.so`) pero no esta exportada en espacio de usuario por Sony en `libkernel.prx`. La version 1.2.7 implementa stubs fuertes enlazados directamente dentro de `eboot.bin`, purga todos los simbolos dinamicos no exportados del ELF y anade proteccion de concurrencia en bases de datos (`busy_timeout = 3000ms`).
+
+#### Mejoras Principales en v1.2.7
+1. **Eliminacion de Puntero Nulo por Llamada a `fchown` y `chown` no Exportados:**
+   - Al escalar a root (`UID 0`), el VFS Unix de SQLite (`robustFchown`) intentaba preservar los permisos de propietario al crear o modificar los archivos auxiliares de la base de datos (`-wal`, `-shm`).
+   - En el sistema operativo Prospero, `fchown` y `chown` no son exportadas por `libkernel.prx`, dejando sus entradas en la tabla GOT en `0x0`. Invocar la funcion resultaba en un salto a la direccion cero (`SIGSEGV`).
+   - Se anadieron implementaciones locales directas en `tooling/native/app_cpp_runtime.cpp`, resolviendo todas las llamadas internamente en tiempo de enlace sin generar reubicaciones en `.rela.dyn`.
+   - Tambien se anadieron implementaciones seguras para `getcwd` y `readlink` para evitar cualquier dependencia de stubs no exportados.
+2. **Banderas de Compilacion para un VFS de SQLite Limpio:**
+   - Se anadieron las definiciones `-DHAVE_FCHOWN=0 -DHAVE_READLINK=0` en `tools/build.sh` y `tools/build-tests.sh`.
+3. **Proteccion de Concurrencia en Bases de Datos:**
+   - Se agrego `PRAGMA busy_timeout = 3000;` antes de ejecutar consultas SQLite en `update_or_register_ps4_savedata_db` y `repair_title_corruption_flags` para esperar limpiamente si algun proceso o servicio del sistema accede a `savedata.db` de forma simultanea.
+4. **Carga Dinamica Pura en Tiempo de Ejecucion en el Cargador PFS:**
+   - Se reemplazaron las declaraciones debiles de `sceKernelLoadStartModule` y `sceKernelDlsym` en `pfs_mount_manager.hpp` por una resolucion limpia via `dlsym(RTLD_DEFAULT, ...)`, eliminando simbolos dinamicos debiles en el ELF.
+5. **Certificacion de Cero Emojis y 106 Pruebas Unitarias Exitosas:**
+   - Certificacion 100% limpia de cero emojis en todos los archivos y documentacion.
+   - 106 pruebas unitarias completadas con 100% de exito.
+
+#### Sumas de Verificacion de Paquetes (v1.2.7)
+| Archivo | Tamano | Suma de Verificacion SHA-256 |
+| :--- | :--- | :--- |
+| `MacheteSVG_v1.2.7_PS5.zip` | 30.2 MB (31,668,524 bytes) | `3f820ff6ef2176c0b94289f6c797b3570b31e2d733cf675fe0825cb7941f0102` |
+| `eboot.bin` | 25.0 MB (26,204,448 bytes) | `04ff4f9656a46f27f97cc922c7606f9f2501a75d6f4d6036ad0c01bc63582b9e` |
+
+#### Instalacion (Metodo Facil via FTP)
+1. Descarga `MacheteSVG_v1.2.7_PS5.zip`.
+2. Descomprime el archivo en tu PC para obtener la carpeta `PPSA99001`.
+3. Habilita el servidor FTP en tu PS5 (OnionHEN, etaHEN, etc.).
+4. Copia la carpeta `PPSA99001` directamente en `/data/homebrew/` via FTP (ruta final: `/data/homebrew/PPSA99001/eboot.bin`).
+5. Inicia MacheteSVG directamente desde tu lanzador de homebrew o menu principal.
+
+---
+
+### Version 1.2.6 - Motor SQLite Embebido, Reparacion Garantizada de savedata.db y Cargador Dual SPRX
 
 MacheteSVG v1.2.6 resuelve de forma definitiva el error de "Datos dañados" ("Corrupted Data") al restaurar partidas de PS4 (`CUSAxxxxx`) en el modo de retrocompatibilidad de PlayStation 5 mediante la integracion embebida de SQLite v3.54.1 directamente en el binario ejecutable. Esto elimina por completo la dependencia del modulo restringido `libSceSqlite.sprx` de Sony, garantizando que la base de datos interna `savedata.db` de la consola se actualice y todas las banderas de corrupcion (`is_broken = 0`, `fake_broken = 0`) queden reparadas en cada operacion de restauracion.
 

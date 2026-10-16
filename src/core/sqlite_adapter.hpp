@@ -178,9 +178,16 @@ inline bool update_or_register_ps4_savedata_db(std::uint32_t user_id,
         if (access(dbp.c_str(), F_OK) != 0)
             continue;
 
+        MACHETE_LOG("[DB]", "Attempting to index PS4 save in %s: %s/%s", dbp.c_str(), title_id.c_str(), slot_name.c_str());
+
         void *db = nullptr;
         if (adapter.open(dbp.c_str(), &db) != 0 || !db)
+        {
+            MACHETE_LOG("[DB]", "Could not open %s for indexing", dbp.c_str());
             continue;
+        }
+
+        (void)adapter.exec(db, "PRAGMA busy_timeout = 3000;", nullptr, nullptr, nullptr);
 
         // 1. Asegurar tabla si no existiera
         const char *create_tbl =
@@ -269,6 +276,8 @@ inline bool repair_title_corruption_flags(std::uint32_t user_id, const std::stri
         void *db = nullptr;
         if (adapter.open(dbp.c_str(), &db) != 0 || !db)
             continue;
+
+        (void)adapter.exec(db, "PRAGMA busy_timeout = 3000;", nullptr, nullptr, nullptr);
 
         char sql[256];
         std::snprintf(sql, sizeof(sql),

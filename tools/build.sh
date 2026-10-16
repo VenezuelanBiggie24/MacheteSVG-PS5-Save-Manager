@@ -163,7 +163,7 @@ for source in "${sources[@]}"; do
     # Vendored upstream code is built as published; its warnings are not ours to fix.
     [[ $source != src/third_party/* && $source != src/vendor/* ]] || args+=(-w)
     if [[ $source == src/vendor/sqlite/* ]]; then
-        args+=(-DSQLITE_THREADSAFE=1 -DSQLITE_OMIT_LOAD_EXTENSION=1 -DSQLITE_DEFAULT_MEMSTATUS=0)
+        args+=(-DSQLITE_THREADSAFE=1 -DSQLITE_OMIT_LOAD_EXTENSION=1 -DSQLITE_DEFAULT_MEMSTATUS=0 -DHAVE_FCHOWN=0 -DHAVE_READLINK=0)
     fi
     for definition in "${definitions[@]}"; do
         [[ $definition =~ ^[A-Za-z_][A-Za-z0-9_]*(=[A-Za-z0-9_]+)?$ ]] || {

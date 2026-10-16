@@ -26,12 +26,7 @@
 #include <vector>
 #include <mutex>
 
-#if defined(__PROSPERO__) || defined(__Prospero__) || defined(__PS5__)
-extern "C" {
-    __attribute__((weak)) int sceKernelLoadStartModule(const char *name, std::size_t argc, const void *argv, std::uint32_t flags, void *pOpt, int *pRes);
-    __attribute__((weak)) int sceKernelDlsym(int handle, const char *symbol, void **addrp);
-}
-#endif
+
 
 namespace machete::pfs
 {
@@ -400,29 +395,34 @@ public:
             }
         }
 
-#if defined(__PROSPERO__) || defined(__Prospero__) || defined(__PS5__)
-        if ((!mount_fn_ || !umount_fn_) && sceKernelLoadStartModule && sceKernelDlsym)
+        if (!mount_fn_ || !umount_fn_)
         {
-            for (int i = 0; candidate_paths[i]; ++i)
+            auto p_load = reinterpret_cast<int (*)(const char *, std::size_t, const void *, std::uint32_t, void *, int *)>(
+                dlsym(RTLD_DEFAULT, "sceKernelLoadStartModule"));
+            auto p_dlsym = reinterpret_cast<int (*)(int, const char *, void **)>(
+                dlsym(RTLD_DEFAULT, "sceKernelDlsym"));
+            if (p_load && p_dlsym)
             {
-                int mod_res = 0;
-                int mod_h = sceKernelLoadStartModule(candidate_paths[i], 0, nullptr, 0, nullptr, &mod_res);
-                if (mod_h > 0)
+                for (int i = 0; candidate_paths[i]; ++i)
                 {
-                    sceKernelDlsym(mod_h, "sceFsInitMountSaveDataOpt", reinterpret_cast<void **>(&init_mount));
-                    sceKernelDlsym(mod_h, "sceFsMountSaveData", reinterpret_cast<void **>(&mount_fn_));
-                    sceKernelDlsym(mod_h, "sceFsInitUmountSaveDataOpt", reinterpret_cast<void **>(&init_umount_fn_));
-                    sceKernelDlsym(mod_h, "sceFsUmountSaveData", reinterpret_cast<void **>(&umount_fn_));
-                    if (init_mount && mount_fn_ && umount_fn_)
+                    int mod_res = 0;
+                    int mod_h = p_load(candidate_paths[i], 0, nullptr, 0, nullptr, &mod_res);
+                    if (mod_h > 0)
                     {
-                        MACHETE_LOG("[PFS]", "Resolved libSceFsInternalForVsh symbols via sceKernelLoadStartModule (%s, handle=0x%x)",
-                                    candidate_paths[i], mod_h);
-                        break;
+                        p_dlsym(mod_h, "sceFsInitMountSaveDataOpt", reinterpret_cast<void **>(&init_mount));
+                        p_dlsym(mod_h, "sceFsMountSaveData", reinterpret_cast<void **>(&mount_fn_));
+                        p_dlsym(mod_h, "sceFsInitUmountSaveDataOpt", reinterpret_cast<void **>(&init_umount_fn_));
+                        p_dlsym(mod_h, "sceFsUmountSaveData", reinterpret_cast<void **>(&umount_fn_));
+                        if (init_mount && mount_fn_ && umount_fn_)
+                        {
+                            MACHETE_LOG("[PFS]", "Resolved libSceFsInternalForVsh symbols via sceKernelLoadStartModule (%s, handle=0x%x)",
+                                        candidate_paths[i], mod_h);
+                            break;
+                        }
                     }
                 }
             }
         }
-#endif
 
         if (!init_mount || !mount_fn_ || !umount_fn_)
         {
