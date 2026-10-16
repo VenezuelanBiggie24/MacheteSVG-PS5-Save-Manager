@@ -917,4 +917,63 @@ TEST(MacheteQrTest, BoundsAndDeterminism)
     EXPECT_EQ(m1.modules, m2.modules);
 }
 
+TEST(MacheteSaveTest, Ps4SaveRestoreBypassesSaveDummy)
+{
+    const std::string test_root = "/tmp/machete_ps4_test";
+    const std::string backup_dir = test_root + "/CUSA18600 - TestPS4Game";
+    const std::string dst_save = test_root + "/dst_ps4_save";
+
+    mkdir(test_root.c_str(), 0777);
+    mkdir(backup_dir.c_str(), 0777);
+
+    // Crear un archivo de partida de PS4 simulado
+    {
+        FILE *f = std::fopen((backup_dir + "/savedata0.bin").c_str(), "wb");
+        ASSERT_NE(f, nullptr);
+        std::fputs("PS4_ENCRYPTED_SAVE_PAYLOAD", f);
+        std::fclose(f);
+    }
+    {
+        FILE *f = std::fopen((backup_dir + "/keystone").c_str(), "wb");
+        ASSERT_NE(f, nullptr);
+        std::vector<std::uint8_t> dummy_ks(96, 0x5A);
+        std::fwrite(dummy_ks.data(), 1, dummy_ks.size(), f);
+        std::fclose(f);
+    }
+
+    // Verificar que is_backup_from_different_console retorna false para PS4
+    EXPECT_FALSE(machete::pfs::is_backup_from_different_console(backup_dir, false));
+
+    // Restaurar partida de PS4 en un destino vacio (sin Save Dummy previo)
+    machete::scanner::ScannedGame game;
+    game.title = "Test PS4 Game";
+    game.title_id = "CUSA18600";
+    game.platform = "PS4";
+    game.save_path = dst_save;
+
+    machete::save::BackupItem item;
+    item.title_id = "CUSA18600";
+    item.folder_path = backup_dir;
+    item.has_decrypted = false;
+    item.has_crypto_vault = false;
+
+    auto res = machete::save::restore_backup_item(game, item);
+    EXPECT_TRUE(res.success);
+    EXPECT_EQ(res.message.find("Save Dummy"), std::string::npos);
+
+    // Comprobar que los archivos existen en el destino
+    struct stat st{};
+    EXPECT_EQ(stat((dst_save + "/savedata0.bin").c_str(), &st), 0);
+    EXPECT_EQ(stat((dst_save + "/keystone").c_str(), &st), 0);
+
+    // Limpieza
+    std::remove((dst_save + "/savedata0.bin").c_str());
+    std::remove((dst_save + "/keystone").c_str());
+    rmdir(dst_save.c_str());
+    std::remove((backup_dir + "/savedata0.bin").c_str());
+    std::remove((backup_dir + "/keystone").c_str());
+    rmdir(backup_dir.c_str());
+    rmdir(test_root.c_str());
+}
+
 } // namespace hui::testing

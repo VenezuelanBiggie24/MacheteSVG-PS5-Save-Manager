@@ -654,10 +654,14 @@ void post_process_restored_save(const scanner::ScannedGame &game,
     const std::uint32_t user_id = extract_user_id_from_path(dst_target);
     const std::uint64_t active_account_id = machete::account::detect_active_account_id(user_id);
 
-    // 1. Ejecutar motor PFS: Inyeccion en Save Dummy (Cross-Console) y Resignado en caliente (Apollo PS4)
-    pfs::PfsRestoreReport pfs_rep = machete::pfs::inject_and_resign_save(
-        game.title_id, is_ps5, dst_target, backup_folder, preserved_dummy_dir, had_local_dummy,
-        user_id, active_account_id, target_uid, target_gid);
+    // 1. Ejecutar motor PFS: Inyeccion en Save Dummy (Cross-Console) solo para partidas de PS5
+    pfs::PfsRestoreReport pfs_rep{};
+    if (is_ps5)
+    {
+        pfs_rep = machete::pfs::inject_and_resign_save(
+            game.title_id, is_ps5, dst_target, backup_folder, preserved_dummy_dir, had_local_dummy,
+            user_id, active_account_id, target_uid, target_gid);
+    }
 
     if (is_ps5)
     {
@@ -1083,8 +1087,8 @@ OperationResult restore_from_folder(const scanner::ScannedGame &game,
         }
 
         const bool is_ps5 = (game.platform == "PS5" || game.title_id.rfind("PPSA", 0) == 0);
-        const bool had_local_dummy = pfs::has_local_save_dummy(dst_target);
-        const bool cross_console = pfs::is_backup_from_different_console(backup_folder, is_ps5);
+        const bool had_local_dummy = is_ps5 ? pfs::has_local_save_dummy(dst_target) : false;
+        const bool cross_console = is_ps5 ? pfs::is_backup_from_different_console(backup_folder, is_ps5) : false;
 
         // Si es una partida de PS5 de otra consola (o solo trae decrypted/) y NO existe un Save Dummy local en la consola,
         // detener antes de escribir un sdimg_* foraneo corrupto e instruir al usuario como crear el Save Dummy
@@ -1112,18 +1116,18 @@ OperationResult restore_from_folder(const scanner::ScannedGame &game,
         // Preservar el Save Dummy local (sdimg_* sellado por el SAMU de esta consola) antes de copiar archivos
         const std::string preserved_dummy_dir =
             std::string(pfs::SAVE_STAGING_DIR) + "/preserved_dummy_" + game.title_id;
-        pfs::remove_dir_recursive_simple(preserved_dummy_dir);
-        if (had_local_dummy)
+        if (is_ps5 && had_local_dummy)
         {
+            pfs::remove_dir_recursive_simple(preserved_dummy_dir);
             (void)pfs::preserve_local_save_dummy(dst_target, preserved_dummy_dir);
         }
 
         int files_count = 0;
         std::uint64_t bytes_copied = 0;
-        MACHETE_LOG("[RESTORE]", "Starting restore from %s -> %s (uid=%d, gid=%d, local_dummy=%d, cross_console=%d)",
+        MACHETE_LOG("[RESTORE]", "Starting restore from %s -> %s (uid=%d, gid=%d, is_ps5=%d, local_dummy=%d, cross_console=%d)",
                     backup_folder.c_str(), dst_target.c_str(),
                     static_cast<int>(target_uid), static_cast<int>(target_gid),
-                    had_local_dummy ? 1 : 0, cross_console ? 1 : 0);
+                    is_ps5 ? 1 : 0, had_local_dummy ? 1 : 0, cross_console ? 1 : 0);
 
         const bool ok = copy_directory_recursive(backup_folder, dst_target, files_count,
                                                  bytes_copied, total_dir_bytes, progress_cb,
@@ -1132,7 +1136,10 @@ OperationResult restore_from_folder(const scanner::ScannedGame &game,
         pfs::PfsRestoreReport pfs_report{};
         post_process_restored_save(game, dst_target, backup_folder, preserved_dummy_dir,
                                    had_local_dummy, target_uid, target_gid, &pfs_report);
-        pfs::remove_dir_recursive_simple(preserved_dummy_dir);
+        if (is_ps5 && had_local_dummy)
+        {
+            pfs::remove_dir_recursive_simple(preserved_dummy_dir);
+        }
         ::sync();
 
         files_count += pfs_report.injected_files;
