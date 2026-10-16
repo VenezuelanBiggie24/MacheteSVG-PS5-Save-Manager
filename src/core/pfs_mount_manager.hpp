@@ -23,6 +23,7 @@
 #include <sys/stat.h>
 #include <unistd.h>
 #include <vector>
+#include <mutex>
 
 namespace machete::pfs
 {
@@ -305,6 +306,12 @@ inline bool decrypt_pfs_key_for_slot(const std::string &save_dir,
     return false;
 }
 
+inline std::mutex &pfs_global_mount_mutex()
+{
+    static std::mutex s_pfs_mtx;
+    return s_pfs_mtx;
+}
+
 class ScopedPfsMount
 {
 public:
@@ -319,8 +326,13 @@ public:
         if (mounted_)
             return false;
 
+        mount_lock_ = std::unique_lock<std::mutex>(pfs_global_mount_mutex());
+
         if (getuid() != 0)
+        {
+            mount_lock_.unlock();
             return false;
+        }
 
         void *h = dlopen("/system/common/lib/libSceFsInternalForVsh.sprx", RTLD_NOW | RTLD_GLOBAL);
         if (!h)
@@ -343,6 +355,7 @@ public:
         if (!init_mount || !mount_fn_ || !umount_fn_)
         {
             MACHETE_LOG("[PFS]", "Missing sceFsMountSaveData symbols in libSceFsInternalForVsh.sprx");
+            mount_lock_.unlock();
             return false;
         }
 
@@ -362,6 +375,7 @@ public:
         if (!copy_file_atomic(image_path, staged_img))
         {
             MACHETE_LOG("[PFS]", "Failed to stage PFS image %s -> %s", image_path.c_str(), staged_img.c_str());
+            mount_lock_.unlock();
             return false;
         }
 
@@ -375,6 +389,7 @@ public:
             MACHETE_LOG("[PFS]", "sceFsMountSaveData failed on %s (rc=0x%08x)",
                         staged_img.c_str(), static_cast<unsigned int>(rc));
             (void)unlink(staged_img.c_str());
+            mount_lock_.unlock();
             return false;
         }
 
@@ -390,7 +405,11 @@ public:
     bool unmount()
     {
         if (!mounted_)
+        {
+            if (mount_lock_.owns_lock())
+                mount_lock_.unlock();
             return true;
+        }
 
         ::sync();
         SaveMountOpt uopt{};
@@ -425,6 +444,8 @@ public:
         (void)rmdir(SAVE_MNT_PATH);
 
         mounted_ = false;
+        if (mount_lock_.owns_lock())
+            mount_lock_.unlock();
         return ok;
     }
 
@@ -434,6 +455,7 @@ public:
 private:
     bool mounted_ = false;
     bool write_back_ = false;
+    std::unique_lock<std::mutex> mount_lock_;
     std::string original_image_path_;
     std::string staged_image_path_;
     int (*mount_fn_)(SaveMountOpt *, const char *, const char *, const void *) = nullptr;

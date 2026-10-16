@@ -18,6 +18,7 @@
 #include "ui/glyphs.hpp"
 #include "ui/motion.hpp"
 #include "ui/theme.hpp"
+#include "ui/qr_code.hpp"
 #include "ui/widgets.hpp"
 
 #include <algorithm>
@@ -785,7 +786,7 @@ class Machete final : public app::Concept
         const bool is_running = server.is_running();
         const int max_focus = 1;
 
-        if (input.nav == Direction::down)
+        if (input.nav == Direction::down || input.nav == Direction::right)
         {
             if (web_server_dialog_focus_ < max_focus)
             {
@@ -793,7 +794,7 @@ class Machete final : public app::Concept
                 feedback.play(audio::Cue::focus, 1.0f, 0.0f);
             }
         }
-        else if (input.nav == Direction::up)
+        else if (input.nav == Direction::up || input.nav == Direction::left)
         {
             if (web_server_dialog_focus_ > 0)
             {
@@ -1334,20 +1335,21 @@ class Machete final : public app::Concept
             list.push_opacity(tween::clamp01(ws_show));
             list.push_transform(0.94f + 0.06f * tween::clamp01(ws_show), 960, 540, 0, 0);
 
-            const Rect dlg{500, 190, 920, 680};
+            const Rect dlg{380, 170, 1160, 740};
             paint.panel(dlg);
 
             auto &server = machete::server::WebServer::instance();
             const bool is_running = server.is_running();
             const bool is_es = (machete::i18n::current_language() == machete::i18n::Language::Spanish);
 
+            // Columna Izquierda: Titulos y controles de servidor
             paint.heading(machete::i18n::tr(machete::i18n::StringId::WebServerDialogTitle),
-                          550, 255, 34, theme.text);
+                          425, 235, 32, theme.text);
             paint.body(machete::i18n::tr(machete::i18n::StringId::WebServerDialogSubtitle),
-                       550, 295, 20, theme.text_muted);
+                       425, 270, 18, theme.text_muted);
 
             // Estado del servidor (Pildora / Badge de estado)
-            const Rect status_badge{550, 335, 820, 48};
+            const Rect status_badge{425, 305, 650, 46};
             list.rounded_rect(status_badge, 10.0f,
                               is_running ? Color::rgb(0x0a2d1f).with_alpha(0.9f)
                                          : Color::rgb(0x2a2412).with_alpha(0.9f));
@@ -1363,8 +1365,8 @@ class Machete final : public app::Concept
 
             // Caja con la Direccion URL para el navegador
             paint.label(machete::i18n::tr(machete::i18n::StringId::WebServerUrlLabel),
-                        550, 420, 18, theme.text_muted);
-            const Rect url_box{550, 435, 820, 68};
+                        425, 375, 16, theme.text_muted);
+            const Rect url_box{425, 392, 650, 64};
             list.rounded_rect(url_box, 10.0f,
                               is_running ? Color::rgb(0x0e2744).with_alpha(0.95f)
                                          : Color::rgb(0x1a2130).with_alpha(0.85f));
@@ -1375,31 +1377,75 @@ class Machete final : public app::Concept
             const std::string s_url = is_running
                 ? server.url()
                 : ("http://<IP-PS5>:" + std::to_string(machete::server::kDefaultPort));
-            paint.heading(s_url.c_str(), url_box.cx(), url_box.cy() + 14, 34,
+            paint.heading(s_url.c_str(), url_box.cx(), url_box.cy() + 11, 28,
                           is_running ? Color::rgb(0x76d6ff) : Color::rgb(0x8899aa),
                           gfx::Align::center);
 
-            // Instruccion descriptiva
-            const Rect info_box{550, 525, 820, 120};
+            // Instrucciones descriptivas
+            const Rect info_box{425, 475, 650, 160};
             list.rounded_rect(info_box, 10.0f, Color::rgb(0xffffff).with_alpha(0.04f));
             paint.stroke(info_box, 10.0f, 1.0f, Color::rgb(0xffffff).with_alpha(0.08f));
 
             const char *line1 = is_es
-                ? "1. Abre el navegador de tu movil o PC conectado a la misma red Wi-Fi o cable."
-                : "1. Open the browser on your phone or PC connected to the same Wi-Fi or LAN.";
+                ? "1. Abre el navegador o escanea el codigo QR con tu telefono o tablet."
+                : "1. Open your browser or scan the QR code with your phone or tablet.";
             const char *line2 = is_es
-                ? "2. Ingresa la direccion web mostrada arriba para ver todas tus partidas."
-                : "2. Enter the web address shown above to view all your game saves.";
+                ? "2. Gestiona y descarga tus partidas en ZIP o restaura copias con un clic."
+                : "2. Manage and download your saves in ZIP or restore backups in one click.";
             const char *line3 = is_es
-                ? "3. Descarga archivos individuales o el paquete ZIP completo con un solo clic."
-                : "3. Download individual save files or complete ZIP archives in one click.";
+                ? "3. Transferencias directas en red local a maxima velocidad sin servicios cloud."
+                : "3. Direct LAN transfers at maximum speed with zero cloud service dependencies.";
 
-            paint.body(line1, info_box.x + 24, info_box.y + 32, 17, theme.text);
-            paint.body(line2, info_box.x + 24, info_box.y + 64, 17, theme.text);
-            paint.body(line3, info_box.x + 24, info_box.y + 96, 17, theme.text_muted);
+            paint.body(line1, info_box.x + 24, info_box.y + 36, 17, theme.text);
+            paint.body(line2, info_box.x + 24, info_box.y + 74, 17, theme.text);
+            paint.body(line3, info_box.x + 24, info_box.y + 112, 17, theme.text_muted);
+
+            // Columna Derecha: Tarjeta con Codigo QR (ISO/IEC 18004 con Quiet Zone)
+            const Rect qr_card{1115, 235, 385, 400};
+            list.rounded_rect(qr_card, 16.0f, Color::rgb(0xffffff));
+            paint.stroke(qr_card, 16.0f, 1.5f,
+                         is_running ? Color::rgb(0x76d6ff).with_alpha(0.6f)
+                                    : Color::rgb(0xcccccc).with_alpha(0.4f));
+
+            if (cached_qr_url_ != s_url)
+            {
+                cached_qr_url_ = s_url;
+                cached_qr_matrix_ = {};
+                hui::ui::qr::encode_text(s_url, cached_qr_matrix_);
+            }
+
+            if (cached_qr_matrix_.size > 0)
+            {
+                const int qsize = cached_qr_matrix_.size;
+                const float qr_box_size = 280.0f;
+                const float mod_size = std::floor(qr_box_size / static_cast<float>(qsize));
+                const float qr_actual_size = mod_size * static_cast<float>(qsize);
+                const float qr_offset_x = qr_card.x + (qr_card.w - qr_actual_size) * 0.5f;
+                const float qr_offset_y = qr_card.y + 24.0f;
+
+                for (int qy = 0; qy < qsize; ++qy)
+                {
+                    for (int qx = 0; qx < qsize; ++qx)
+                    {
+                        if (cached_qr_matrix_.get(qx, qy))
+                        {
+                            list.rounded_rect({qr_offset_x + static_cast<float>(qx) * mod_size,
+                                               qr_offset_y + static_cast<float>(qy) * mod_size,
+                                               mod_size, mod_size}, 0.0f, Color::rgb(0x0a0f1d));
+                        }
+                    }
+                }
+
+                paint.heading(is_es ? "Escanea con tu camara" : "Scan with your camera",
+                              qr_card.cx(), qr_offset_y + qr_actual_size + 36.0f, 18,
+                              Color::rgb(0x0a0f1d), gfx::Align::center);
+                paint.body(is_es ? "Acceso instantaneo a la Estacion Web" : "Instant access to Web Save Station",
+                           qr_card.cx(), qr_offset_y + qr_actual_size + 60.0f, 14,
+                           Color::rgb(0x4a5568), gfx::Align::center);
+            }
 
             // Botones interactivos (Iniciar/Detener y Cerrar)
-            const Rect btn_action{550, 675, 400, 54};
+            const Rect btn_action{425, 655, 520, 54};
             ui::Look action_look;
             action_look.focus = (web_server_dialog_focus_ == 0) ? 1.0f : 0.0f;
             const char *action_text = is_running
@@ -1409,7 +1455,7 @@ class Machete final : public app::Concept
                          is_running ? ui::ButtonKind::secondary : ui::ButtonKind::primary,
                          action_look);
 
-            const Rect btn_close{970, 675, 400, 54};
+            const Rect btn_close{980, 655, 520, 54};
             ui::Look close_look;
             close_look.focus = (web_server_dialog_focus_ == 1) ? 1.0f : 0.0f;
             paint.button(btn_close, machete::i18n::tr(machete::i18n::StringId::WebServerClose),
@@ -1738,6 +1784,10 @@ class Machete final : public app::Concept
     bool web_server_dialog_ = false;
     int web_server_dialog_focus_ = 0;
     tween::Spring web_server_dialog_show_;
+
+    // Cache de Codigo QR para el Servidor Web (calculo unico al cambiar URL)
+    mutable std::string cached_qr_url_;
+    mutable hui::ui::qr::QrMatrix cached_qr_matrix_;
 
     // Almacenamiento dinámico y Hotplug
     std::vector<machete::storage::StorageDevice> active_devices_;

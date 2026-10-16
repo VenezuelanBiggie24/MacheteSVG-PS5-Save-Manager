@@ -17,6 +17,7 @@
 #include "core/pfs_mount_manager.hpp"
 #include "core/samu_vault.hpp"
 #include "core/account_manager.hpp"
+#include "ui/qr_code.hpp"
 
 #include <fcntl.h>
 #include <sys/stat.h>
@@ -857,6 +858,63 @@ TEST(MachetePfsTest, CrossConsolePs5RestoreRequiresSaveDummyWhenMissing)
     rmdir((backup_dir + "/decrypted").c_str());
     rmdir(backup_dir.c_str());
     rmdir(test_root.c_str());
+}
+
+TEST(MacheteQrTest, EncodeHttpUrlAndVerifyFinderPatterns)
+{
+    hui::ui::qr::QrMatrix matrix{};
+    const std::string url = "http://192.168.1.50:8383";
+    const bool ok = hui::ui::qr::encode_text(url, matrix);
+
+    EXPECT_TRUE(ok);
+    EXPECT_GE(matrix.size, 21);
+    EXPECT_LE(matrix.size, 33);
+
+    const int s = matrix.size;
+
+    // 1. Finder superior izquierdo (0, 0 a 6, 6)
+    EXPECT_TRUE(matrix.get(0, 0));
+    EXPECT_TRUE(matrix.get(6, 0));
+    EXPECT_TRUE(matrix.get(0, 6));
+    EXPECT_TRUE(matrix.get(6, 6));
+    EXPECT_FALSE(matrix.get(1, 1));
+    EXPECT_TRUE(matrix.get(3, 3)); // Centro oscuro 3x3
+
+    // 2. Finder superior derecho (s - 7, 0 a s - 1, 6)
+    EXPECT_TRUE(matrix.get(s - 7, 0));
+    EXPECT_TRUE(matrix.get(s - 1, 0));
+    EXPECT_TRUE(matrix.get(s - 7, 6));
+    EXPECT_TRUE(matrix.get(s - 1, 6));
+    EXPECT_FALSE(matrix.get(s - 6, 1));
+    EXPECT_TRUE(matrix.get(s - 4, 3));
+
+    // 3. Finder inferior izquierdo (0, s - 7 a 6, s - 1)
+    EXPECT_TRUE(matrix.get(0, s - 7));
+    EXPECT_TRUE(matrix.get(6, s - 7));
+    EXPECT_TRUE(matrix.get(0, s - 1));
+    EXPECT_TRUE(matrix.get(6, s - 1));
+    EXPECT_FALSE(matrix.get(1, s - 6));
+    EXPECT_TRUE(matrix.get(3, s - 4));
+}
+
+TEST(MacheteQrTest, BoundsAndDeterminism)
+{
+    hui::ui::qr::QrMatrix m1{};
+    hui::ui::qr::QrMatrix m2{};
+
+    // Cadena vacia
+    EXPECT_FALSE(hui::ui::qr::encode_text("", m1));
+
+    // Cadena demasiado larga (> 62 caracteres)
+    const std::string long_str(65, 'A');
+    EXPECT_FALSE(hui::ui::qr::encode_text(long_str, m1));
+
+    // Determinismo: dos ejecuciones con la misma cadena producen matrices identicas
+    const std::string test_url = "http://10.0.0.123:8383";
+    EXPECT_TRUE(hui::ui::qr::encode_text(test_url, m1));
+    EXPECT_TRUE(hui::ui::qr::encode_text(test_url, m2));
+    EXPECT_EQ(m1.size, m2.size);
+    EXPECT_EQ(m1.modules, m2.modules);
 }
 
 } // namespace hui::testing

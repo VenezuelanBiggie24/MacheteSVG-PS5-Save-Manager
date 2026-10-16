@@ -1,12 +1,12 @@
 =====================================================
-   MacheteSVG v1.0.0 - PS5 & PS4 Savegame Manager
+   MacheteSVG v1.2.0 - PS5 & PS4 Savegame Manager
 =====================================================
 
 [ENGLISH GUIDE]
 SYSTEM REQUIREMENTS & COMPATIBILITY:
 - Console: PlayStation 5 (All Jailbroken Firmwares)
 - Environments: OnionHEN, etaHEN, or any PS5 jailbreak environment
-- Mounting engine: Native Prospero libSceSaveData / ShadowMount
+- Mounting engine: Native Prospero libSceSaveData / /dev/pfsmgr PFS mounting
 - Save Formats: PlayStation 5 native titles and PlayStation 4 backwards-compatible (BC) games
 
 AUTONOMOUS & FULLY SELF-CONTAINED:
@@ -15,6 +15,21 @@ AUTONOMOUS & FULLY SELF-CONTAINED:
 - If a resident daemon is running, MacheteSVG detects and uses it.
 - If no daemon is running, MacheteSVG automatically launches its embedded daemon
   via the local loader on 127.0.0.1:9021 without requiring user intervention.
+
+KEY FEATURES:
+1. Cross-Console PS5 Save Dummy Injection:
+   - Uses /dev/pfsmgr to extract decrypted save files into backup/decrypted.
+   - When restoring saves from another console, preserves the local Save Dummy
+     container and safely hot-injects decrypted payload into the PFS mount,
+     guaranteeing zero data corruption across fresh installs or console switches.
+2. Apollo-Style PS4 Auto-Resigning:
+   - 100% automatic Account ID patching (64-bit), user_id update, and Sony
+     psid_hmac recalculation on param.sfo.
+   - Keystone preservation ensures authentic game identity across accounts.
+3. Web Save Station (:8383) with In-App QR Code:
+   - Built-in HTTP web server listening on port 8383.
+   - Press Triangle to display the server URL and a scan-ready QR code to
+     instantly connect from your mobile device camera without typing.
 
 PACKAGE CONTENTS:
 - PPSA99001/eboot.bin             (Signed native application executable)
@@ -26,27 +41,21 @@ PACKAGE CONTENTS:
 - PPSA99001/INSTRUCTIONS.txt      (Installation and operational guide)
 - PPSA99001/LEGAL.txt             (License, warranty, and trademark notices)
 
-INSTALLATION INSTRUCTIONS:
-METHOD 1: VIA FTP (Recommended)
-1. Ensure your PS5 and computer are connected to the same local network.
-2. Enable FTP server on your PS5 (e.g., via OnionHEN / etaHEN settings).
-3. Connect using an FTP client (FileZilla, WinSCP, Cyberduck, etc.).
-4. Upload the entire "PPSA99001" folder to:
+INSTALLATION INSTRUCTIONS (EASY FTP METHOD):
+1. Ensure your PS5 and computer/phone are connected to the same local network.
+2. Enable the FTP server on your PS5 (via OnionHEN / etaHEN settings or payload).
+3. Connect using any FTP client (FileZilla, WinSCP, Cyberduck, etc.).
+4. Copy the entire "PPSA99001" folder directly into:
      /data/homebrew/
    The resulting path must be:
      /data/homebrew/PPSA99001/eboot.bin
-5. Refresh your homebrew launcher (Itemzflow, ProsperoStore, or system menu).
-
-METHOD 2: VIA USB DRIVE (exFAT)
-1. Copy the "PPSA99001" folder to the root of an exFAT-formatted USB drive.
-2. Insert the USB drive into your PS5.
-3. Using a file manager (PS5-Explorer or Itemzflow), copy "PPSA99001" to /data/homebrew/.
+5. Launch MacheteSVG directly from your homebrew launcher or system menu!
 
 CONTROLLER SHORTCUTS:
 - D-Pad: Navigate game list and menus
 - Cross (X): Select / Confirm action
 - Circle (O): Cancel / Back
-- Triangle: Open Web Save Station (LAN / Wi-Fi local HTTP server)
+- Triangle: Open Web Save Station (LAN / Wi-Fi local HTTP server with QR Code)
 - Square: Refresh games list and connected USB devices
 - L3 (Left Stick Click): Switch language (English / Spanish) in real-time
 
@@ -56,7 +65,7 @@ CONTROLLER SHORTCUTS:
 REQUISITOS DEL SISTEMA Y COMPATIBILIDAD:
 - Consola: PlayStation 5 (Todos los Firmwares con Jailbreak)
 - Entornos: OnionHEN, etaHEN o cualquier entorno jailbreak de PS5
-- Motor de montaje: libSceSaveData nativo de Prospero / ShadowMount
+- Motor de montaje: libSceSaveData nativo de Prospero / montaje PFS con /dev/pfsmgr
 - Formatos: Títulos nativos de PlayStation 5 y juegos de PS4 en retrocompatibilidad (BC)
 
 TOTALMENTE AUTONOMO Y AUTOCONTENIDO:
@@ -65,6 +74,21 @@ TOTALMENTE AUTONOMO Y AUTOCONTENIDO:
 - Si un demonio residente está activo, MacheteSVG lo detecta y lo utiliza.
 - Si no hay ningún demonio en ejecución, MacheteSVG auto-lanza su demonio integrado
   mediante el cargador local en 127.0.0.1:9021 de forma transparente.
+
+CARACTERISTICAS PRINCIPALES:
+1. Inyeccion Cross-Console de Partidas PS5 con Save Dummy:
+   - Utiliza /dev/pfsmgr para extraer los datos desencriptados en backup/decrypted.
+   - Al restaurar partidas de otra consola, preserva el Save Dummy local e inyecta
+     en caliente los datos desencriptados en el montaje PFS, garantizando cero
+     errores de corrupcion tras formateos o cambio de consola.
+2. Resignado Automatico Estilo Apollo para PS4:
+   - Modificacion 100% automatica del Account ID de 64 bits, actualizacion de user_id
+     y recalculo exacto de psid_hmac en param.sfo.
+   - Preservacion de keystone para que el juego reconozca la partida de inmediato.
+3. Estacion Web Local (:8383) con Codigo QR en Pantalla:
+   - Servidor HTTP integrado en el puerto 8383 sin colisiones en la consola.
+   - Pulsa Triangulo para ver la URL y un Codigo QR escaneable con la camara del
+     movil para entrar al instante sin escribir direcciones IP.
 
 CONTENIDO DEL PAQUETE:
 - PPSA99001/eboot.bin             (Ejecutable nativo firmado)
@@ -76,27 +100,21 @@ CONTENIDO DEL PAQUETE:
 - PPSA99001/INSTRUCTIONS.txt      (Guía de instalación y uso)
 - PPSA99001/LEGAL.txt             (Licencia, garantía y avisos legales)
 
-INSTRUCCIONES DE INSTALACION:
-METODO 1: MEDIANTE FTP (Recomendado)
-1. Conecta tu PS5 y tu computadora a la misma red local.
-2. Habilita el servidor FTP en tu PS5 (por ejemplo, en las opciones de OnionHEN o etaHEN).
+INSTRUCCIONES DE INSTALACION (METODO FACIL VIA FTP):
+1. Conecta tu PS5 y tu computadora o telefono a la misma red local.
+2. Habilita el servidor FTP en tu PS5 (en los ajustes de OnionHEN, etaHEN o payload).
 3. Conéctate usando un cliente FTP (FileZilla, WinSCP, Cyberduck, etc.).
-4. Sube la carpeta "PPSA99001" completa a:
+4. Copia la carpeta "PPSA99001" completa directamente en:
      /data/homebrew/
    La ruta resultante debe ser:
      /data/homebrew/PPSA99001/eboot.bin
-5. Actualiza tu lanzador de homebrew (Itemzflow, ProsperoStore o menú de inicio).
-
-METODO 2: MEDIANTE UNIDAD USB (exFAT)
-1. Copia la carpeta "PPSA99001" en la raíz de una memoria USB formateada en exFAT.
-2. Conecta la memoria USB en tu PS5.
-3. Usando un administrador de archivos (PS5-Explorer o Itemzflow), copia "PPSA99001" a /data/homebrew/.
+5. Inicia MacheteSVG directamente desde tu lanzador de homebrew o menú principal.
 
 CONTROLES DEL MANDO DUALSENSE:
 - D-Pad: Navegar por la lista de juegos y opciones
 - Cruz (X): Seleccionar / Confirmar acción
 - Círculo (O): Cancelar / Volver
-- Triángulo: Abrir Estacion Web Local (Servidor HTTP para descarga por Wi-Fi / LAN)
+- Triángulo: Abrir Estacion Web Local (Servidor HTTP con Codigo QR)
 - Cuadrado: Actualizar lista de juegos y dispositivos USB
 - L3 (Click Stick Izquierdo): Alternar idioma (Inglés / Español) en tiempo real
 =====================================================
