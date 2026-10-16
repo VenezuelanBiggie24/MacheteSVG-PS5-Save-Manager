@@ -31,6 +31,8 @@ class ScopedDir
 public:
     ScopedDir() noexcept : dir_(nullptr) {}
     explicit ScopedDir(DIR *dir) noexcept : dir_(dir) {}
+    explicit ScopedDir(const std::string &path) noexcept : dir_(::opendir(path.c_str())) {}
+    explicit ScopedDir(const char *path) noexcept : dir_(path ? ::opendir(path) : nullptr) {}
     ~ScopedDir() noexcept { reset(); }
 
     ScopedDir(const ScopedDir &) = delete;
@@ -231,7 +233,7 @@ std::uint64_t calculate_directory_size(const std::string &path, int depth = 0)
     if (!S_ISDIR(st.st_mode))
         return 0;
 
-    ScopedDir dir(opendir(path.c_str()));
+    ScopedDir dir(path);
     if (!dir.is_valid())
         return 0;
 
@@ -370,8 +372,16 @@ bool copy_directory_recursive(const std::string &src_dir, const std::string &dst
                               int &files_count, std::uint64_t &bytes_copied,
                               std::uint64_t total_bytes,
                               const ProgressCallback &progress_cb,
-                              uid_t owner_uid = 0, gid_t owner_gid = 0)
+                              uid_t owner_uid = 0, gid_t owner_gid = 0,
+                              int depth = 0)
 {
+    if (depth >= kMaxDirectoryDepth)
+    {
+        MACHETE_LOG("[COPY]", "Directory depth limit exceeded (%d >= %d): %s",
+                    depth, kMaxDirectoryDepth, src_dir.c_str());
+        return false;
+    }
+
     struct stat src_st{};
     if (stat(src_dir.c_str(), &src_st) == 0 && S_ISREG(src_st.st_mode))
     {
@@ -390,8 +400,8 @@ bool copy_directory_recursive(const std::string &src_dir, const std::string &dst
 
     ensure_directories_recursive(dst_dir, owner_uid, owner_gid);
 
-    DIR *dir = opendir(src_dir.c_str());
-    if (!dir)
+    ScopedDir dir(src_dir);
+    if (!dir.is_valid())
     {
         MACHETE_LOG("[COPY]", "Failed to open source directory: %s (errno=%d: %s)",
                     src_dir.c_str(), errno, std::strerror(errno));
@@ -399,7 +409,7 @@ bool copy_directory_recursive(const std::string &src_dir, const std::string &dst
     }
 
     bool all_ok = true;
-    while (const dirent *entry = readdir(dir))
+    while (const dirent *entry = readdir(dir.get()))
     {
         if (std::strcmp(entry->d_name, ".") == 0 || std::strcmp(entry->d_name, "..") == 0)
             continue;
@@ -418,7 +428,7 @@ bool copy_directory_recursive(const std::string &src_dir, const std::string &dst
             if (S_ISDIR(st.st_mode))
             {
                 ensure_directories_recursive(dst_path, owner_uid, owner_gid);
-                if (!copy_directory_recursive(src_path, dst_path, files_count, bytes_copied, total_bytes, progress_cb, owner_uid, owner_gid))
+                if (!copy_directory_recursive(src_path, dst_path, files_count, bytes_copied, total_bytes, progress_cb, owner_uid, owner_gid, depth + 1))
                     all_ok = false;
             }
             else
@@ -436,12 +446,14 @@ bool copy_directory_recursive(const std::string &src_dir, const std::string &dst
         }
     }
 
-    closedir(dir);
     return all_ok;
 }
 
-void apply_permissions_recursive(const std::string &path, uid_t uid = 0, gid_t gid = 0)
+void apply_permissions_recursive(const std::string &path, uid_t uid = 0, gid_t gid = 0, int depth = 0)
 {
+    if (depth >= kMaxDirectoryDepth)
+        return;
+
     struct stat st{};
     if (stat(path.c_str(), &st) != 0)
         return;
@@ -452,17 +464,16 @@ void apply_permissions_recursive(const std::string &path, uid_t uid = 0, gid_t g
         if (uid != 0 || gid != 0)
             (void)chown(path.c_str(), uid, gid);
 
-        DIR *dir = opendir(path.c_str());
-        if (dir)
+        ScopedDir dir(path);
+        if (dir.is_valid())
         {
-            while (const dirent *ent = readdir(dir))
+            while (const dirent *ent = readdir(dir.get()))
             {
                 if (std::strcmp(ent->d_name, ".") == 0 || std::strcmp(ent->d_name, "..") == 0)
                     continue;
                 std::string child = path + "/" + ent->d_name;
-                apply_permissions_recursive(child, uid, gid);
+                apply_permissions_recursive(child, uid, gid, depth + 1);
             }
-            closedir(dir);
         }
     }
     else if (S_ISREG(st.st_mode))
@@ -564,10 +575,10 @@ void reconstruct_prospero_metadata(const std::string &title_id,
     }
 
     // 3. Para cada sdimg_<slot> en dst_target, asociar icono complementario si está disponible
-    DIR *dir = opendir(dst_target.c_str());
-    if (dir)
+    ScopedDir dir(dst_target);
+    if (dir.is_valid())
     {
-        while (const dirent *ent = readdir(dir))
+        while (const dirent *ent = readdir(dir.get()))
         {
             if (std::strncmp(ent->d_name, "sdimg_", 6) == 0)
             {
@@ -584,7 +595,6 @@ void reconstruct_prospero_metadata(const std::string &title_id,
                 }
             }
         }
-        closedir(dir);
     }
 }
 
@@ -598,10 +608,10 @@ void post_process_restored_save(const scanner::ScannedGame &game,
     if (is_ps5)
     {
         // 1. Limpieza de archivos temporales residuales (.tmp) que bloquean los descriptores PFS en el kernel
-        DIR *ddst = opendir(dst_target.c_str());
-        if (ddst)
+        ScopedDir ddst(dst_target);
+        if (ddst.is_valid())
         {
-            while (const dirent *de = readdir(ddst))
+            while (const dirent *de = readdir(ddst.get()))
             {
                 const std::string name = de->d_name;
                 if (name.size() > 4 && name.substr(name.size() - 4) == ".tmp")
@@ -610,7 +620,6 @@ void post_process_restored_save(const scanner::ScannedGame &game,
                     MACHETE_LOG("[RESTORE]", "Residual temporary file removed to prevent CE-107109-8: %s", name.c_str());
                 }
             }
-            closedir(ddst);
         }
 
         // 2. Resolver rutas de metadatos de PS5:
@@ -708,19 +717,18 @@ void post_process_restored_save(const scanner::ScannedGame &game,
 
 std::string resolve_default_save_path(const scanner::ScannedGame &game)
 {
-    DIR *home = opendir("/user/home");
-    if (!home)
+    ScopedDir home("/user/home");
+    if (!home.is_valid())
         return "";
 
     std::string user_id;
-    while (const dirent *ent = readdir(home))
+    while (const dirent *ent = readdir(home.get()))
     {
         if (ent->d_name[0] == '.')
             continue;
         user_id = ent->d_name;
         break; // Tomar el primer identificador de usuario activo
     }
-    closedir(home);
 
     if (user_id.empty())
         return "";
@@ -1103,11 +1111,11 @@ std::vector<BackupItem> find_available_backups(const scanner::ScannedGame &game,
 
     for (const auto &dev : targets)
     {
-        DIR *dir = opendir(dev.root_dir.c_str());
-        if (!dir)
+        ScopedDir dir(dev.root_dir);
+        if (!dir.is_valid())
             continue;
 
-        while (const dirent *entry = readdir(dir))
+        while (const dirent *entry = readdir(dir.get()))
         {
             if (std::strcmp(entry->d_name, ".") == 0 || std::strcmp(entry->d_name, "..") == 0)
                 continue;
@@ -1157,10 +1165,10 @@ std::vector<BackupItem> find_available_backups(const scanner::ScannedGame &game,
             std::uint64_t total_size = 0;
             bool keystone_found = false;
 
-            DIR *sub = opendir(full_path.c_str());
-            if (sub)
+            ScopedDir sub(full_path);
+            if (sub.is_valid())
             {
-                while (const dirent *se = readdir(sub))
+                while (const dirent *se = readdir(sub.get()))
                 {
                     if (std::strcmp(se->d_name, ".") == 0 || std::strcmp(se->d_name, "..") == 0)
                         continue;
@@ -1175,10 +1183,10 @@ std::vector<BackupItem> find_available_backups(const scanner::ScannedGame &game,
                         }
                         else if (S_ISDIR(sst.st_mode))
                         {
-                            DIR *sub2 = opendir(sp.c_str());
-                            if (sub2)
+                            ScopedDir sub2(sp);
+                            if (sub2.is_valid())
                             {
-                                while (const dirent *se2 = readdir(sub2))
+                                while (const dirent *se2 = readdir(sub2.get()))
                                 {
                                     if (std::strcmp(se2->d_name, ".") == 0 || std::strcmp(se2->d_name, "..") == 0)
                                         continue;
@@ -1192,12 +1200,10 @@ std::vector<BackupItem> find_available_backups(const scanner::ScannedGame &game,
                                             keystone_found = true;
                                     }
                                 }
-                                closedir(sub2);
                             }
                         }
                     }
                 }
-                closedir(sub);
             }
 
             item.file_count = files;
@@ -1216,7 +1222,6 @@ std::vector<BackupItem> find_available_backups(const scanner::ScannedGame &game,
 
             backups.push_back(item);
         }
-        closedir(dir);
     }
 
     return backups;
