@@ -1,5 +1,5 @@
 =====================================================
-   MacheteSVG v1.2.3 - PS5 & PS4 Savegame Manager
+   MacheteSVG v1.2.5 - PS5 & PS4 Savegame Manager
 =====================================================
 
 [ENGLISH GUIDE]
@@ -22,9 +22,11 @@ KEY FEATURES:
    - When restoring saves from another console, preserves the local Save Dummy
      container and safely hot-injects decrypted payload into the PFS mount,
      guaranteeing zero data corruption across fresh installs or console switches.
-2. Apollo-Style PS4 Auto-Resigning:
+2. Apollo-Style PS4 Auto-Resigning & Database Indexing:
    - 100% automatic Account ID patching (64-bit), user_id update, and Sony
-     psid_hmac recalculation on param.sfo.
+     psid_hmac recalculation on param.sfo inside PFS containers.
+   - Direct system savedata.db registration and corruption flag repair
+     (is_broken=0, fake_broken=0) to permanently eliminate "Corrupted Data" errors.
    - Keystone preservation ensures authentic game identity across accounts.
 3. Web Save Station (:8383) with In-App QR Code:
    - Built-in HTTP web server listening on port 8383.
@@ -81,9 +83,12 @@ CARACTERISTICAS PRINCIPALES:
    - Al restaurar partidas de otra consola, preserva el Save Dummy local e inyecta
      en caliente los datos desencriptados en el montaje PFS, garantizando cero
      errores de corrupcion tras formateos o cambio de consola.
-2. Resignado Automatico Estilo Apollo para PS4:
+2. Resignado Automatico Estilo Apollo e Indexacion de Base de Datos para PS4:
    - Modificacion 100% automatica del Account ID de 64 bits, actualizacion de user_id
-     y recalculo exacto de psid_hmac en param.sfo.
+     y recalculo exacto de psid_hmac en param.sfo dentro de contenedores PFS.
+   - Registro directo en la base de datos savedata.db del sistema y reparacion de
+     banderas de corrupcion (is_broken=0, fake_broken=0) para eliminar errores de
+     "Datos dañados".
    - Preservacion de keystone para que el juego reconozca la partida de inmediato.
 3. Estacion Web Local (:8383) con Codigo QR en Pantalla:
    - Servidor HTTP integrado en el puerto 8383 sin colisiones en la consola.

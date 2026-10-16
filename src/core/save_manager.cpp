@@ -658,14 +658,10 @@ void post_process_restored_save(const scanner::ScannedGame &game,
     const std::uint32_t user_id = extract_user_id_from_path(dst_target);
     const std::uint64_t active_account_id = machete::account::detect_active_account_id(user_id);
 
-    // 1. Ejecutar motor PFS: Inyeccion en Save Dummy (Cross-Console) solo para partidas de PS5
-    pfs::PfsRestoreReport pfs_rep{};
-    if (is_ps5)
-    {
-        pfs_rep = machete::pfs::inject_and_resign_save(
-            game.title_id, is_ps5, dst_target, backup_folder, preserved_dummy_dir, had_local_dummy,
-            user_id, active_account_id, target_uid, target_gid);
-    }
+    // 1. Ejecutar motor PFS: Inyeccion en Save Dummy (Cross-Console) y Resignado dentro de contenedor PFS
+    pfs::PfsRestoreReport pfs_rep = machete::pfs::inject_and_resign_save(
+        game.title_id, is_ps5, dst_target, backup_folder, preserved_dummy_dir, had_local_dummy,
+        user_id, active_account_id, target_uid, target_gid);
 
     if (is_ps5)
     {
@@ -767,6 +763,25 @@ void post_process_restored_save(const scanner::ScannedGame &game,
 
         resign_sfo_directory_recursive(meta_ps4_user, rp, pfs_rep.sfo_resigned);
         apply_permissions_recursive(meta_ps4_user, target_uid, target_gid);
+
+        // 3. Garantizar que cada slot en dst_target este indexado en savedata.db con is_broken = 0
+        ScopedDir ddst(dst_target);
+        if (ddst.is_valid())
+        {
+            while (const dirent *de = readdir(ddst.get()))
+            {
+                const std::string sname = de->d_name;
+                if (machete::pfs::is_valid_ps4_slot_name(dst_target, sname))
+                {
+                    struct stat st_s{};
+                    std::uint64_t s_size = 0;
+                    if (stat((dst_target + "/" + sname).c_str(), &st_s) == 0)
+                        s_size = static_cast<std::uint64_t>(st_s.st_size);
+                    db::update_or_register_ps4_savedata_db(user_id, active_account_id, game.title_id, sname, s_size);
+                }
+            }
+        }
+        db::repair_title_corruption_flags(user_id, game.title_id);
     }
 
     if (out_report)
@@ -808,6 +823,7 @@ std::string resolve_default_save_path(const scanner::ScannedGame &game)
 
 bool has_local_save_dummy_for_game(const scanner::ScannedGame &game)
 {
+    const bool is_ps5 = (game.platform == "PS5" || game.title_id.rfind("PPSA", 0) == 0);
     std::string target = game.save_path;
     if (target.empty())
     {
@@ -818,16 +834,15 @@ bool has_local_save_dummy_for_game(const scanner::ScannedGame &game)
             {
                 if (ent->d_name[0] == '.')
                     continue;
-                const bool is_ps5 = (game.platform == "PS5" || game.title_id.rfind("PPSA", 0) == 0);
                 const std::string cand = std::string("/user/home/") + ent->d_name + "/" +
                                          (is_ps5 ? "savedata_prospero/" : "savedata/") + game.title_id;
-                if (pfs::has_local_save_dummy(cand))
+                if (pfs::has_local_save_dummy(cand, is_ps5))
                     return true;
             }
         }
         return false;
     }
-    return pfs::has_local_save_dummy(target);
+    return pfs::has_local_save_dummy(target, is_ps5);
 }
 
 __attribute__((noinline)) OperationResult backup_game_save(const scanner::ScannedGame &game,
@@ -1109,8 +1124,8 @@ __attribute__((noinline)) OperationResult restore_from_folder(const scanner::Sca
 
         MACHETE_BREADCRUMB("restore_from_folder: dummy_checks");
         const bool is_ps5 = (game.platform == "PS5" || game.title_id.rfind("PPSA", 0) == 0);
-        const bool had_local_dummy = is_ps5 ? pfs::has_local_save_dummy(dst_target) : false;
-        const bool cross_console = is_ps5 ? pfs::is_backup_from_different_console(backup_folder, is_ps5) : false;
+        const bool had_local_dummy = pfs::has_local_save_dummy(dst_target, is_ps5);
+        const bool cross_console = pfs::is_backup_from_different_console(backup_folder, is_ps5);
 
         // Si es una partida de PS5 de otra consola (o solo trae decrypted/) y NO existe un Save Dummy local en la consola,
         // detener antes de escribir un sdimg_* foraneo corrupto e instruir al usuario como crear el Save Dummy
@@ -1138,13 +1153,13 @@ __attribute__((noinline)) OperationResult restore_from_folder(const scanner::Sca
         MACHETE_BREADCRUMB("restore_from_folder: ensure_directories");
         ensure_directories_recursive(dst_target, target_uid, target_gid);
 
-        // Preservar el Save Dummy local (sdimg_* sellado por el SAMU de esta consola) antes de copiar archivos
+        // Preservar el Save Dummy local antes de copiar archivos
         const std::string preserved_dummy_dir =
             std::string(pfs::SAVE_STAGING_DIR) + "/preserved_dummy_" + game.title_id;
-        if (is_ps5 && had_local_dummy)
+        if (had_local_dummy)
         {
             pfs::remove_dir_recursive_simple(preserved_dummy_dir);
-            (void)pfs::preserve_local_save_dummy(dst_target, preserved_dummy_dir);
+            (void)pfs::preserve_local_save_dummy(dst_target, preserved_dummy_dir, is_ps5);
         }
 
         int files_count = 0;
@@ -1167,7 +1182,7 @@ __attribute__((noinline)) OperationResult restore_from_folder(const scanner::Sca
         pfs::PfsRestoreReport pfs_report{};
         post_process_restored_save(game, dst_target, backup_folder, preserved_dummy_dir,
                                    had_local_dummy, target_uid, target_gid, &pfs_report);
-        if (is_ps5 && had_local_dummy)
+        if (had_local_dummy)
         {
             pfs::remove_dir_recursive_simple(preserved_dummy_dir);
         }

@@ -6,9 +6,9 @@
 [![Firmware](https://img.shields.io/badge/Firmware-All_Jailbroken_Firmwares-blueviolet.svg)](https://github.com/VenezuelanBiggie24/MacheteSVG-PS5-Save-Manager)
 [![Title ID](https://img.shields.io/badge/Title_ID-PPSA99001-informational.svg)](https://github.com/VenezuelanBiggie24/MacheteSVG-PS5-Save-Manager)
 [![License](https://img.shields.io/badge/License-GPL_v3.0-green.svg)](LICENSE)
-[![Release](https://img.shields.io/badge/Release-v1.2.4-orange.svg)](https://github.com/VenezuelanBiggie24/MacheteSVG-PS5-Save-Manager/releases/tag/v1.2.4)
+[![Release](https://img.shields.io/badge/Release-v1.2.5-orange.svg)](https://github.com/VenezuelanBiggie24/MacheteSVG-PS5-Save-Manager/releases/tag/v1.2.5)
 
-**MacheteSVG** is a native PlayStation 5 homebrew application designed to back up and restore save data (*savegames*) for both PS5 native titles and PS4 backwards-compatible games with **100% reliability**, zero risk of data corruption (preventing errors `CE-108255-1` and `CE-107109-8`), cross-console PS5 Save Dummy injection, Apollo-style PS4 auto-resigning, and an embedded high-speed **Web Save Station** HTTP server (:8383) featuring an **in-app QR Code** for instant one-scan access from any smartphone, tablet, or PC on your local Wi-Fi / LAN.
+**MacheteSVG** is a native PlayStation 5 homebrew application designed to back up and restore save data (*savegames*) for both PS5 native titles and PS4 backwards-compatible games with **100% reliability**, zero risk of data corruption (preventing errors `CE-108255-1` and `CE-107109-8`), cross-console PS5 Save Dummy injection, Apollo-style PS4 auto-resigning with savedata.db corruption repair, and an embedded high-speed **Web Save Station** HTTP server (:8383) featuring an **in-app QR Code** for instant one-scan access from any smartphone, tablet, or PC on your local Wi-Fi / LAN.
 
 ---
 
@@ -30,7 +30,7 @@ The user interface is powered by a custom hardware-accelerated OpenGL 4.6 SDF re
 
 ### Installation (Easy FTP Method)
 
-1. Download `MacheteSVG_v1.2.4_PS5.zip` from [Releases](https://github.com/VenezuelanBiggie24/MacheteSVG-PS5-Save-Manager/releases).
+1. Download `MacheteSVG_v1.2.5_PS5.zip` from [Releases](https://github.com/VenezuelanBiggie24/MacheteSVG-PS5-Save-Manager/releases).
 2. Extract the ZIP archive on your computer to obtain the `PPSA99001` application folder.
 3. Enable the FTP server on your PlayStation 5 (via OnionHEN, etaHEN, or your jailbreak payload).
 4. Using an FTP client (FileZilla, WinSCP, Cyberduck, etc.), copy the entire `PPSA99001` folder directly into:
@@ -49,7 +49,7 @@ The user interface is powered by a custom hardware-accelerated OpenGL 4.6 SDF re
 
 #### 1. Zero-Corruption Save Architecture & Cross-Console Restoration
 - **Cross-Console PS5 Save Dummy Injection:** Solves error `CE-107109-8` when restoring PS5 saves from another console or after a complete firmware reinstall. Uses `/dev/pfsmgr` to extract decrypted save files (`backup/decrypted/`). When restoring, it preserves the authentic local Save Dummy PFS container and safely hot-injects decrypted payload data into the mount point (`/data/save_mnt`), allowing the console kernel to seal the container with matching hardware keys.
-- **Apollo-Style PS4 Auto-Resigning:** Automatically patches 64-bit `ACCOUNT_ID`, `user_id`, and recalculates Sony `psid_hmac` inside `param.sfo` (both outer and inner PFS container) while preserving the authentic `keystone` (96 bytes). PS4 games recognize restored saves immediately.
+- **Apollo-Style PS4 Auto-Resigning & Database Indexing:** Automatically patches 64-bit `ACCOUNT_ID`, `user_id`, and recalculates Sony `psid_hmac` inside `param.sfo` (both outer metadata and inner PFS container) while preserving the authentic `keystone` (96 bytes). Directly updates the system `savedata.db` to register the save and clear corruption flags (`is_broken = 0`, `fake_broken = 0`), completely eliminating "Corrupted Data" errors on PS5 backwards compatibility.
 - **Keystone Cryptographic Preservation:** During save restore operations, console-specific identity files (`sce_sys/keystone` and `sce_sys/param.sfo`) are strictly preserved and never overwritten. Only the underlying save payload container (`data000.bin`) is replaced.
 - **CE-108255-1 Prevention:** Unmounts save containers via clean `sceSaveDataUmount` system calls, allowing the Prospero kernel to seal and encrypt the PFS container without filesystem corruption.
 - **Global vnode Flush (`sync()` / `fsync()`):** Atomic write operations followed by FreeBSD vnode cache invalidation guarantee that PS4 backwards-compatibility emulator caches reload restored save data instantly without requiring console reboots or game restarts.
@@ -114,7 +114,7 @@ La interfaz gráfica cuenta con un renderizador SDF sobre OpenGL 4.6 acelerado p
 
 ### Instalación (Método Fácil vía FTP)
 
-1. Descarga `MacheteSVG_v1.2.4_PS5.zip` desde la sección [Releases](https://github.com/VenezuelanBiggie24/MacheteSVG-PS5-Save-Manager/releases).
+1. Descarga `MacheteSVG_v1.2.5_PS5.zip` desde la sección [Releases](https://github.com/VenezuelanBiggie24/MacheteSVG-PS5-Save-Manager/releases).
 2. Extrae el archivo ZIP en tu computadora para obtener la carpeta `PPSA99001`.
 3. Habilita el servidor FTP en tu PlayStation 5 (a través de OnionHEN, etaHEN o tu payload jailbreak).
 4. Usando un cliente FTP (FileZilla, WinSCP, Cyberduck, etc.), copia la carpeta `PPSA99001` completa directamente en:
@@ -133,7 +133,7 @@ La interfaz gráfica cuenta con un renderizador SDF sobre OpenGL 4.6 acelerado p
 
 #### 1. Arquitectura con Cero Corrupción y Restauración Cross-Console
 - **Inyección Cross-Console de Partidas PS5 con Save Dummy:** Soluciona el error `CE-107109-8` al restaurar partidas de PS5 provenientes de otra consola o tras formatear el sistema. Utiliza `/dev/pfsmgr` para extraer los archivos desencriptados (`backup/decrypted/`). Al restaurar, preserva el contenedor Save Dummy local auténtico e inyecta en caliente los datos desencriptados en el punto de montaje (`/data/save_mnt`), permitiendo que el kernel de Prospero selle el contenedor con las claves maestras locales de la consola.
-- **Resignado Automático Estilo Apollo para PS4:** Modifica automáticamente el `ACCOUNT_ID` de 64 bits, actualiza el `user_id` y recalcula el `psid_hmac` de Sony en `param.sfo` (tanto externo como dentro de la imagen PFS), preservando el `keystone` original (96 bytes). Los juegos de PS4 reconocen la partida de inmediato sin errores de datos dañados.
+- **Resignado Automático Estilo Apollo e Indexación en Base de Datos para PS4:** Modifica automáticamente el `ACCOUNT_ID` de 64 bits, actualiza el `user_id` y recalcula el `psid_hmac` de Sony en `param.sfo` (tanto externo como dentro de la imagen PFS), preservando el `keystone` original (96 bytes). Actualiza directamente la base de datos `savedata.db` del sistema eliminando las banderas de corrupción (`is_broken = 0`, `fake_broken = 0`) para que los juegos de PS4 en retrocompatibilidad reconozcan la partida de inmediato sin errores de "Datos dañados".
 - **Preservación Criptográfica de Keystone:** Durante las operaciones de restauración, los archivos de identidad de la consola (`sce_sys/keystone` y `sce_sys/param.sfo`) se mantienen intactos y nunca se sobrescriben. Solo se actualiza el contenedor de datos (`data000.bin`).
 - **Prevención del Error CE-108255-1:** Desmontaje limpio mediante llamadas `sceSaveDataUmount`, asegurando que el kernel de Prospero selle y cifre los contenedores PFS adecuadamente.
 - **Vaciado Global de Caché vnode (`sync()` / `fsync()`):** Operaciones atómicas que invalidan las tablas de caché del emulador de PS4, permitiendo que las partidas restauradas se reflejen al instante sin reiniciar la consola.

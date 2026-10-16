@@ -637,7 +637,7 @@ TEST(MacheteServerTest, HttpApiEndpointsAndSecurity)
     // 1. GET /api/status
     std::string status_resp = test_http_request(test_port, "GET /api/status HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n");
     EXPECT_NE(status_resp.find("HTTP/1.1 200 OK"), std::string::npos);
-    EXPECT_NE(status_resp.find("\"version\":\"1.2.4\""), std::string::npos);
+    EXPECT_NE(status_resp.find("\"version\":\"1.2.5\""), std::string::npos);
     EXPECT_NE(status_resp.find("\"status\":\"running\""), std::string::npos);
 
     // 1b. GET /api/log
@@ -984,6 +984,96 @@ TEST(MacheteSaveTest, Ps4SaveRestoreBypassesSaveDummy)
     std::remove((backup_dir + "/keystone").c_str());
     rmdir(backup_dir.c_str());
     rmdir(test_root.c_str());
+}
+
+TEST(MacheteDbTest, SqliteAdapterAvailability)
+{
+    auto &adapter = machete::db::SqliteAdapter::instance();
+    EXPECT_TRUE(adapter.is_available());
+}
+
+TEST(MacheteDbTest, PS4SaveDatabaseIndexingAndCorruptionRepair)
+{
+    const std::string db_dir = "/tmp/machete_db_test";
+    const std::string db_file = db_dir + "/savedata.db";
+    mkdir(db_dir.c_str(), 0777);
+
+    auto &adapter = machete::db::SqliteAdapter::instance();
+    ASSERT_TRUE(adapter.is_available());
+
+    void *db = nullptr;
+    ASSERT_EQ(adapter.open(db_file.c_str(), &db), 0);
+    ASSERT_NE(db, nullptr);
+
+    const char *create_tbl =
+        "CREATE TABLE IF NOT EXISTS savedata ("
+        "title_id TEXT, dir_name TEXT, main_title TEXT, sub_title TEXT, detail TEXT, "
+        "tmp_dir_name TEXT, is_broken INTEGER, user_param INTEGER, blocks INTEGER, "
+        "free_blocks INTEGER, size_kib INTEGER, mtime TEXT, fake_broken INTEGER, "
+        "account_id INTEGER, user_id INTEGER, faked_owner INTEGER, cloud_icon_url TEXT, "
+        "cloud_revision INTEGER, game_title_id TEXT, PRIMARY KEY (title_id, dir_name));";
+    EXPECT_EQ(adapter.exec(db, create_tbl, nullptr, nullptr, nullptr), 0);
+
+    // Insertar fila corrupta simulada (is_broken = 1)
+    const char *insert_broken =
+        "INSERT OR REPLACE INTO savedata (title_id, dir_name, is_broken, fake_broken, account_id, user_id) "
+        "VALUES ('CUSA18600', 'Book', 1, 1, 12345, 274686298);";
+    EXPECT_EQ(adapter.exec(db, insert_broken, nullptr, nullptr, nullptr), 0);
+
+    // Reparar mediante query SQL
+    const char *repair_sql = "UPDATE savedata SET is_broken = 0, fake_broken = 0 WHERE title_id = 'CUSA18600';";
+    EXPECT_EQ(adapter.exec(db, repair_sql, nullptr, nullptr, nullptr), 0);
+
+    // Verificar que is_broken es 0
+    int checked_broken = -1;
+    auto cb = [](void *arg, int argc, char **argv, char **) -> int {
+        if (argc > 0 && argv && argv[0])
+        {
+            auto *out = reinterpret_cast<int *>(arg);
+            *out = std::atoi(argv[0]);
+        }
+        return 0;
+    };
+    EXPECT_EQ(adapter.exec(db, "SELECT is_broken FROM savedata WHERE title_id = 'CUSA18600' AND dir_name = 'Book';",
+                           cb, &checked_broken, nullptr), 0);
+    EXPECT_EQ(checked_broken, 0);
+
+    adapter.close(db);
+    std::remove(db_file.c_str());
+    rmdir(db_dir.c_str());
+}
+
+TEST(MachetePfsTest, PS4SlotDetection)
+{
+    const std::string test_dir = "/tmp/machete_slot_test";
+    mkdir(test_dir.c_str(), 0777);
+
+    // Crear archivo Book y Book.bin
+    {
+        FILE *f1 = std::fopen((test_dir + "/Book").c_str(), "wb");
+        ASSERT_NE(f1, nullptr);
+        std::fputs("PFS_CONTAINER_DATA", f1);
+        std::fclose(f1);
+
+        FILE *f2 = std::fopen((test_dir + "/Book.bin").c_str(), "wb");
+        ASSERT_NE(f2, nullptr);
+        std::fputs("SEALED_KEY", f2);
+        std::fclose(f2);
+    }
+
+    EXPECT_TRUE(machete::pfs::is_valid_ps4_slot_name(test_dir, "Book"));
+    EXPECT_FALSE(machete::pfs::is_valid_ps4_slot_name(test_dir, "Book.bin"));
+    EXPECT_FALSE(machete::pfs::is_valid_ps4_slot_name(test_dir, "keystone"));
+    EXPECT_FALSE(machete::pfs::is_valid_ps4_slot_name(test_dir, "sealedkey"));
+
+    std::vector<std::string> slots;
+    EXPECT_TRUE(machete::pfs::has_local_save_dummy(test_dir, false, &slots));
+    ASSERT_EQ(slots.size(), 1u);
+    EXPECT_EQ(slots[0], "Book");
+
+    std::remove((test_dir + "/Book").c_str());
+    std::remove((test_dir + "/Book.bin").c_str());
+    rmdir(test_dir.c_str());
 }
 
 } // namespace hui::testing

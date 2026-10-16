@@ -882,7 +882,7 @@ void WebServer::handle_client(int client_fd)
     // Ruta 2: API de Estado
     if (path == "/api/status")
     {
-        std::string json = "{\"status\":\"running\",\"version\":\"1.2.4\",\"ip\":\"" + local_ip() +
+        std::string json = "{\"status\":\"running\",\"version\":\"1.2.5\",\"ip\":\"" + local_ip() +
                            "\",\"port\":" + std::to_string(port_) +
                            ",\"games_count\":" + std::to_string(get_games().size()) + "}";
         send_string_response(client_fd, 200, "OK", "application/json", json);
@@ -908,7 +908,7 @@ void WebServer::handle_client(int client_fd)
             }
         }
         send_string_response(client_fd, 200, "OK", "text/plain; charset=utf-8",
-                             "[SYSTEM] MacheteSVG v1.2.4 - No log file found on disk yet.\n");
+                             "[SYSTEM] MacheteSVG v1.2.5 - No log file found on disk yet.\n");
         return;
     }
 

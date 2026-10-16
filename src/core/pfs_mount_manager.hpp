@@ -9,6 +9,7 @@
 #include "core/logger.hpp"
 #include "core/samu_vault.hpp"
 #include "core/sfo_resigner.hpp"
+#include "core/sqlite_adapter.hpp"
 
 #include <cstdint>
 #include <cstdio>
@@ -63,7 +64,31 @@ inline bool is_valid_sdimg_name(const std::string &name)
     return true;
 }
 
-inline bool has_local_save_dummy(const std::string &save_dir, std::vector<std::string> *out_sdimg_names = nullptr)
+inline bool is_valid_ps4_slot_name(const std::string &save_dir, const std::string &name)
+{
+    if (name.empty() || name[0] == '.')
+        return false;
+    if (name.size() > 4 && (name.substr(name.size() - 4) == ".bin" || name.substr(name.size() - 4) == ".tmp"))
+        return false;
+    if (name.rfind("sce_bu_", 0) == 0)
+        return false;
+    if (name == "sealedkey" || name == "keystone" || name == "param.sfo" || name == "PARAM.SFO" || name == "icon0.png")
+        return false;
+
+    // En PS4 el contenedor de guardado debe tener un companion <name>.bin o sealedkey
+    const std::string bin_path = save_dir + "/" + name + ".bin";
+    const std::string sealed_path = save_dir + "/sealedkey";
+    return (access(bin_path.c_str(), R_OK) == 0 || access(sealed_path.c_str(), R_OK) == 0);
+}
+
+inline bool is_valid_slot_name(const std::string &save_dir, const std::string &name, bool is_ps5)
+{
+    if (is_ps5)
+        return is_valid_sdimg_name(name);
+    return is_valid_ps4_slot_name(save_dir, name);
+}
+
+inline bool has_local_save_dummy(const std::string &save_dir, bool is_ps5, std::vector<std::string> *out_slot_names = nullptr)
 {
     if (save_dir.empty())
         return false;
@@ -76,7 +101,7 @@ inline bool has_local_save_dummy(const std::string &save_dir, std::vector<std::s
     while (const dirent *ent = readdir(dir))
     {
         const std::string name = ent->d_name;
-        if (!is_valid_sdimg_name(name))
+        if (!is_valid_slot_name(save_dir, name, is_ps5))
             continue;
 
         const std::string full = save_dir + "/" + name;
@@ -84,12 +109,19 @@ inline bool has_local_save_dummy(const std::string &save_dir, std::vector<std::s
         if (stat(full.c_str(), &st) == 0 && S_ISREG(st.st_mode) && st.st_size > 0)
         {
             found = true;
-            if (out_sdimg_names)
-                out_sdimg_names->push_back(name);
+            if (out_slot_names)
+                out_slot_names->push_back(name);
         }
     }
     closedir(dir);
     return found;
+}
+
+inline bool has_local_save_dummy(const std::string &save_dir, std::vector<std::string> *out_sdimg_names = nullptr)
+{
+    if (has_local_save_dummy(save_dir, true, out_sdimg_names))
+        return true;
+    return has_local_save_dummy(save_dir, false, out_sdimg_names);
 }
 
 inline bool directory_has_files(const std::string &dir_path)
@@ -452,37 +484,34 @@ private:
     int (*umount_fn_)(SaveMountOpt *, const char *, void *, int) = nullptr;
 };
 
-// Extrae todos los archivos desencriptados de cada sdimg_<slot> hacia <dest_backup_folder>/decrypted/<slot>/
+// Extrae todos los archivos desencriptados de cada slot hacia <dest_backup_folder>/decrypted/<slot>/
 inline int extract_decrypted_slots_to_backup(const std::string &source_save_dir,
                                              const std::string &dest_backup_folder,
                                              const std::string &title_id,
                                              bool is_ps5)
 {
-    if (!is_ps5)
-        return 0;
-
     std::lock_guard<std::mutex> lock(pfs_global_mount_mutex());
 
     std::vector<std::string> slots;
-    if (!has_local_save_dummy(source_save_dir, &slots))
+    if (!has_local_save_dummy(source_save_dir, is_ps5, &slots))
         return 0;
 
     int total_extracted = 0;
-    for (const auto &sdimg_name : slots)
+    for (const auto &slot_name : slots)
     {
         std::uint8_t plain_key[32] = {0};
-        if (!decrypt_pfs_key_for_slot(source_save_dir, sdimg_name, is_ps5, plain_key, dest_backup_folder))
+        if (!decrypt_pfs_key_for_slot(source_save_dir, slot_name, is_ps5, plain_key, dest_backup_folder))
         {
-            MACHETE_LOG("[PFS]", "Could not decrypt PFS key for slot %s during backup extraction", sdimg_name.c_str());
+            MACHETE_LOG("[PFS]", "Could not decrypt PFS key for slot %s during backup extraction", slot_name.c_str());
             continue;
         }
 
         ScopedPfsMount mnt;
-        const std::string sdimg_path = source_save_dir + "/" + sdimg_name;
-        if (!mnt.mount(sdimg_path, plain_key, false))
+        const std::string image_path = source_save_dir + "/" + slot_name;
+        if (!mnt.mount(image_path, plain_key, false))
             continue;
 
-        const std::string slot_label = (sdimg_name.rfind("sdimg_", 0) == 0) ? sdimg_name.substr(6) : sdimg_name;
+        const std::string slot_label = (slot_name.rfind("sdimg_", 0) == 0) ? slot_name.substr(6) : slot_name;
         const std::string out_slot_dir = dest_backup_folder + "/decrypted/" + slot_label;
         ensure_dir_tree(out_slot_dir);
 
@@ -500,7 +529,7 @@ inline int extract_decrypted_slots_to_backup(const std::string &source_save_dir,
 
         (void)mnt.unmount();
         MACHETE_LOG("[PFS]", "Extracted %d decrypted files from %s -> %s",
-                    count, sdimg_name.c_str(), out_slot_dir.c_str());
+                    count, slot_name.c_str(), out_slot_dir.c_str());
     }
 
     return total_extracted;
@@ -578,11 +607,8 @@ inline void update_ps5_param_json_size(const std::string &param_json_path, std::
 // Comprueba si el respaldo proviene de otra consola distinta a la actual
 inline bool is_backup_from_different_console(const std::string &backup_folder, bool is_ps5)
 {
-    if (!is_ps5)
-        return false;
-
-    // 1. Si el respaldo solo tiene archivos desencriptados (decrypted/) y ningun sdimg_*, requiere inyeccion en Save Dummy
-    if (has_decrypted_payload(backup_folder) && !has_local_save_dummy(backup_folder))
+    // 1. Si el respaldo solo tiene archivos desencriptados (decrypted/) y ningun slot nativo, requiere inyeccion en Save Dummy
+    if (has_decrypted_payload(backup_folder) && !has_local_save_dummy(backup_folder, is_ps5))
         return true;
 
     // 2. Comparar OpenPSID en crypto_vault.bin si ambos existen y no son cero
@@ -610,18 +636,21 @@ inline bool is_backup_from_different_console(const std::string &backup_folder, b
 }
 
 // Respalda temporalmente el Save Dummy local antes de que copy_directory_recursive escriba en dst_target
-inline bool preserve_local_save_dummy(const std::string &dst_target, const std::string &staging_backup_dir)
+inline bool preserve_local_save_dummy(const std::string &dst_target, const std::string &staging_backup_dir, bool is_ps5)
 {
     std::vector<std::string> local_slots;
-    if (!has_local_save_dummy(dst_target, &local_slots))
+    if (!has_local_save_dummy(dst_target, is_ps5, &local_slots))
         return false;
 
     ensure_dir_tree(staging_backup_dir);
-    for (const auto &sdimg : local_slots)
+    for (const auto &slot : local_slots)
     {
-        (void)copy_file_atomic(dst_target + "/" + sdimg, staging_backup_dir + "/" + sdimg);
-        const std::string sname = (sdimg.rfind("sdimg_", 0) == 0) ? sdimg.substr(6) : sdimg;
-        for (const std::string &bin_cand : {sname + ".bin", sdimg + ".bin", std::string("sealedkey")})
+        (void)copy_file_atomic(dst_target + "/" + slot, staging_backup_dir + "/" + slot);
+        const std::string sname = (slot.rfind("sdimg_", 0) == 0) ? slot.substr(6) : slot;
+        for (const std::string &bin_cand : {
+                 sname + ".bin", slot + ".bin",
+                 "sce_bu_" + sname, "sce_bu_" + sname + ".bin",
+                 std::string("sealedkey")})
         {
             if (access((dst_target + "/" + bin_cand).c_str(), R_OK) == 0)
             {
@@ -635,6 +664,13 @@ inline bool preserve_local_save_dummy(const std::string &dst_target, const std::
         (void)copy_tree_simple(dst_target + "/sce_sys", staging_backup_dir + "/sce_sys", false);
     }
     return true;
+}
+
+inline bool preserve_local_save_dummy(const std::string &dst_target, const std::string &staging_backup_dir)
+{
+    if (preserve_local_save_dummy(dst_target, staging_backup_dir, true))
+        return true;
+    return preserve_local_save_dummy(dst_target, staging_backup_dir, false);
 }
 
 inline void remove_dir_recursive_simple(const std::string &dir_path, int depth = 0)
@@ -708,27 +744,27 @@ inline PfsRestoreReport inject_and_resign_save(const std::string &title_id,
                                                gid_t owner_gid)
 {
     PfsRestoreReport report;
-    if (!is_ps5)
-        return report;
-
     std::lock_guard<std::mutex> lock(pfs_global_mount_mutex());
 
     report.cross_console_detected = is_backup_from_different_console(backup_folder, is_ps5);
     const bool has_dec = has_decrypted_payload(backup_folder);
 
-    // 1. Si es Cross-Console (o solo trae decrypted/) y habia un Save Dummy local, restaurar el contenedor sdimg_*
+    // 1. Si es Cross-Console (o solo trae decrypted/) y habia un Save Dummy local, restaurar el contenedor
     //    local de la consola destino para NUNCA sobrescribir su clave sellada SAMU con la de otra consola
     if (had_local_dummy && (report.cross_console_detected || has_dec) && !preserved_dummy_dir.empty())
     {
         std::vector<std::string> dummy_slots;
-        if (has_local_save_dummy(preserved_dummy_dir, &dummy_slots))
+        if (has_local_save_dummy(preserved_dummy_dir, is_ps5, &dummy_slots))
         {
-            for (const auto &sdimg : dummy_slots)
+            for (const auto &slot : dummy_slots)
             {
-                (void)copy_file_atomic(preserved_dummy_dir + "/" + sdimg,
-                                       dst_target + "/" + sdimg, owner_uid, owner_gid);
-                const std::string sname = (sdimg.rfind("sdimg_", 0) == 0) ? sdimg.substr(6) : sdimg;
-                for (const std::string &bin_cand : {sname + ".bin", sdimg + ".bin", std::string("sealedkey")})
+                (void)copy_file_atomic(preserved_dummy_dir + "/" + slot,
+                                       dst_target + "/" + slot, owner_uid, owner_gid);
+                const std::string sname = (slot.rfind("sdimg_", 0) == 0) ? slot.substr(6) : slot;
+                for (const std::string &bin_cand : {
+                         sname + ".bin", slot + ".bin",
+                         "sce_bu_" + sname, "sce_bu_" + sname + ".bin",
+                         std::string("sealedkey")})
                 {
                     if (access((preserved_dummy_dir + "/" + bin_cand).c_str(), R_OK) == 0)
                     {
@@ -750,7 +786,7 @@ inline PfsRestoreReport inject_and_resign_save(const std::string &title_id,
     }
 
     // 2. Si no hay archivos decrypted/ pre-extraidos en el backup pero necesitamos inyectar en el Save Dummy,
-    //    intentar extraerlos al vuelo desde el sdimg_* del backup (usando /dev/pfsmgr o crypto_vault.bin)
+    //    intentar extraerlos al vuelo desde el contenedor del backup (usando /dev/pfsmgr o crypto_vault.bin)
     const std::string temp_dec_dir = std::string(SAVE_STAGING_DIR) + "/on_the_fly_dec_" + title_id;
     bool extracted_on_the_fly = false;
     if (report.used_save_dummy && !has_dec)
@@ -764,9 +800,9 @@ inline PfsRestoreReport inject_and_resign_save(const std::string &title_id,
 
     const std::string effective_dec_source = extracted_on_the_fly ? temp_dec_dir : backup_folder;
 
-    // 3. Montar cada sdimg_* en dst_target para inyectar datos desencriptados, keystone y resignar param.sfo
+    // 3. Montar cada contenedor en dst_target para inyectar datos desencriptados, keystone y resignar param.sfo
     std::vector<std::string> target_slots;
-    if (has_local_save_dummy(dst_target, &target_slots))
+    if (has_local_save_dummy(dst_target, is_ps5, &target_slots))
     {
         std::uint8_t console_psid[16] = {0};
         const bool has_psid = vault::get_console_open_psid(console_psid);
@@ -778,30 +814,48 @@ inline PfsRestoreReport inject_and_resign_save(const std::string &title_id,
         if (has_psid)
             rp.psid = console_psid;
 
-        for (const auto &sdimg_name : target_slots)
+        for (const auto &slot_name : target_slots)
         {
             std::uint8_t plain_key[32] = {0};
-            if (!decrypt_pfs_key_for_slot(dst_target, sdimg_name, is_ps5, plain_key, backup_folder))
+            if (!decrypt_pfs_key_for_slot(dst_target, slot_name, is_ps5, plain_key, backup_folder))
+            {
+                if (!is_ps5)
+                {
+                    struct stat st_f{};
+                    std::uint64_t fsz = 0;
+                    if (stat((dst_target + "/" + slot_name).c_str(), &st_f) == 0)
+                        fsz = static_cast<std::uint64_t>(st_f.st_size);
+                    db::update_or_register_ps4_savedata_db(user_id, active_account_id, title_id, slot_name, fsz);
+                }
                 continue;
+            }
 
             ScopedPfsMount mnt;
-            const std::string sdimg_path = dst_target + "/" + sdimg_name;
-            if (!mnt.mount(sdimg_path, plain_key, true))
+            const std::string image_path = dst_target + "/" + slot_name;
+            if (!mnt.mount(image_path, plain_key, true))
+            {
+                if (!is_ps5)
+                {
+                    struct stat st_f{};
+                    std::uint64_t fsz = 0;
+                    if (stat(image_path.c_str(), &st_f) == 0)
+                        fsz = static_cast<std::uint64_t>(st_f.st_size);
+                    db::update_or_register_ps4_savedata_db(user_id, active_account_id, title_id, slot_name, fsz);
+                }
                 continue;
+            }
 
             report.used_pfs_mount = true;
-            const std::string slot_label = (sdimg_name.rfind("sdimg_", 0) == 0) ? sdimg_name.substr(6) : sdimg_name;
+            const std::string slot_label = (slot_name.rfind("sdimg_", 0) == 0) ? slot_name.substr(6) : slot_name;
 
             // A) Inyectar archivos desencriptados del respaldo dentro del contenedor montado
             const std::string slot_dec_dir = resolve_decrypted_slot_dir(effective_dec_source, slot_label);
             if (!slot_dec_dir.empty())
             {
-                // En PS5 preservamos el sce_sys/param.json del Save Dummy local para no romper el vinculo de slot;
-                // en PS4 copiamos tambien param.sfo para resignarlo a continuacion
                 const int copied = copy_tree_simple(slot_dec_dir, mnt.mount_point(), is_ps5);
                 report.injected_files += copied;
                 MACHETE_LOG("[PFS]", "Injected %d decrypted files from %s into mounted %s",
-                            copied, slot_dec_dir.c_str(), sdimg_name.c_str());
+                            copied, slot_dec_dir.c_str(), slot_name.c_str());
             }
 
             // B) Inyectar keystone autentico del juego instalado DENTRO de /data/save_mnt/sce_sys/keystone
@@ -821,7 +875,10 @@ inline PfsRestoreReport inject_and_resign_save(const std::string &title_id,
                     if (access(inner_sfo.c_str(), F_OK) == 0 && sfo::resign_param_sfo(inner_sfo, rp))
                     {
                         report.sfo_resigned = true;
-                        MACHETE_LOG("[PFS]", "Resigned inner PS4 param.sfo inside PFS mount: %s", inner_sfo.c_str());
+                        MACHETE_LOG("[PFS]", "Resigned inner PS4 param.sfo inside PFS mount: %s (Account ID: 0x%04llx...%04llx)",
+                                    inner_sfo.c_str(),
+                                    static_cast<unsigned long long>((active_account_id >> 48) & 0xffff),
+                                    static_cast<unsigned long long>(active_account_id & 0xffff));
                     }
                 }
             }
@@ -829,19 +886,42 @@ inline PfsRestoreReport inject_and_resign_save(const std::string &title_id,
             // D) Desmontar para que SAMU recalcule el arbol Merkle y selle el contenedor con la clave de esta consola
             (void)mnt.unmount();
 
-            // E) En PS5: Actualizar fileSize y mtime en param.json externo para coincidir con el nuevo sdimg_*
-            if (is_ps5)
+            // E) Actualizar metadatos externos y base de datos del sistema
+            struct stat st_sd{};
+            if (stat(image_path.c_str(), &st_sd) == 0 && st_sd.st_size > 0)
             {
-                struct stat st_sd{};
-                if (stat(sdimg_path.c_str(), &st_sd) == 0 && st_sd.st_size > 0)
+                if (is_ps5)
                 {
                     update_ps5_param_json_size(dst_target + "/sce_sys/param.json",
                                                static_cast<std::uint64_t>(st_sd.st_size));
                     update_ps5_param_json_size(dst_target + "/param.json",
                                                static_cast<std::uint64_t>(st_sd.st_size));
                 }
+                else
+                {
+                    // Si habia un backup slot sce_bu_<slot>, sincronizarlo con el contenedor recién sellado
+                    const std::string bu_img = dst_target + "/sce_bu_" + slot_name;
+                    const std::string bu_bin = dst_target + "/sce_bu_" + slot_name + ".bin";
+                    const std::string main_bin = dst_target + "/" + slot_name + ".bin";
+                    if (access(bu_img.c_str(), F_OK) == 0)
+                    {
+                        (void)copy_file_atomic(image_path, bu_img, owner_uid, owner_gid);
+                        if (access(main_bin.c_str(), R_OK) == 0)
+                            (void)copy_file_atomic(main_bin, bu_bin, owner_uid, owner_gid);
+                    }
+
+                    // Indexar en savedata.db de PS4 garantizando is_broken = 0
+                    db::update_or_register_ps4_savedata_db(user_id, active_account_id, title_id, slot_name,
+                                                           static_cast<std::uint64_t>(st_sd.st_size));
+                }
             }
         }
+    }
+
+    if (!is_ps5)
+    {
+        // Limpieza final de banderas de corrupcion para este Title ID en todas las bases de datos
+        db::repair_title_corruption_flags(user_id, title_id);
     }
 
     if (extracted_on_the_fly)

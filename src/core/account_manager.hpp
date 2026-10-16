@@ -6,6 +6,7 @@
 
 #include "core/logger.hpp"
 #include "core/sfo_resigner.hpp"
+#include "core/sqlite_adapter.hpp"
 
 #include <cstdint>
 #include <cstdio>
@@ -137,7 +138,14 @@ inline std::uint64_t detect_active_account_id(std::uint32_t user_id)
         }
     }
 
-    // 4. Si no hay otra referencia, fallback seguro basado en el estándar offline de Apollo/PS5-Activator
+    // 4. Probar en savedata.db del usuario si existe alguna partida registrada en la consola
+    const std::uint64_t db_acc = db::query_account_id_from_savedata_db(user_id);
+    if (db_acc != 0 && db_acc != ~0ULL)
+    {
+        return db_acc;
+    }
+
+    // 5. Si no hay otra referencia, fallback seguro basado en el estándar offline de Apollo/PS5-Activator
     std::uint64_t fallback_acc = 0x0100000000000000ULL | (static_cast<std::uint64_t>(user_id) & 0xFFFFFFFFULL);
     if (fallback_acc == 0)
         fallback_acc = 0x0100000000000001ULL;
