@@ -139,60 +139,75 @@ std::uint32_t extract_user_id_from_path(const std::string &path)
     return 0x10000000;
 }
 
-bool ensure_directories_recursive(const std::string &path, uid_t owner_uid = 0, gid_t owner_gid = 0)
+__attribute__((noinline)) bool ensure_directories_recursive(const std::string &path, uid_t owner_uid = 0, gid_t owner_gid = 0) noexcept
 {
     if (path.empty())
         return false;
 
-    std::string current;
-    for (std::size_t i = 0; i < path.size(); ++i)
-    {
-        current += path[i];
-        if (path[i] == '/' || i == path.size() - 1)
-        {
-            if (current.empty() || current == "/")
-                continue;
+    char buf[1024];
+    const std::size_t len = (path.size() < sizeof(buf) - 1) ? path.size() : sizeof(buf) - 1;
+    std::memcpy(buf, path.data(), len);
+    buf[len] = '\0';
 
-            struct stat st{};
-            if (stat(current.c_str(), &st) != 0)
+    for (std::size_t i = 1; i <= len; ++i)
+    {
+        if (buf[i] == '/' || buf[i] == '\0')
+        {
+            const char saved = buf[i];
+            buf[i] = '\0';
+
+            if (buf[0] != '\0' && (buf[0] != '/' || buf[1] != '\0'))
             {
-                if (mkdir(current.c_str(), 0777) == 0)
+                struct stat st{};
+                if (stat(buf, &st) != 0)
                 {
-                    (void)chmod(current.c_str(), 0777);
-                    if (owner_uid != 0 || owner_gid != 0)
+                    if (mkdir(buf, 0777) == 0)
                     {
-                        (void)chown(current.c_str(), owner_uid, owner_gid);
+                        (void)chmod(buf, 0777);
+                        if (owner_uid != 0 || owner_gid != 0)
+                        {
+                            (void)chown(buf, owner_uid, owner_gid);
+                        }
+                    }
+                }
+                else
+                {
+                    // CRUCIAL: Asegurar permisos 0777 en rutas de usuario y datos para que los juegos puedan escribir
+                    if (std::strstr(buf, "/savedata") != nullptr ||
+                        std::strstr(buf, "/MacheteSVG") != nullptr ||
+                        std::strstr(buf, "/user/home") != nullptr)
+                    {
+                        (void)chmod(buf, 0777);
+                        if (owner_uid != 0 || owner_gid != 0)
+                        {
+                            (void)chown(buf, owner_uid, owner_gid);
+                        }
                     }
                 }
             }
-            else
-            {
-                // CRUCIAL: Asegurar permisos 0777 en rutas de usuario y datos para que los juegos puedan escribir
-                if (current.find("/savedata") != std::string::npos ||
-                    current.find("/MacheteSVG") != std::string::npos ||
-                    current.find("/user/home") != std::string::npos)
-                {
-                    (void)chmod(current.c_str(), 0777);
-                    if (owner_uid != 0 || owner_gid != 0)
-                    {
-                        (void)chown(current.c_str(), owner_uid, owner_gid);
-                    }
-                }
-            }
+
+            buf[i] = saved;
         }
     }
     return true;
 }
 
-void resolve_path_ownership(const std::string &path, uid_t &uid, gid_t &gid)
+__attribute__((noinline)) void resolve_path_ownership(const std::string &path, uid_t &uid, gid_t &gid) noexcept
 {
     uid = 0;
     gid = 0;
-    std::string cur = path;
-    while (!cur.empty() && cur != "/")
+    if (path.empty())
+        return;
+
+    char buf[1024];
+    std::size_t len = (path.size() < sizeof(buf) - 1) ? path.size() : sizeof(buf) - 1;
+    std::memcpy(buf, path.data(), len);
+    buf[len] = '\0';
+
+    while (len > 1)
     {
         struct stat st{};
-        if (stat(cur.c_str(), &st) == 0)
+        if (stat(buf, &st) == 0)
         {
             if (st.st_uid != 0 || st.st_gid != 0)
             {
@@ -201,10 +216,11 @@ void resolve_path_ownership(const std::string &path, uid_t &uid, gid_t &gid)
                 return;
             }
         }
-        std::size_t slash = cur.find_last_of('/');
-        if (slash == std::string::npos || slash == 0)
+        char *last_slash = std::strrchr(buf, '/');
+        if (!last_slash || last_slash == buf)
             break;
-        cur = cur.substr(0, slash);
+        *last_slash = '\0';
+        len = static_cast<std::size_t>(last_slash - buf);
     }
 }
 
@@ -826,16 +842,19 @@ bool has_local_save_dummy_for_game(const scanner::ScannedGame &game)
     return pfs::has_local_save_dummy(target);
 }
 
-OperationResult backup_game_save(const scanner::ScannedGame &game,
-                                 const storage::StorageDevice &dest_device,
-                                 ProgressCallback progress_cb)
+__attribute__((noinline)) OperationResult backup_game_save(const scanner::ScannedGame &game,
+                                                              const storage::StorageDevice &dest_device,
+                                                              ProgressCallback progress_cb)
 {
+    MACHETE_BREADCRUMB("backup_game_save: entry");
 #if defined(__cpp_exceptions) || defined(__EXCEPTIONS) || defined(_CPPUNWIND)
     try
     {
 #endif
         OperationResult res;
         const bool is_es = (machete::i18n::current_language() == machete::i18n::Language::Spanish);
+
+        MACHETE_BREADCRUMB("backup_game_save: verify_root");
 
         if (!jailbreak::verify_root_access(static_cast<int>(getpid())))
         {
@@ -1014,11 +1033,12 @@ OperationResult backup_game_save(const scanner::ScannedGame &game,
 #endif
 }
 
-OperationResult restore_from_folder(const scanner::ScannedGame &game,
-                                    const std::string &backup_folder,
-                                    const std::string &source_label,
-                                    ProgressCallback progress_cb)
+__attribute__((noinline)) OperationResult restore_from_folder(const scanner::ScannedGame &game,
+                                                               const std::string &backup_folder,
+                                                               const std::string &source_label,
+                                                               ProgressCallback progress_cb)
 {
+    MACHETE_BREADCRUMB("restore_from_folder: entry");
 #if defined(__cpp_exceptions) || defined(__EXCEPTIONS) || defined(_CPPUNWIND)
     try
     {
@@ -1026,6 +1046,7 @@ OperationResult restore_from_folder(const scanner::ScannedGame &game,
         OperationResult res;
         const bool is_es = (machete::i18n::current_language() == machete::i18n::Language::Spanish);
 
+        MACHETE_BREADCRUMB("restore_from_folder: verify_root");
         if (!jailbreak::verify_root_access(static_cast<int>(getpid())))
         {
             MACHETE_LOG("[RESTORE]", "Root privileges absent (UID=%d, EUID=%d). Requesting elevation...",
@@ -1051,6 +1072,7 @@ OperationResult restore_from_folder(const scanner::ScannedGame &game,
             return res;
         }
 
+        MACHETE_BREADCRUMB("restore_from_folder: calculate_size");
         const std::uint64_t total_dir_bytes = calculate_directory_size(backup_folder);
         if (total_dir_bytes == 0)
         {
@@ -1061,6 +1083,7 @@ OperationResult restore_from_folder(const scanner::ScannedGame &game,
             return res;
         }
 
+        MACHETE_BREADCRUMB("restore_from_folder: resolve_target");
         std::string dst_target = game.save_path;
         if (dst_target.empty())
         {
@@ -1086,6 +1109,7 @@ OperationResult restore_from_folder(const scanner::ScannedGame &game,
                 dst_target = dst_target.substr(0, slash);
         }
 
+        MACHETE_BREADCRUMB("restore_from_folder: dummy_checks");
         const bool is_ps5 = (game.platform == "PS5" || game.title_id.rfind("PPSA", 0) == 0);
         const bool had_local_dummy = is_ps5 ? pfs::has_local_save_dummy(dst_target) : false;
         const bool cross_console = is_ps5 ? pfs::is_backup_from_different_console(backup_folder, is_ps5) : false;
@@ -1103,6 +1127,7 @@ OperationResult restore_from_folder(const scanner::ScannedGame &game,
             return res;
         }
 
+        MACHETE_BREADCRUMB("restore_from_folder: resolve_ownership");
         uid_t target_uid = 0;
         gid_t target_gid = 0;
         resolve_path_ownership(dst_target, target_uid, target_gid);
@@ -1111,6 +1136,8 @@ OperationResult restore_from_folder(const scanner::ScannedGame &game,
             target_uid = 1;
             target_gid = 1;
         }
+
+        MACHETE_BREADCRUMB("restore_from_folder: ensure_directories");
         ensure_directories_recursive(dst_target, target_uid, target_gid);
 
         // Preservar el Save Dummy local (sdimg_* sellado por el SAMU de esta consola) antes de copiar archivos
@@ -1124,15 +1151,21 @@ OperationResult restore_from_folder(const scanner::ScannedGame &game,
 
         int files_count = 0;
         std::uint64_t bytes_copied = 0;
+
+        MACHETE_BREADCRUMB("restore_from_folder: log_start");
+        const std::string log_src = backup_folder;
+        const std::string log_dst = dst_target;
         MACHETE_LOG("[RESTORE]", "Starting restore from %s -> %s (uid=%d, gid=%d, is_ps5=%d, local_dummy=%d, cross_console=%d)",
-                    backup_folder.c_str(), dst_target.c_str(),
+                    log_src.c_str(), log_dst.c_str(),
                     static_cast<int>(target_uid), static_cast<int>(target_gid),
                     is_ps5 ? 1 : 0, had_local_dummy ? 1 : 0, cross_console ? 1 : 0);
 
+        MACHETE_BREADCRUMB("restore_from_folder: copy_directory_recursive");
         const bool ok = copy_directory_recursive(backup_folder, dst_target, files_count,
                                                  bytes_copied, total_dir_bytes, progress_cb,
                                                  target_uid, target_gid);
 
+        MACHETE_BREADCRUMB("restore_from_folder: post_process");
         pfs::PfsRestoreReport pfs_report{};
         post_process_restored_save(game, dst_target, backup_folder, preserved_dummy_dir,
                                    had_local_dummy, target_uid, target_gid, &pfs_report);
@@ -1140,6 +1173,8 @@ OperationResult restore_from_folder(const scanner::ScannedGame &game,
         {
             pfs::remove_dir_recursive_simple(preserved_dummy_dir);
         }
+
+        MACHETE_BREADCRUMB("restore_from_folder: sync");
         ::sync();
 
         files_count += pfs_report.injected_files;
@@ -1425,11 +1460,14 @@ std::vector<BackupItem> find_available_backups(const scanner::ScannedGame &game,
     return backups;
 }
 
-OperationResult restore_backup_item(const scanner::ScannedGame &game,
-                                    const BackupItem &backup,
-                                    ProgressCallback progress_cb)
+__attribute__((noinline)) OperationResult restore_backup_item(const scanner::ScannedGame &game,
+                                                               const BackupItem &backup,
+                                                               ProgressCallback progress_cb)
 {
-    return restore_from_folder(game, backup.folder_path, backup.device_label, progress_cb);
+    MACHETE_BREADCRUMB("restore_backup_item: start");
+    const std::string folder = backup.folder_path;
+    const std::string label = backup.device_label;
+    return restore_from_folder(game, folder, label, progress_cb);
 }
 
 } // namespace machete::save

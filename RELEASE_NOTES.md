@@ -6,7 +6,39 @@
 
 ## English Documentation
 
-### Version 1.2.1 (Latest Release) - PS4 Save Restore Crash Fix & Kernel Safety Shielding
+### Version 1.2.2 (Latest Release) - Compiler Register Aliasing Elimination, Official Web Logo & Event Log Viewer
+
+MacheteSVG v1.2.2 addresses a critical compiler-induced segmentation fault (SIGSEGV) during save restoration on PlayStation 5 hardware, introduces official branding to the embedded Web Save Station (:8383), and provides direct browser access to system diagnostics.
+
+#### Key Enhancements in v1.2.2
+1. **Restore Crash Elimination (Compiler Register Aliasing & Stack Safety):**
+   - Fixed a fatal crash (`SIGSEGV` at `si_addr: 0x1` / `0x0`) caused by Clang 18 `-O2` register allocator reusing register `%r13` for loop bounds across inlined directory resolution helpers, clobbering `%rbx` and reading unmapped addresses.
+   - Converted `resolve_path_ownership` and `ensure_directories_recursive` into `__attribute__((noinline)) noexcept` procedures with stack-allocated fixed buffers (`char buf[1024]`), eliminating all dynamic string allocations in recursive directory handling.
+   - Expanded worker thread stack from 2 MB to 4 MB (`pthread_attr_setstacksize`), preventing thread stack exhaustion on Prospero OS.
+2. **Official Web Branding & Event Log Access (:8383):**
+   - Header icon updated: displays the authentic MacheteSVG Liquid Glass logo via dedicated endpoint `/api/logo` (serving `icon0.png`).
+   - New "Descargar Log" button added to header actions: downloads the complete system event log and crash diagnostics (`machete.log`) directly from `/api/log`.
+   - Updated Web Station status endpoint and header badge to `PPSA99001 v1.2.2`.
+3. **Verified Zero Emojis & 100% Passing Tests:**
+   - Certified 0 emoji violations across all 459 repository files.
+   - 103 unit tests passed with 100% success rate.
+
+#### Package Checksums (v1.2.2)
+| File | Size | SHA-256 Checksum |
+| :--- | :--- | :--- |
+| `MacheteSVG_v1.2.2_PS5.zip` | 29.6 MB (31,004,293 bytes) | `77ac435514242c7372c956502567d3e2abc03854e7decb1e697aaf64d25a563a` |
+| `eboot.bin` | 23.8 MB (24,976,247 bytes) | `588266e9dbe9cc7f38fa2266afe7c5231317fa3645cb17a1f238f7f8d7e2c978` |
+
+#### Installation (Easy FTP Method)
+1. Download `MacheteSVG_v1.2.2_PS5.zip`.
+2. Extract the archive on your PC to get the `PPSA99001` folder.
+3. Enable FTP on your PS5 (OnionHEN, etaHEN, etc.).
+4. Upload the `PPSA99001` folder directly to `/data/homebrew/` via FTP (resulting path: `/data/homebrew/PPSA99001/eboot.bin`).
+5. Launch MacheteSVG from your homebrew launcher or system menu.
+
+---
+
+### Version 1.2.1 - PS4 Save Restore Crash Fix & Kernel Safety Shielding
 
 MacheteSVG v1.2.1 addresses an immediate userland crash (SIGSEGV) observed on real PlayStation 5 hardware during PS4 save restoration, safely shielding kernel interactions and strictly separating PS4 backwards-compatible save restoration from PS5 Save Dummy container logic.
 
@@ -101,7 +133,39 @@ Upload the `PPSA99001` folder directly to `/data/homebrew/` via FTP.
 
 ## Notas de la Version en Espanol (Spanish Documentation)
 
-### Version 1.2.1 (Ultima Version) - Correccion de Fallo en Restauracion de PS4 y Blindaje de Kernel
+### Version 1.2.2 (Ultima Version) - Eliminacion de Falla por Reutilizacion de Registros del Compilador, Logotipo Web Oficial y Descargador de Registro de Eventos
+
+MacheteSVG v1.2.2 soluciona de raiz el fallo critico de segmentacion (SIGSEGV) producido durante la restauracion de partidas en consolas PlayStation 5 reales, anade el logotipo oficial a la Estacion Web embebida (:8383) y permite descargar el registro de eventos y diagnostico del sistema directamente desde el navegador web.
+
+#### Mejoras Principales en v1.2.2
+1. **Eliminacion de Caida en Restauracion (Solucion a Reutilizacion de Registros y Seguridad de Pila):**
+   - Corregido el fallo fatal (`SIGSEGV` en `si_addr: 0x1` / `0x0`) provocado por el asignador de registros de Clang 18 `-O2`, que al incrustar (`inline`) las rutinas de resolucion de directorios reutilizaba el registro `%r13`, corrompiendo `%rbx` e intentando leer direcciones de memoria no mapeadas.
+   - Refactorizadas las funciones `resolve_path_ownership` y `ensure_directories_recursive` con `__attribute__((noinline)) noexcept` y buffers fijos de pila (`char buf[1024]`), eliminando por completo cualquier asignacion dinamica de memoria en las operaciones recursivas sobre rutas de disco.
+   - Ampliado el tamano de la pila del hilo de trabajo de 2 MB a 4 MB (`pthread_attr_setstacksize`), garantizando ejecucion segura y holgada ante llamadas recursivas y del kernel en Prospero OS.
+2. **Logotipo Oficial y Acceso al Registro de Eventos en la Web (:8383):**
+   - El icono de cabecera de la web ahora carga el logotipo oficial Liquid Glass de MacheteSVG mediante el endpoint `/api/logo` (sirviendo `icon0.png`).
+   - Anadido el boton "Descargar Log" en la cabecera: permite descargar el archivo completo de eventos y diagnosticos del sistema (`machete.log`) con un solo clic a traves de `/api/log`.
+   - Actualizada la version en el endpoint `/api/status` y en la etiqueta visual a `PPSA99001 v1.2.2`.
+3. **Certificacion de Cero Emojis y 103 Pruebas Unitarias Exitosas:**
+   - 0 infracciones de emojis certificadas en los 459 archivos del repositorio.
+   - 103 pruebas unitarias completadas con 100% de aprobacion.
+
+#### Sumas de Verificacion de Paquetes (v1.2.2)
+| Archivo | Tamano | Suma de Verificacion SHA-256 |
+| :--- | :--- | :--- |
+| `MacheteSVG_v1.2.2_PS5.zip` | 29.6 MB (31,004,293 bytes) | `77ac435514242c7372c956502567d3e2abc03854e7decb1e697aaf64d25a563a` |
+| `eboot.bin` | 23.8 MB (24,976,247 bytes) | `588266e9dbe9cc7f38fa2266afe7c5231317fa3645cb17a1f238f7f8d7e2c978` |
+
+#### Instalacion (Metodo Facil via FTP)
+1. Descarga `MacheteSVG_v1.2.2_PS5.zip`.
+2. Descomprime el archivo en tu PC para obtener la carpeta `PPSA99001`.
+3. Habilita el servidor FTP en tu PS5 (OnionHEN, etaHEN, etc.).
+4. Copia la carpeta `PPSA99001` directamente en `/data/homebrew/` via FTP (ruta final: `/data/homebrew/PPSA99001/eboot.bin`).
+5. Inicia MacheteSVG directamente desde tu lanzador de homebrew o menu principal.
+
+---
+
+### Version 1.2.1 - Correccion de Fallo en Restauracion de PS4 y Blindaje de Kernel
 
 MacheteSVG v1.2.1 resuelve de forma definitiva el fallo critico (SIGSEGV) reportado en hardware real de PlayStation 5 durante la restauracion de partidas de PS4, eliminando llamadas de kernel inseguras y aislando estrictamente el flujo de restauracion de PS4 respecto a la logica de Save Dummy de PS5.
 

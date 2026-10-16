@@ -70,7 +70,8 @@ private:
                               const std::string &content_type, const std::string &body_str,
                               const std::string &extra_headers = "");
 
-    void send_file_response(int client_fd, const std::string &file_path, const std::string &filename);
+    void send_file_response(int client_fd, const std::string &file_path, const std::string &filename,
+                            const std::string &content_type = "application/octet-stream");
 
     std::atomic<bool> running_{false};
     std::atomic<bool> stop_requested_{false};

@@ -66,8 +66,8 @@ public:
 
         pthread_attr_t attr;
         pthread_attr_init(&attr);
-        // Guaranteed 2 MB stack to prevent thread stack exhaustion on Prospero OS
-        constexpr std::size_t kWorkerStackSize = 2 * 1024 * 1024;
+        // Guaranteed 4 MB stack to prevent thread stack exhaustion on Prospero OS
+        constexpr std::size_t kWorkerStackSize = 4 * 1024 * 1024;
         pthread_attr_setstacksize(&attr, kWorkerStackSize);
 
         int rc = pthread_create(

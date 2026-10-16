@@ -637,8 +637,18 @@ TEST(MacheteServerTest, HttpApiEndpointsAndSecurity)
     // 1. GET /api/status
     std::string status_resp = test_http_request(test_port, "GET /api/status HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n");
     EXPECT_NE(status_resp.find("HTTP/1.1 200 OK"), std::string::npos);
-    EXPECT_NE(status_resp.find("\"version\":\"1.0.0\""), std::string::npos);
+    EXPECT_NE(status_resp.find("\"version\":\"1.2.2\""), std::string::npos);
     EXPECT_NE(status_resp.find("\"status\":\"running\""), std::string::npos);
+
+    // 1b. GET /api/log
+    std::string log_resp = test_http_request(test_port, "GET /api/log HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n");
+    EXPECT_NE(log_resp.find("HTTP/1.1 200 OK"), std::string::npos);
+    EXPECT_NE(log_resp.find("Content-Type: text/plain"), std::string::npos);
+
+    // 1c. GET /api/logo
+    std::string logo_resp = test_http_request(test_port, "GET /api/logo HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n");
+    EXPECT_NE(logo_resp.find("HTTP/1.1 200 OK"), std::string::npos);
+    EXPECT_NE(logo_resp.find("Content-Type: image/png"), std::string::npos);
 
     // 2. GET / (Web UI HTML)
     std::string root_resp = test_http_request(test_port, "GET / HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n");

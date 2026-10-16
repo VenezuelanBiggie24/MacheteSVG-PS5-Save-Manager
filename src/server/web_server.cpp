@@ -678,7 +678,8 @@ void WebServer::send_string_response(int client_fd, int status_code, const std::
     send_response(client_fd, status_code, status_text, content_type, body_str.data(), body_str.size(), extra_headers);
 }
 
-void WebServer::send_file_response(int client_fd, const std::string &file_path, const std::string &filename)
+void WebServer::send_file_response(int client_fd, const std::string &file_path, const std::string &filename,
+                                   const std::string &content_type)
 {
     ScopedFd fd(open(file_path.c_str(), O_RDONLY));
     if (!fd.is_valid())
@@ -701,10 +702,11 @@ void WebServer::send_file_response(int client_fd, const std::string &file_path, 
     int header_len = std::snprintf(
         header_buf, sizeof(header_buf),
         "HTTP/1.1 200 OK\r\n"
-        "Content-Type: application/octet-stream\r\n"
+        "Content-Type: %s\r\n"
         "Content-Length: %llu\r\n"
         "Connection: close\r\n"
         "%s\r\n",
+        content_type.c_str(),
         static_cast<unsigned long long>(file_size), disposition.c_str());
 
     if (header_len <= 0 || static_cast<std::size_t>(header_len) >= sizeof(header_buf))
@@ -786,10 +788,78 @@ void WebServer::handle_client(int client_fd)
     // Ruta 2: API de Estado
     if (path == "/api/status")
     {
-        std::string json = "{\"status\":\"running\",\"version\":\"1.0.0\",\"ip\":\"" + local_ip() +
+        std::string json = "{\"status\":\"running\",\"version\":\"1.2.2\",\"ip\":\"" + local_ip() +
                            "\",\"port\":" + std::to_string(port_) +
                            ",\"games_count\":" + std::to_string(get_games().size()) + "}";
         send_string_response(client_fd, 200, "OK", "application/json", json);
+        return;
+    }
+
+    // Ruta: Descarga del Registro de Eventos del Sistema (machete.log)
+    if (path == "/api/log" || path == "/log" || path == "/machete.log")
+    {
+        const std::string log_candidates[] = {
+            "/data/homebrew/PPSA99001/machete.log",
+            "/data/machete.log",
+            "/download0/machete.log",
+            "/user/app/PPSA99001/machete.log",
+            "machete.log"
+        };
+        for (const auto &cand : log_candidates)
+        {
+            if (access(cand.c_str(), R_OK) == 0)
+            {
+                send_file_response(client_fd, cand, "machete.log", "text/plain; charset=utf-8");
+                return;
+            }
+        }
+        send_string_response(client_fd, 200, "OK", "text/plain; charset=utf-8",
+                             "[SYSTEM] MacheteSVG v1.2.2 - No log file found on disk yet.\n");
+        return;
+    }
+
+    // Ruta: Logotipo Oficial de la Aplicacion (icon0.png)
+    if (path == "/api/logo" || path == "/logo.png" || path == "/icon0.png")
+    {
+        const std::string logo_candidates[] = {
+            "/app0/sce_sys/icon0.png",
+            "/data/homebrew/PPSA99001/sce_sys/icon0.png",
+            "sce_sys/icon0.png",
+            "/user/app/PPSA99001/sce_sys/icon0.png"
+        };
+        for (const auto &cand : logo_candidates)
+        {
+            ScopedFd fd(open(cand.c_str(), O_RDONLY));
+            if (fd.is_valid())
+            {
+                struct stat st{};
+                if (fstat(fd.get(), &st) == 0 && S_ISREG(st.st_mode) && st.st_size > 0 && st.st_size <= 16 * 1024 * 1024)
+                {
+                    std::vector<std::uint8_t> logo_data(static_cast<std::size_t>(st.st_size));
+                    std::size_t total_read = 0;
+                    bool read_ok = true;
+                    while (total_read < logo_data.size())
+                    {
+                        ssize_t r = read(fd.get(), logo_data.data() + total_read, logo_data.size() - total_read);
+                        if (r < 0)
+                        {
+                            if (errno == EINTR) continue;
+                            read_ok = false;
+                            break;
+                        }
+                        if (r == 0) break;
+                        total_read += static_cast<std::size_t>(r);
+                    }
+                    if (read_ok && total_read == logo_data.size())
+                    {
+                        send_response(client_fd, 200, "OK", "image/png", logo_data.data(), logo_data.size(),
+                                      "Cache-Control: public, max-age=86400\r\n");
+                        return;
+                    }
+                }
+            }
+        }
+        send_string_response(client_fd, 404, "Not Found", "text/plain", "Logo not found");
         return;
     }
 

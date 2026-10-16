@@ -691,8 +691,9 @@ constexpr std::string_view kWebUiHtml = R"rawhtml(<!DOCTYPE html>
   <!-- Top Header Navigation -->
   <header>
     <a href="/" class="brand">
-      <div class="brand-icon">
-        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#ffffff" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+      <div class="brand-icon" style="overflow: hidden; padding: 0;">
+        <img src="/api/logo" alt="MacheteSVG Logo" style="width: 100%; height: 100%; object-fit: cover; border-radius: var(--radius-sm);" onerror="this.style.display='none'; this.nextElementSibling.style.display='block';">
+        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#ffffff" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" style="display: none;">
           <rect x="2" y="4" width="20" height="16" rx="4"></rect>
           <path d="M6 12h4"></path>
           <path d="M8 10v4"></path>
@@ -703,7 +704,7 @@ constexpr std::string_view kWebUiHtml = R"rawhtml(<!DOCTYPE html>
       <div>
         <div class="brand-title">
           <span>MacheteSVG</span>
-          <span class="version-tag">PPSA99001 v1.0.0</span>
+          <span class="version-tag">PPSA99001 v1.2.2</span>
         </div>
         <div class="brand-subtitle">Estación Web Local & Gestor de Partidas PS5 / PS4</div>
       </div>
@@ -714,6 +715,16 @@ constexpr std::string_view kWebUiHtml = R"rawhtml(<!DOCTYPE html>
         <span class="status-dot"></span>
         <span id="console-ip">Conectando...</span>
       </div>
+      <a href="/api/log" download="machete.log" class="btn btn-secondary btn-sm" id="btn-download-log" title="Descargar registro de eventos y diagnostico del sistema (machete.log)">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
+          <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
+          <polyline points="14 2 14 8 20 8"></polyline>
+          <line x1="16" y1="13" x2="8" y2="13"></line>
+          <line x1="16" y1="17" x2="8" y2="17"></line>
+          <polyline points="10 9 9 9 8 9"></polyline>
+        </svg>
+        <span>Descargar Log</span>
+      </a>
       <button class="btn btn-secondary btn-sm" id="btn-guide" onclick="openGuideModal()" title="Como restaurar partidas de otra PS5 o PS4 sin corrupcion">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
           <circle cx="12" cy="12" r="10"></circle>
