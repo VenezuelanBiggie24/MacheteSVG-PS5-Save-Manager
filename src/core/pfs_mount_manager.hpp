@@ -368,39 +368,141 @@ public:
             return false;
 
         static const char *candidate_paths[] = {
-            "/system/vsh/libSceFsInternalForVsh.sprx",
             "/system/common/lib/libSceFsInternalForVsh.sprx",
-            "/preinst2/vsh/libSceFsInternalForVsh.sprx",
+            "/system/priv/lib/libSceFsInternalForVsh.sprx",
+            "/system/vsh/libSceFsInternalForVsh.sprx",
+            "/system/vsh/module/libSceFsInternalForVsh.sprx",
+            "/system/priv/lib/libSceFsInternal.sprx",
+            "/system/common/lib/libSceFsInternal.sprx",
             "/preinst2/common/lib/libSceFsInternalForVsh.sprx",
+            "/preinst2/priv/lib/libSceFsInternalForVsh.sprx",
+            "/preinst2/vsh/libSceFsInternalForVsh.sprx",
             "libSceFsInternalForVsh.sprx",
+            "/system/priv/lib/libSceSaveData.sprx",
+            "/system/common/lib/libSceSaveData.sprx",
+            "/system/priv/lib/libSceSaveDataInternal.sprx",
+            nullptr
+        };
+
+        static const char *kMountSyms[] = {
+            "sceFsMountSaveData",
+            "/sOxdS4jtnM=",
+            "/sOxdS4jtnM",
+            nullptr
+        };
+        static const char *kInitMountSyms[] = {
+            "sceFsInitMountSaveDataOpt",
+            "q8Tr7sDsY/o=",
+            "q8Tr7sDsY/o",
+            nullptr
+        };
+        static const char *kInitUmountSyms[] = {
+            "sceFsInitUmountSaveDataOpt",
+            "+HB5Vn2W1bk=",
+            "+HB5Vn2W1bk",
+            nullptr
+        };
+        static const char *kUmountSyms[] = {
+            "sceFsUmountSaveData",
+            "joyMnRrqTgo=",
+            "joyMnRrqTgo",
             nullptr
         };
 
         int (*init_mount)(SaveMountOpt *) = nullptr;
 
+        auto resolve_from_handle = [&](void *h, const char *path) -> bool {
+            if (!h) return false;
+            int (*found_init_m)(SaveMountOpt *) = nullptr;
+            int (*found_m)(SaveMountOpt *, const char *, const char *, const void *) = nullptr;
+            int (*found_init_u)(SaveMountOpt *) = nullptr;
+            int (*found_u)(SaveMountOpt *, const char *, void *, int) = nullptr;
+
+            for (int k = 0; kInitMountSyms[k]; ++k)
+            {
+                void *s = dlsym(h, kInitMountSyms[k]);
+                if (s) { found_init_m = reinterpret_cast<int (*)(SaveMountOpt *)>(s); break; }
+            }
+            for (int k = 0; kMountSyms[k]; ++k)
+            {
+                void *s = dlsym(h, kMountSyms[k]);
+                if (s) { found_m = reinterpret_cast<int (*)(SaveMountOpt *, const char *, const char *, const void *)>(s); break; }
+            }
+            for (int k = 0; kInitUmountSyms[k]; ++k)
+            {
+                void *s = dlsym(h, kInitUmountSyms[k]);
+                if (s) { found_init_u = reinterpret_cast<int (*)(SaveMountOpt *)>(s); break; }
+            }
+            for (int k = 0; kUmountSyms[k]; ++k)
+            {
+                void *s = dlsym(h, kUmountSyms[k]);
+                if (s) { found_u = reinterpret_cast<int (*)(SaveMountOpt *, const char *, void *, int)>(s); break; }
+            }
+
+            if (found_init_m && found_m && found_init_u && found_u)
+            {
+                init_mount = found_init_m;
+                mount_fn_ = found_m;
+                init_umount_fn_ = found_init_u;
+                umount_fn_ = found_u;
+                MACHETE_LOG("[PFS]", "Resolved all PFS mount symbols via dlopen (%s)", path);
+                return true;
+            }
+            return false;
+        };
+
+        // 1. Probar dlopen en cada ruta candidata con RTLD_LAZY y luego RTLD_NOW
         for (int i = 0; candidate_paths[i]; ++i)
         {
-            void *h = dlopen(candidate_paths[i], RTLD_NOW | RTLD_GLOBAL);
+            (void)dlerror();
+            void *h = dlopen(candidate_paths[i], RTLD_LAZY | RTLD_GLOBAL);
+            if (!h)
+            {
+                h = dlopen(candidate_paths[i], RTLD_NOW | RTLD_GLOBAL);
+            }
             if (h)
             {
-                init_mount = reinterpret_cast<int (*)(SaveMountOpt *)>(dlsym(h, "sceFsInitMountSaveDataOpt"));
-                mount_fn_ = reinterpret_cast<int (*)(SaveMountOpt *, const char *, const char *, const void *)>(dlsym(h, "sceFsMountSaveData"));
-                init_umount_fn_ = reinterpret_cast<int (*)(SaveMountOpt *)>(dlsym(h, "sceFsInitUmountSaveDataOpt"));
-                umount_fn_ = reinterpret_cast<int (*)(SaveMountOpt *, const char *, void *, int)>(dlsym(h, "sceFsUmountSaveData"));
-                if (init_mount && mount_fn_ && umount_fn_)
-                {
-                    MACHETE_LOG("[PFS]", "Resolved libSceFsInternalForVsh symbols via dlopen (%s)", candidate_paths[i]);
+                if (resolve_from_handle(h, candidate_paths[i]))
                     break;
-                }
             }
         }
 
+        // 2. Si dlopen no resolvio todos los simbolos, probar sceKernelLoadStartModule
         if (!mount_fn_ || !umount_fn_)
         {
             auto p_load = reinterpret_cast<int (*)(const char *, std::size_t, const void *, std::uint32_t, void *, int *)>(
                 dlsym(RTLD_DEFAULT, "sceKernelLoadStartModule"));
             auto p_dlsym = reinterpret_cast<int (*)(int, const char *, void **)>(
                 dlsym(RTLD_DEFAULT, "sceKernelDlsym"));
+
+            if (!p_load || !p_dlsym)
+            {
+                static const char *kernel_sys_candidates[] = {
+                    "/system/common/lib/libkernel_sys.sprx",
+                    "/system/priv/lib/libkernel_sys.sprx",
+                    "libkernel_sys.sprx",
+                    nullptr
+                };
+                for (int k = 0; kernel_sys_candidates[k]; ++k)
+                {
+                    void *kh = dlopen(kernel_sys_candidates[k], RTLD_LAZY | RTLD_GLOBAL);
+                    if (kh)
+                    {
+                        if (!p_load)
+                            p_load = reinterpret_cast<int (*)(const char *, std::size_t, const void *, std::uint32_t, void *, int *)>(
+                                dlsym(kh, "sceKernelLoadStartModule"));
+                        if (!p_dlsym)
+                            p_dlsym = reinterpret_cast<int (*)(int, const char *, void **)>(
+                                dlsym(kh, "sceKernelDlsym"));
+                        if (p_load && p_dlsym)
+                        {
+                            MACHETE_LOG("[PFS]", "Kernel module loader acquired from %s", kernel_sys_candidates[k]);
+                            break;
+                        }
+                    }
+                }
+            }
+
             if (p_load && p_dlsym)
             {
                 for (int i = 0; candidate_paths[i]; ++i)
@@ -409,13 +511,43 @@ public:
                     int mod_h = p_load(candidate_paths[i], 0, nullptr, 0, nullptr, &mod_res);
                     if (mod_h > 0)
                     {
-                        p_dlsym(mod_h, "sceFsInitMountSaveDataOpt", reinterpret_cast<void **>(&init_mount));
-                        p_dlsym(mod_h, "sceFsMountSaveData", reinterpret_cast<void **>(&mount_fn_));
-                        p_dlsym(mod_h, "sceFsInitUmountSaveDataOpt", reinterpret_cast<void **>(&init_umount_fn_));
-                        p_dlsym(mod_h, "sceFsUmountSaveData", reinterpret_cast<void **>(&umount_fn_));
-                        if (init_mount && mount_fn_ && umount_fn_)
+                        int (*found_init_m)(SaveMountOpt *) = nullptr;
+                        int (*found_m)(SaveMountOpt *, const char *, const char *, const void *) = nullptr;
+                        int (*found_init_u)(SaveMountOpt *) = nullptr;
+                        int (*found_u)(SaveMountOpt *, const char *, void *, int) = nullptr;
+
+                        for (int k = 0; kInitMountSyms[k]; ++k)
                         {
-                            MACHETE_LOG("[PFS]", "Resolved libSceFsInternalForVsh symbols via sceKernelLoadStartModule (%s, handle=0x%x)",
+                            void *sym = nullptr;
+                            if (p_dlsym(mod_h, kInitMountSyms[k], &sym) == 0 && sym)
+                            { found_init_m = reinterpret_cast<int (*)(SaveMountOpt *)>(sym); break; }
+                        }
+                        for (int k = 0; kMountSyms[k]; ++k)
+                        {
+                            void *sym = nullptr;
+                            if (p_dlsym(mod_h, kMountSyms[k], &sym) == 0 && sym)
+                            { found_m = reinterpret_cast<int (*)(SaveMountOpt *, const char *, const char *, const void *)>(sym); break; }
+                        }
+                        for (int k = 0; kInitUmountSyms[k]; ++k)
+                        {
+                            void *sym = nullptr;
+                            if (p_dlsym(mod_h, kInitUmountSyms[k], &sym) == 0 && sym)
+                            { found_init_u = reinterpret_cast<int (*)(SaveMountOpt *)>(sym); break; }
+                        }
+                        for (int k = 0; kUmountSyms[k]; ++k)
+                        {
+                            void *sym = nullptr;
+                            if (p_dlsym(mod_h, kUmountSyms[k], &sym) == 0 && sym)
+                            { found_u = reinterpret_cast<int (*)(SaveMountOpt *, const char *, void *, int)>(sym); break; }
+                        }
+
+                        if (found_init_m && found_m && found_init_u && found_u)
+                        {
+                            init_mount = found_init_m;
+                            mount_fn_ = found_m;
+                            init_umount_fn_ = found_init_u;
+                            umount_fn_ = found_u;
+                            MACHETE_LOG("[PFS]", "Resolved libSceFs symbols via sceKernelLoadStartModule (%s, handle=0x%x)",
                                         candidate_paths[i], mod_h);
                             break;
                         }

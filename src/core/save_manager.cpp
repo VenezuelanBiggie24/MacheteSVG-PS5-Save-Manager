@@ -490,9 +490,53 @@ void apply_permissions_recursive(const std::string &path, uid_t uid = 0, gid_t g
     }
 }
 
+inline bool is_valid_save_param_json(const std::string &path)
+{
+    if (path.empty() || access(path.c_str(), R_OK) != 0)
+        return false;
+
+    std::FILE *f = std::fopen(path.c_str(), "rb");
+    if (!f)
+        return false;
+
+    char buf[2048] = {0};
+    std::size_t n = std::fread(buf, 1, sizeof(buf) - 1, f);
+    std::fclose(f);
+
+    if (n == 0)
+        return false;
+
+    std::string s(buf, n);
+    // Un param.json de app instalada contiene "category": "gd" (Game Disc) o "appType": 1
+    // NUNCA debe considerarse descriptor de guardado
+    if (s.find("\"category\":\"gd\"") != std::string::npos ||
+        s.find("\"category\": \"gd\"") != std::string::npos ||
+        s.find("\"appType\"") != std::string::npos)
+    {
+        return false;
+    }
+
+    if (s.find("\"category\":\"sd\"") != std::string::npos ||
+        s.find("\"category\": \"sd\"") != std::string::npos ||
+        s.find("\"savedataTitle\"") != std::string::npos ||
+        s.find("\"slotId\"") != std::string::npos)
+    {
+        return true;
+    }
+
+    if (s.find("\"titleId\"") != std::string::npos && s.find("\"category\"") != std::string::npos)
+    {
+        return true;
+    }
+
+    return false;
+}
+
 void reconstruct_prospero_metadata(const std::string &title_id,
                                    const std::string &dst_target,
                                    const std::string &meta_target,
+                                   const std::string &backup_folder,
+                                   const std::string &game_title,
                                    uid_t target_uid, gid_t target_gid)
 {
     MACHETE_LOG("[RESTORE]", "Reconstructing Prospero metadata for %s in %s...",
@@ -501,33 +545,31 @@ void reconstruct_prospero_metadata(const std::string &title_id,
     ensure_directories_recursive(meta_target, target_uid, target_gid);
     ensure_directories_recursive(meta_target + "/sce_sys", target_uid, target_gid);
 
-    // 1. Icono de guardado: Priorizar siempre el icono auténtico del savegame restaurado
+    // 1. Icono de guardado: Priorizar siempre el icono auténtico del savegame restaurado o respaldo
     std::string found_icon;
-    if (access((dst_target + "/sce_sys/icon0.png").c_str(), R_OK) == 0)
-    {
-        found_icon = dst_target + "/sce_sys/icon0.png";
-    }
-    else if (access((dst_target + "/icon0.png").c_str(), R_OK) == 0)
-    {
-        found_icon = dst_target + "/icon0.png";
-    }
-    else
-    {
-        const std::vector<std::string> icon_candidates = {
-            "/user/app/" + title_id + "/sce_sys/icon0.png",
-            "/mnt/ext0/user/app/" + title_id + "/sce_sys/icon0.png",
-            "/mnt/ext1/user/app/" + title_id + "/sce_sys/icon0.png",
-            "/user/appmeta/" + title_id + "/icon0.png",
-            "/user/appmeta/" + title_id + "/sce_sys/icon0.png",
-            "/system_data/priv/appmeta/" + title_id + "/icon0.png"};
+    const std::vector<std::string> icon_candidates = {
+        dst_target + "/sce_sys/icon0.png",
+        dst_target + "/icon0.png",
+        backup_folder + "/.meta/icon0.png",
+        backup_folder + "/meta/icon0.png",
+        backup_folder + "/icon0.png",
+        backup_folder + "/sce_sys/icon0.png",
+        meta_target + "/icon0.png",
+        meta_target + "/sce_sys/icon0.png",
+        "/user/app/" + title_id + "/sce_sys/icon0.png",
+        "/mnt/ext0/user/app/" + title_id + "/sce_sys/icon0.png",
+        "/mnt/ext1/user/app/" + title_id + "/sce_sys/icon0.png",
+        "/user/appmeta/" + title_id + "/icon0.png",
+        "/user/appmeta/" + title_id + "/sce_sys/icon0.png",
+        "/system_data/priv/appmeta/" + title_id + "/icon0.png"
+    };
 
-        for (const auto &ic : icon_candidates)
+    for (const auto &ic : icon_candidates)
+    {
+        if (!ic.empty() && access(ic.c_str(), R_OK) == 0)
         {
-            if (access(ic.c_str(), R_OK) == 0)
-            {
-                found_icon = ic;
-                break;
-            }
+            found_icon = ic;
+            break;
         }
     }
 
@@ -541,28 +583,31 @@ void reconstruct_prospero_metadata(const std::string &title_id,
         MACHETE_LOG("[RESTORE]", "Save icon synchronized in %s (from %s)", meta_target.c_str(), found_icon.c_str());
     }
 
-    // 2. param.json del guardado: CRUCIAL - Debe ser el descriptor de partida (savedata param.json),
-    // NUNCA el param.json de la instalacion del juego (gd)
+    // 2. param.json del guardado: CRUCIAL - Debe ser el descriptor de partida (category "sd"),
+    // NUNCA el param.json de la instalacion del juego (category "gd")
     std::string found_param;
-    if (access((dst_target + "/sce_sys/param.json").c_str(), R_OK) == 0)
+    if (is_valid_save_param_json(meta_target + "/param.json"))
     {
-        found_param = dst_target + "/sce_sys/param.json";
+        found_param = meta_target + "/param.json";
     }
-    else if (access((dst_target + "/param.json").c_str(), R_OK) == 0)
+    else if (is_valid_save_param_json(meta_target + "/sce_sys/param.json"))
     {
-        found_param = dst_target + "/param.json";
+        found_param = meta_target + "/sce_sys/param.json";
     }
     else
     {
-        // Fallback secundario a appmeta solo si el save no contenia param.json
         const std::vector<std::string> param_candidates = {
-            "/user/appmeta/" + title_id + "/param.json",
-            "/user/appmeta/" + title_id + "/sce_sys/param.json",
-            "/system_data/priv/appmeta/" + title_id + "/param.json"};
+            backup_folder + "/.meta/param.json",
+            backup_folder + "/meta/param.json",
+            backup_folder + "/param.json",
+            backup_folder + "/sce_sys/param.json",
+            dst_target + "/sce_sys/param.json",
+            dst_target + "/param.json"
+        };
 
         for (const auto &pc : param_candidates)
         {
-            if (access(pc.c_str(), R_OK) == 0)
+            if (!pc.empty() && is_valid_save_param_json(pc))
             {
                 found_param = pc;
                 break;
@@ -570,14 +615,88 @@ void reconstruct_prospero_metadata(const std::string &title_id,
         }
     }
 
+    // Calcular tamaño total de slots sdimg_* para mantener el descriptor exacto
+    std::uint64_t total_sdimg_size = 0;
+    ScopedDir dir_scan(dst_target);
+    if (dir_scan.is_valid())
+    {
+        while (const dirent *ent = readdir(dir_scan.get()))
+        {
+            if (std::strncmp(ent->d_name, "sdimg_", 6) == 0)
+            {
+                struct stat st_slot{};
+                if (stat((dst_target + "/" + ent->d_name).c_str(), &st_slot) == 0)
+                    total_sdimg_size += static_cast<std::uint64_t>(st_slot.st_size);
+            }
+        }
+    }
+
     if (!found_param.empty())
     {
-        std::uint64_t b = 0;
-        int fc = 0;
-        copy_file_with_fsync(found_param, meta_target + "/param.json", b, 0, fc, nullptr, target_uid, target_gid);
-        b = 0; fc = 0;
-        copy_file_with_fsync(found_param, meta_target + "/sce_sys/param.json", b, 0, fc, nullptr, target_uid, target_gid);
-        MACHETE_LOG("[RESTORE]", "Save parameters synchronized in %s (from %s)", meta_target.c_str(), found_param.c_str());
+        if (found_param != meta_target + "/param.json")
+        {
+            std::uint64_t b = 0;
+            int fc = 0;
+            copy_file_with_fsync(found_param, meta_target + "/param.json", b, 0, fc, nullptr, target_uid, target_gid);
+        }
+        if (found_param != meta_target + "/sce_sys/param.json")
+        {
+            std::uint64_t b = 0;
+            int fc = 0;
+            copy_file_with_fsync(found_param, meta_target + "/sce_sys/param.json", b, 0, fc, nullptr, target_uid, target_gid);
+        }
+        pfs::update_ps5_param_json_size(meta_target + "/param.json", total_sdimg_size);
+        pfs::update_ps5_param_json_size(meta_target + "/sce_sys/param.json", total_sdimg_size);
+        MACHETE_LOG("[RESTORE]", "Save parameters synchronized in %s (from %s, size=%llu)",
+                    meta_target.c_str(), found_param.c_str(), static_cast<unsigned long long>(total_sdimg_size));
+    }
+    else
+    {
+        // Sintetizar un param.json de guardado auténtico (categoría "sd") para evitar "Datos dañados"
+        const std::uint64_t now_ms = static_cast<std::uint64_t>(std::time(nullptr)) * 1000ULL;
+        std::string safe_title = game_title.empty() ? title_id : game_title;
+        std::string escaped_title;
+        for (char c : safe_title)
+        {
+            if (c == '"' || c == '\\')
+                escaped_title += '\\';
+            escaped_title += c;
+        }
+
+        char synth_buf[512];
+        int slen = std::snprintf(synth_buf, sizeof(synth_buf),
+            "{\n"
+            "  \"category\": \"sd\",\n"
+            "  \"formatVersion\": \"01.00\",\n"
+            "  \"titleId\": \"%s\",\n"
+            "  \"savedataTitle\": \"%s\",\n"
+            "  \"detail\": \"Restored by MacheteSVG\",\n"
+            "  \"fileSize\": %llu,\n"
+            "  \"mtime\": %llu\n"
+            "}\n",
+            title_id.c_str(), escaped_title.c_str(),
+            static_cast<unsigned long long>(total_sdimg_size),
+            static_cast<unsigned long long>(now_ms));
+
+        if (slen > 0)
+        {
+            for (const auto &out_p : {meta_target + "/param.json", meta_target + "/sce_sys/param.json"})
+            {
+                std::FILE *out = std::fopen(out_p.c_str(), "wb");
+                if (out)
+                {
+                    std::fwrite(synth_buf, 1, static_cast<std::size_t>(slen), out);
+                    std::fflush(out);
+                    int fd = fileno(out);
+                    if (fd >= 0)
+                        (void)::fsync(fd);
+                    std::fclose(out);
+                    (void)chmod(out_p.c_str(), 0666);
+                }
+            }
+            MACHETE_LOG("[RESTORE]", "Authentic PS5 save descriptor synthesized cleanly for %s (size=%llu)",
+                        title_id.c_str(), static_cast<unsigned long long>(total_sdimg_size));
+        }
     }
 
     // 3. Para cada sdimg_<slot> en dst_target, asociar icono complementario si está disponible
@@ -707,8 +826,8 @@ void post_process_restored_save(const scanner::ScannedGame &game,
                 MACHETE_LOG("[RESTORE]", "Metadata restored for PS5: %d files in %s", m_files, meta_target.c_str());
             }
 
-            // Sincronizar SIEMPRE desde dst_target/sce_sys para garantizar coherencia exacta de slot y param.json
-            reconstruct_prospero_metadata(game.title_id, dst_target, meta_target, target_uid, target_gid);
+            // Sincronizar garantizando descriptor de guardado auténtico (category "sd") y coherencia de tamaño
+            reconstruct_prospero_metadata(game.title_id, dst_target, meta_target, backup_folder, game.title, target_uid, target_gid);
             apply_permissions_recursive(meta_target, target_uid, target_gid);
         }
 
@@ -749,6 +868,7 @@ void post_process_restored_save(const scanner::ScannedGame &game,
         std::snprintf(uid_hex, sizeof(uid_hex), "%x", user_id);
         const std::string meta_ps4_user = std::string("/user/home/") + uid_hex + "/savedata_meta/user/" + game.title_id;
         ensure_directories_recursive(meta_ps4_user, target_uid, target_gid);
+        ensure_directories_recursive(meta_ps4_user + "/sce_sys", target_uid, target_gid);
 
         std::string backup_meta = backup_folder + "/.meta";
         if (access(backup_meta.c_str(), F_OK) != 0)
@@ -760,6 +880,61 @@ void post_process_restored_save(const scanner::ScannedGame &game,
             std::uint64_t m_bytes = 0;
             (void)copy_directory_recursive(backup_meta, meta_ps4_user, m_files, m_bytes, 0, nullptr, target_uid, target_gid);
         }
+
+        // Si meta_ps4_user no contiene param.sfo, buscar en backup, dst_target, o instalación
+        if (access((meta_ps4_user + "/param.sfo").c_str(), R_OK) != 0 &&
+            access((meta_ps4_user + "/sce_sys/param.sfo").c_str(), R_OK) != 0)
+        {
+            const std::vector<std::string> sfo_candidates = {
+                backup_folder + "/.meta/param.sfo",
+                backup_folder + "/meta/param.sfo",
+                backup_folder + "/param.sfo",
+                backup_folder + "/sce_sys/param.sfo",
+                dst_target + "/sce_sys/param.sfo",
+                dst_target + "/param.sfo",
+                "/user/app/" + game.title_id + "/sce_sys/param.sfo",
+                "/user/appmeta/" + game.title_id + "/param.sfo",
+                "/user/appmeta/" + game.title_id + "/sce_sys/param.sfo",
+                "/system_data/priv/appmeta/" + game.title_id + "/param.sfo"
+            };
+            for (const auto &sp : sfo_candidates)
+            {
+                if (access(sp.c_str(), R_OK) == 0)
+                {
+                    (void)pfs::copy_file_atomic(sp, meta_ps4_user + "/param.sfo", target_uid, target_gid);
+                    (void)pfs::copy_file_atomic(sp, meta_ps4_user + "/sce_sys/param.sfo", target_uid, target_gid);
+                    MACHETE_LOG("[RESTORE]", "Synchronized PS4 param.sfo to %s (from %s)", meta_ps4_user.c_str(), sp.c_str());
+                    break;
+                }
+            }
+        }
+
+        // Si meta_ps4_user no contiene icon0.png, sincronizar icono
+        if (access((meta_ps4_user + "/icon0.png").c_str(), R_OK) != 0)
+        {
+            const std::vector<std::string> icon_candidates = {
+                backup_folder + "/.meta/icon0.png",
+                backup_folder + "/meta/icon0.png",
+                backup_folder + "/icon0.png",
+                backup_folder + "/sce_sys/icon0.png",
+                dst_target + "/sce_sys/icon0.png",
+                dst_target + "/icon0.png",
+                "/user/app/" + game.title_id + "/sce_sys/icon0.png",
+                "/user/appmeta/" + game.title_id + "/icon0.png"
+            };
+            for (const auto &ic : icon_candidates)
+            {
+                if (access(ic.c_str(), R_OK) == 0)
+                {
+                    (void)pfs::copy_file_atomic(ic, meta_ps4_user + "/icon0.png", target_uid, target_gid);
+                    (void)pfs::copy_file_atomic(ic, meta_ps4_user + "/sce_sys/icon0.png", target_uid, target_gid);
+                    break;
+                }
+            }
+        }
+
+        // Inyectar keystone también en meta_ps4_user
+        (void)machete::keystone::inject_authentic_keystone(meta_ps4_user, game.title_id, backup_folder);
 
         resign_sfo_directory_recursive(meta_ps4_user, rp, pfs_rep.sfo_resigned);
         apply_permissions_recursive(meta_ps4_user, target_uid, target_gid);

@@ -6,7 +6,44 @@
 
 ## English Documentation
 
-### Version 1.2.8 (Latest Release) - App Version & Build Compilation Info in System Logs
+### Version 1.2.9 (Latest Release) - Authentic PS5 Save Descriptors & Full PS4 BC Meta Alignment
+
+MacheteSVG v1.2.9 resolves savegame recognition and loading issues encountered when restoring saves on real PlayStation 5 hardware after fresh system installations or across different user profiles. It eliminates the "Datos dañados" (Corrupted data) error on native PS5 titles by synthesizing authentic savegame descriptors (`category="sd"`) and preventing game application manifests (`category="gd"`) from being injected into the save metadata directory. For PS4 retrocompatible titles, it fixes the "no se pudieron cargar la partida" error by replicating and resigning `param.sfo` into the active user's `savedata_meta/user/<title_id>/` directory, injecting the authentic 96-byte keystone, and ensuring full alignment with the console profile. Furthermore, the PFS mounting engine is upgraded with multi-path SPRX probing and Base64 SHA-1 NID symbol resolution.
+
+#### Key Enhancements in v1.2.9
+1. **Authentic PS5 Savegame Descriptor Synthesis (Fixes "Datos dañados"):**
+   - Eliminated the fallback bug where `/user/appmeta/<title_id>/param.json` (game manifest with `category="gd"`) was copied into `/user/home/<uid>/savedata_prospero_meta/<title_id>/`. Prospero OS rejected this mismatch as corrupted data.
+   - Implemented strict save descriptor validation (`is_valid_save_param_json`).
+   - If clean save metadata is missing in the backup, MacheteSVG now synthesizes an authentic save descriptor containing `"category": "sd"`, `"formatVersion": "01.00"`, Title ID, localized title, dynamic total file size of all `sdimg_*` slots, and current timestamp.
+2. **PS4 Retrocompatibility Meta & Keystone Synchronization (Fixes "No se pudieron cargar la partida"):**
+   - Backups without `.meta/` previously left `/user/home/<uid>/savedata_meta/user/<title_id>/` empty. The PS4 emulator in PS5 requires `param.sfo` and `icon0.png` in this directory to load the save.
+   - MacheteSVG automatically locates `param.sfo` across backup folders, restored files, and appmeta, synchronizes it to `meta_ps4_user`, and recalculates both 64-bit `ACCOUNT_ID` and OpenPSID HMAC.
+   - Keystone injection is applied to both the save directory and `meta_ps4_user`.
+3. **Advanced PFS Mount Engine with NID Symbol Resolution:**
+   - Expanded dynamic library loading to search 13 system paths across `/system/common/lib/`, `/system/priv/lib/`, `/system/vsh/`, and `/preinst2/`.
+   - Added SHA-1 Base64 NID symbol lookups (`/sOxdS4jtnM=`, `q8Tr7sDsY/o=`, `+HB5Vn2W1bk=`, `joyMnRrqTgo=`) to reliably locate private VSH symbols on all jailbroken firmwares.
+4. **App Version & Build Tracking:**
+   - App Version: `1.2.9` | Internal Build: `#54` (Commit `639f7b1`).
+5. **Verified Zero Emojis & 107 Passing Unit Tests:**
+   - 100% clean zero-emoji policy maintained across code, logs, and docs.
+   - 107 unit tests passed.
+
+#### Package Checksums (v1.2.9)
+| File | Size | SHA-256 Checksum |
+| :--- | :--- | :--- |
+| `MacheteSVG_v1.2.9_PS5.zip` | 30.2 MB (31,680,220 bytes) | `d3ed4411fb2cac3586b5c5d4ac563ef176905c7d20b88dfcbf9e3b728a9c0e3f` |
+| `eboot.bin` | 25.0 MB (26,225,696 bytes) | `e1fcbf91de34ebd44d4146d4fd7c50a30631be7c08166beabf17a18b4318f81f` |
+
+#### Installation (Easy FTP Method)
+1. Download `MacheteSVG_v1.2.9_PS5.zip`.
+2. Extract the archive on your PC to get the `PPSA99001` folder.
+3. Enable FTP on your PS5 (OnionHEN, etaHEN, etc.).
+4. Upload the `PPSA99001` folder directly to `/data/homebrew/` via FTP (resulting path: `/data/homebrew/PPSA99001/eboot.bin`).
+5. Launch MacheteSVG from your homebrew launcher or system menu.
+
+---
+
+### Version 1.2.8 - App Version & Build Compilation Info in System Logs
 
 MacheteSVG v1.2.8 integrates full application versioning and compilation build tracking across the entire runtime environment. All log streams (`machete.log`, root sandbox logs, kernel debug output, and fatal crash forensics) now prominently include the exact application version (`v1.2.8`), the internal build compilation number (`#53`), the source commit hash, and the build date/time. The Web Save Station (`:8383`) status endpoint (`/api/status`) and live browser dashboard also reflect this unified build information.
 
@@ -346,7 +383,44 @@ Upload the `PPSA99001` folder directly to `/data/homebrew/` via FTP.
 
 ## Notas de la Version en Espanol (Spanish Documentation)
 
-### Version 1.2.8 (Ultima Version) - Version de App y Numero de Compilacion en Registros del Sistema (Logs)
+### Version 1.2.9 (Ultima Version) - Descriptores de Guardado Autenticos PS5 y Alineacion Completa de Metadatos PS4
+
+MacheteSVG v1.2.9 resuelve de forma definitiva los problemas de reconocimiento y carga de partidas guardadas reportados tras formateos del sistema o cambio de cuenta en consolas PlayStation 5 con jailbreak. Elimina el error de "Datos dañados" en titulos nativos de PS5 sintetizando descriptores de guardado autenticos (`category="sd"`) e impidiendo la inyeccion de manifiestos de juego (`category="gd"`) en el directorio de metadatos de guardado. Para titulos retrocompatibles de PS4, soluciona el error donde el juego reportaba "no se pudieron cargar la partida", replicando y resignando `param.sfo` dentro del directorio `savedata_meta/user/<title_id>/` de la cuenta activa, inyectando el keystone autentico de 96 bytes y recalculando los hashes criptograficos. Asimismo, el motor de montaje PFS se actualiza con resolucion de simbolos privados mediante NIDs Base64 SHA-1 y sondeo de 13 rutas del sistema.
+
+#### Mejoras Principales en v1.2.9
+1. **Sintesis de Descriptores de Guardado Autenticos en PS5 (Corrige "Datos dañados"):**
+   - Se elimino el error en el cual, a falta de metadatos en el respaldo, se copiaba `/user/appmeta/<title_id>/param.json` (manifiesto de aplicacion con `category="gd"`) a `/user/home/<uid>/savedata_prospero_meta/<title_id>/`. Prospero OS marcaba este guardado de inmediato como datos dañados por incoherencia de categoria.
+   - Se integro validacion estricta de descriptores (`is_valid_save_param_json`).
+   - MacheteSVG ahora sintetiza un descriptor de guardado autentico con `"category": "sd"`, `"formatVersion": "01.00"`, Title ID, titulo del juego, tamano calculado en tiempo real de todos los slots `sdimg_*` y marca de tiempo actual.
+2. **Sincronizacion de Metadatos y Keystone en PS4 (Corrige "No se pudieron cargar la partida"):**
+   - En respaldos sin directorio `.meta/`, la ruta `/user/home/<uid>/savedata_meta/user/<title_id>/` quedaba vacia. El emulador de PS4 en PS5 exige que `param.sfo` e `icon0.png` existan en esta ubicacion para que el juego reconozca y cargue la partida.
+   - MacheteSVG busca automaticamente `param.sfo` e `icon0.png` en las ubicaciones candidatas, los sincroniza hacia `meta_ps4_user`, y resigna tanto el `ACCOUNT_ID` de 64 bits como el HMAC OpenPSID.
+   - La inyeccion de keystone se realiza tanto en la partida como en `savedata_meta/user/<title_id>/`.
+3. **Motor de Montaje PFS con Resolucion de Simbolos NID:**
+   - Ampliada la busqueda dinamica de bibliotecas a 13 rutas de `/system/common/lib/`, `/system/priv/lib/`, `/system/vsh/` y `/preinst2/`.
+   - Incorporada resolucion de NIDs Base64 SHA-1 (`/sOxdS4jtnM=`, `q8Tr7sDsY/o=`, etc.) para garantizar el enlace con funciones privadas de VSH en cualquier firmware.
+4. **Identificacion de Version y Compilacion:**
+   - Version de la aplicacion: `1.2.9` | Numero de compilacion: `#54` (Commit `639f7b1`).
+5. **Certificacion de Cero Emojis y 107 Pruebas Unitarias Exitosas:**
+   - Politica estricta de CERO EMOJIS mantenida al 100%.
+   - 107 pruebas unitarias pasadas con exito.
+
+#### Sumas de Verificacion de Paquetes (v1.2.9)
+| Archivo | Tamano | Suma de Verificacion SHA-256 |
+| :--- | :--- | :--- |
+| `MacheteSVG_v1.2.9_PS5.zip` | 30.2 MB (31,680,220 bytes) | `d3ed4411fb2cac3586b5c5d4ac563ef176905c7d20b88dfcbf9e3b728a9c0e3f` |
+| `eboot.bin` | 25.0 MB (26,225,696 bytes) | `e1fcbf91de34ebd44d4146d4fd7c50a30631be7c08166beabf17a18b4318f81f` |
+
+#### Instalacion (Metodo Facil via FTP)
+1. Descarga `MacheteSVG_v1.2.9_PS5.zip`.
+2. Descomprime el archivo en tu PC para obtener la carpeta `PPSA99001`.
+3. Habilita el servidor FTP en tu PS5 (OnionHEN, etaHEN, etc.).
+4. Copia la carpeta `PPSA99001` directamente en `/data/homebrew/` via FTP (ruta final: `/data/homebrew/PPSA99001/eboot.bin`).
+5. Inicia MacheteSVG directamente desde tu lanzador de homebrew o menu principal.
+
+---
+
+### Version 1.2.8 - Version de App y Numero de Compilacion en Registros del Sistema (Logs)
 
 MacheteSVG v1.2.8 integra la identificacion completa de version y numero de compilacion (build) en todo el subsistema de ejecucion y diagnostico. Todas las vias de registro (`machete.log`, registros del sandbox raiz, salida de depuracion del kernel de Prospero y capturas forenses de crashes) ahora incluyen de forma prominente la version exacta de la aplicacion (`v1.2.8`), el numero de compilacion interna (`#53`), el hash del commit de origen y la fecha/hora de compilacion. Asimismo, el punto de enlace de estado de la Estacion Web (`/api/status`) y la interfaz web reflejan esta misma informacion unificada.
 

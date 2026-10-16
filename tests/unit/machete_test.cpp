@@ -638,9 +638,9 @@ TEST(MacheteServerTest, HttpApiEndpointsAndSecurity)
     // 1. GET /api/status
     std::string status_resp = test_http_request(test_port, "GET /api/status HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n");
     EXPECT_NE(status_resp.find("HTTP/1.1 200 OK"), std::string::npos);
-    EXPECT_NE(status_resp.find("\"version\":\"1.2.8\""), std::string::npos);
-    EXPECT_NE(status_resp.find("\"build\":\"53\""), std::string::npos);
-    EXPECT_NE(status_resp.find("\"commit\":\"51c62a6\""), std::string::npos);
+    EXPECT_NE(status_resp.find("\"version\":\"1.2.9\""), std::string::npos);
+    EXPECT_NE(status_resp.find("\"build\":\"54\""), std::string::npos);
+    EXPECT_NE(status_resp.find("\"commit\":\"639f7b1\""), std::string::npos);
     EXPECT_NE(status_resp.find("\"status\":\"running\""), std::string::npos);
 
     // 1b. GET /api/log
@@ -1081,9 +1081,9 @@ TEST(MachetePfsTest, PS4SlotDetection)
 
 TEST(MacheteBuildInfoTest, ValidateAppVersionAndBuildNumber)
 {
-    EXPECT_STREQ(machete::build::version_string(), "1.2.8");
-    EXPECT_STREQ(machete::build::build_number(), "53");
-    EXPECT_STREQ(machete::build::git_commit(), "51c62a6");
+    EXPECT_STREQ(machete::build::version_string(), "1.2.9");
+    EXPECT_STREQ(machete::build::build_number(), "54");
+    EXPECT_STREQ(machete::build::git_commit(), "639f7b1");
     EXPECT_STRNE(machete::build::build_date(), "");
     EXPECT_STRNE(machete::build::build_time(), "");
 }

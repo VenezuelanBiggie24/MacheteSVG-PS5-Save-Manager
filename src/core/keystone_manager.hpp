@@ -80,11 +80,10 @@ inline bool inject_authentic_keystone(const std::string &save_dir, const std::st
         return false;
     }
 
-    // Ubicaciones de keystone en la partida (directa o bajo sce_sys)
-    std::string dest_keystone = save_dir + "/keystone";
+    std::vector<std::string> dest_targets = {save_dir + "/keystone"};
     if (access((save_dir + "/sce_sys").c_str(), F_OK) == 0)
     {
-        dest_keystone = save_dir + "/sce_sys/keystone";
+        dest_targets.push_back(save_dir + "/sce_sys/keystone");
     }
 
     std::FILE *fin = std::fopen(authentic_src.c_str(), "rb");
@@ -98,19 +97,22 @@ inline bool inject_authentic_keystone(const std::string &save_dir, const std::st
     if (n != KEYSTONE_SIZE)
         return false;
 
-    std::FILE *fout = std::fopen(dest_keystone.c_str(), "wb");
-    if (!fout)
-        return false;
-
-    std::fwrite(buffer, 1, KEYSTONE_SIZE, fout);
-    std::fflush(fout);
-    int fd = fileno(fout);
-    if (fd >= 0)
+    for (const auto &dest_keystone : dest_targets)
     {
-        fsync(fd);
+        std::FILE *fout = std::fopen(dest_keystone.c_str(), "wb");
+        if (fout)
+        {
+            std::fwrite(buffer, 1, KEYSTONE_SIZE, fout);
+            std::fflush(fout);
+            int fd = fileno(fout);
+            if (fd >= 0)
+            {
+                fsync(fd);
+            }
+            std::fclose(fout);
+            (void)chmod(dest_keystone.c_str(), 0666);
+        }
     }
-    std::fclose(fout);
-    (void)chmod(dest_keystone.c_str(), 0666);
 
     // Guardar copia permanente en la bóveda de keystones
     (void)mkdir("/data/MacheteSVG", 0777);
@@ -125,7 +127,7 @@ inline bool inject_authentic_keystone(const std::string &save_dir, const std::st
     }
 
     MACHETE_LOG("[KEYSTONE]", "Authentic keystone injected successfully into %s (from %s)",
-                dest_keystone.c_str(), authentic_src.c_str());
+                save_dir.c_str(), authentic_src.c_str());
     return true;
 }
 
