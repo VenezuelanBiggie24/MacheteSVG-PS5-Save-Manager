@@ -18,6 +18,34 @@ namespace machete::keystone
 
 constexpr std::size_t KEYSTONE_SIZE = 96; // 0x60 bytes
 
+inline bool is_valid_keystone_file(const std::string &path)
+{
+    struct stat st{};
+    if (stat(path.c_str(), &st) != 0 || !S_ISREG(st.st_mode) || st.st_size != static_cast<off_t>(KEYSTONE_SIZE))
+        return false;
+
+    std::FILE *f = std::fopen(path.c_str(), "rb");
+    if (!f)
+        return false;
+
+    std::uint8_t buf[KEYSTONE_SIZE] = {0};
+    const std::size_t n = std::fread(buf, 1, KEYSTONE_SIZE, f);
+    std::fclose(f);
+    if (n != KEYSTONE_SIZE)
+        return false;
+
+    bool any_nonzero = false;
+    for (std::size_t i = 0; i < KEYSTONE_SIZE; ++i)
+    {
+        if (buf[i] != 0)
+        {
+            any_nonzero = true;
+            break;
+        }
+    }
+    return any_nonzero;
+}
+
 inline std::string find_authentic_game_keystone(const std::string &title_id, const std::string &backup_folder = "")
 {
     const std::vector<std::string> candidates = {

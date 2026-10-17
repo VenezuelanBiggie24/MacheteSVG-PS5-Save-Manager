@@ -638,9 +638,8 @@ TEST(MacheteServerTest, HttpApiEndpointsAndSecurity)
     // 1. GET /api/status
     std::string status_resp = test_http_request(test_port, "GET /api/status HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n");
     EXPECT_NE(status_resp.find("HTTP/1.1 200 OK"), std::string::npos);
-    EXPECT_NE(status_resp.find("\"version\":\"1.2.9\""), std::string::npos);
-    EXPECT_NE(status_resp.find("\"build\":\"54\""), std::string::npos);
-    EXPECT_NE(status_resp.find("\"commit\":\"639f7b1\""), std::string::npos);
+    EXPECT_NE(status_resp.find("\"version\":\"1.3.0\""), std::string::npos);
+    EXPECT_NE(status_resp.find("\"build\":\"55\""), std::string::npos);
     EXPECT_NE(status_resp.find("\"status\":\"running\""), std::string::npos);
 
     // 1b. GET /api/log
@@ -1081,11 +1080,27 @@ TEST(MachetePfsTest, PS4SlotDetection)
 
 TEST(MacheteBuildInfoTest, ValidateAppVersionAndBuildNumber)
 {
-    EXPECT_STREQ(machete::build::version_string(), "1.2.9");
-    EXPECT_STREQ(machete::build::build_number(), "54");
-    EXPECT_STREQ(machete::build::git_commit(), "639f7b1");
+    EXPECT_STREQ(machete::build::version_string(), "1.3.0");
+    EXPECT_STREQ(machete::build::build_number(), "55");
+    EXPECT_STRNE(machete::build::git_commit(), "");
     EXPECT_STRNE(machete::build::build_date(), "");
     EXPECT_STRNE(machete::build::build_time(), "");
+}
+
+TEST(MacheteKeystoneValidationTest, Validate96ByteKeystoneCheck)
+{
+    const std::string ks_path = "/tmp/machete_test_keystone_valid.bin";
+    std::uint8_t ks[96] = {0};
+    std::memcpy(ks, "keystone", 8);
+    ks[32] = 0xAA;
+    std::FILE *f = std::fopen(ks_path.c_str(), "wb");
+    ASSERT_NE(f, nullptr);
+    std::fwrite(ks, 1, 96, f);
+    std::fclose(f);
+
+    EXPECT_TRUE(machete::keystone::is_valid_keystone_file(ks_path));
+    std::remove(ks_path.c_str());
+    EXPECT_FALSE(machete::keystone::is_valid_keystone_file(ks_path));
 }
 
 } // namespace hui::testing

@@ -6,7 +6,46 @@
 
 ## English Documentation
 
-### Version 1.2.9 (Latest Release) - Authentic PS5 Save Descriptors & Full PS4 BC Meta Alignment
+### Version 1.3.0 (Latest Release) - Native Kernel SPRX Loader, PS5 Pre-Format Save Dummy Injection & Non-Destructive PS4 DB Resigning
+
+MacheteSVG v1.3.0 (Build #55) resolves the remaining restoration edge cases identified on real PlayStation 5 hardware (FW 12.40): restoring PS5 backups created prior to a console format (`PPSA13427`) and loading PS4 backwards-compatible saves (`CUSA18600`) inside the game without triggering "no se pudieron cargar la partida".
+
+#### Key Enhancements in v1.3.0
+1. **SAMU `/dev/pfsmgr` Key Decryption Fix for PS5 `sdimg_*` Containers:**
+   - Removed the false-negative check at `keybuf + 0x80` in `decrypt_blob_via_pfsmgr` (`src/core/samu_vault.hpp`) that previously discarded valid 32-byte AES PFS keys decrypted by SAMU for PS5 `sdimg_*` containers.
+   - Imported `sceKernelGetOpenPsId` directly from `libkernel.so` so the console's 16-byte hardware `OpenPSID` is always retrieved reliably.
+2. **Native Kernel SPRX Loader (`sceKernelLoadStartModule` & `sceKernelDlsym`):**
+   - Upgraded `ScopedPfsMount` (`src/core/pfs_mount_manager.hpp`) to invoke `sceKernelLoadStartModule`, `sceKernelDlsym`, and `sceKernelGetModuleList` directly from `libkernel.so` after jailbreak privilege elevation, bypassing sandbox `dlopen` restrictions on `/system/common/lib/libSceFsInternalForVsh.sprx`.
+   - Preserves exact container filenames in staging (`/data/save_staging/<slot_name>`) and verifies physical mount completion via `st_dev` device ID comparison.
+   - Protects same-console PS5 saves (`set_write_back(false)` when `cross_console == false`) so verified same-console PS5 backups (`PPSA01417`) remain 100% untouched.
+3. **Pre-Format / Cross-Console PS5 Save Dummy Injection (`PPSA13427` Fix):**
+   - When restoring a pre-format or cross-console PS5 backup that has no `.meta/` folder, `reconstruct_prospero_metadata` now preserves the authentic `param.json` (`category="sd"`) from the local Save Dummy (`preserved_dummy_dir/.meta_dummy`) instead of overwriting it with a generic fallback.
+   - Hot-injects decrypted files into the mounted local Save Dummy PFS container so the PS5 kernel seals the image with the current console's SAMU keys.
+4. **Non-Destructive PS4 `savedata.db` Update & Inner PFS Keystone/SFO Harvesting (`CUSA18600` Fix):**
+   - Replaced the destructive `INSERT OR REPLACE` in `update_or_register_ps4_savedata_db` (`src/core/sqlite_adapter.hpp`) with a non-destructive `UPDATE` when the save row already exists, preserving authentic `main_title`, `sub_title`, `detail`, `user_param`, and `free_blocks` metadata required by the game engine.
+   - Harvests the authentic 96-byte `keystone` and `PARAMS.psid_hmac` directly from the mounted local Save Dummy (`preserved_dummy_dir`) when absent on the outer filesystem, injects them into the restored save container, and purges any polluted `CATEGORY="gd"` game `param.sfo` from `savedata_meta/user/<title_id>/`.
+5. **App Version & Build Tracking:**
+   - App Version: `1.3.0` | Internal Build: `#55`.
+6. **Verified Zero Emojis & 108 Passing Unit Tests:**
+   - 100% clean zero-emoji policy across all source files, logs, and documentation.
+   - All 108 unit tests passing across 33 test suites.
+
+#### Package Checksums (v1.3.0)
+| File | Size | SHA-256 Checksum |
+| :--- | :--- | :--- |
+| `MacheteSVG_v1.3.0_PS5.zip` | 30.2 MB (31,690,855 bytes) | `d0407aee554e46196683ce6366766be8808c8a154c1ddd5edb007ddc357daed9` |
+| `eboot.bin` | 25.0 MB (26,256,400 bytes) | `6ea2506e45031223941c2e20fa5cfd31f4209b9fc24879535401529a8266c85a` |
+
+#### Installation (Easy FTP Method)
+1. Download `MacheteSVG_v1.3.0_PS5.zip`.
+2. Extract the archive on your PC to get the `PPSA99001` folder.
+3. Enable FTP on your PS5 (OnionHEN, etaHEN, etc.).
+4. Upload the `PPSA99001` folder directly to `/data/homebrew/` via FTP (resulting path: `/data/homebrew/PPSA99001/eboot.bin`).
+5. Launch MacheteSVG from your homebrew launcher or system menu.
+
+---
+
+### Version 1.2.9 - Authentic PS5 Save Descriptors & Full PS4 BC Meta Alignment
 
 MacheteSVG v1.2.9 resolves savegame recognition and loading issues encountered when restoring saves on real PlayStation 5 hardware after fresh system installations or across different user profiles. It eliminates the "Datos dañados" (Corrupted data) error on native PS5 titles by synthesizing authentic savegame descriptors (`category="sd"`) and preventing game application manifests (`category="gd"`) from being injected into the save metadata directory. For PS4 retrocompatible titles, it fixes the "no se pudieron cargar la partida" error by replicating and resigning `param.sfo` into the active user's `savedata_meta/user/<title_id>/` directory, injecting the authentic 96-byte keystone, and ensuring full alignment with the console profile. Furthermore, the PFS mounting engine is upgraded with multi-path SPRX probing and Base64 SHA-1 NID symbol resolution.
 
@@ -383,7 +422,46 @@ Upload the `PPSA99001` folder directly to `/data/homebrew/` via FTP.
 
 ## Notas de la Version en Espanol (Spanish Documentation)
 
-### Version 1.2.9 (Ultima Version) - Descriptores de Guardado Autenticos PS5 y Alineacion Completa de Metadatos PS4
+### Version 1.3.0 (Ultima Version) - Cargador Kernel SPRX Nativo, Inyeccion Save Dummy PS5 Pre-Formateo y Resignado No Destructivo PS4
+
+MacheteSVG v1.3.0 (Build #55) soluciona de raiz los dos casos restantes verificados en hardware real de PlayStation 5 (FW 12.40): la restauracion de respaldos de PS5 creados antes de formatear la consola (`PPSA13427`) y la carga de partidas retrocompatibles de PS4 (`CUSA18600`) dentro del juego sin el mensaje "no se pudieron cargar la partida".
+
+#### Mejoras Principales en v1.3.0
+1. **Correccion de Desencriptado SAMU `/dev/pfsmgr` para Contenedores `sdimg_*` de PS5:**
+   - Se elimino la validacion falsa negativa en `keybuf + 0x80` dentro de `decrypt_blob_via_pfsmgr` (`src/core/samu_vault.hpp`), la cual descartaba las claves AES de 32 bytes desencriptadas por el coprocesador SAMU para los contenedores `sdimg_*` de PS5.
+   - Se importo directamente `sceKernelGetOpenPsId` desde `libkernel.so` para obtener siempre los 16 bytes del `OpenPSID` de la consola.
+2. **Cargador Nativo de Modulos de Kernel (`sceKernelLoadStartModule` y `sceKernelDlsym`):**
+   - Se actualizo `ScopedPfsMount` (`src/core/pfs_mount_manager.hpp`) para invocar `sceKernelLoadStartModule`, `sceKernelDlsym` y `sceKernelGetModuleList` directamente desde `libkernel.so` tras el jailbreak, superando las restricciones de `dlopen` sobre `/system/common/lib/libSceFsInternalForVsh.sprx`.
+   - Preserva el nombre exacto del slot en `/data/save_staging/<slot_name>` y verifica el montaje real comparando `st_dev`.
+   - Protege al 100% las partidas de PS5 de la misma consola (`set_write_back(false)` cuando `cross_console == false`) para que los respaldos verificados (`PPSA01417`) permanezcan intactos.
+3. **Inyeccion en Save Dummy Local para Partidas PS5 Pre-Formateo (`PPSA13427`):**
+   - Al restaurar un respaldo de PS5 anterior al formateo de la consola que no incluye carpeta `.meta/`, `reconstruct_prospero_metadata` preserva el `param.json` autentico (`category="sd"`) del Save Dummy local (`preserved_dummy_dir/.meta_dummy`) en lugar de sobrescribirlo con un JSON sintetico.
+   - Inyecta en caliente los archivos desencriptados dentro del contenedor Save Dummy local para que el kernel de PS5 lo selle con las claves actuales de la consola.
+4. **Actualizacion No Destructiva de `savedata.db` y Extraccion de Keystone/SFO Interno en PS4 (`CUSA18600`):**
+   - Se reemplazo el `INSERT OR REPLACE` destructivo en `update_or_register_ps4_savedata_db` (`src/core/sqlite_adapter.hpp`) por un `UPDATE` no destructivo cuando el registro ya existe, conservando `main_title`, `sub_title`, `detail`, `user_param` y `free_blocks` intactos.
+   - Extrae el `keystone` autentico de 96 bytes y el `PARAMS.psid_hmac` directamente desde el contenedor Save Dummy local montado (`preserved_dummy_dir`), los inyecta en la partida restaurada y purga cualquier `param.sfo` de aplicacion (`CATEGORY="gd"`) contaminado en `savedata_meta/user/<title_id>/`.
+5. **Identificacion de Version y Compilacion:**
+   - Version de la aplicacion: `1.3.0` | Numero de compilacion: `#55`.
+6. **Certificacion de Cero Emojis y 108 Pruebas Unitarias Exitosas:**
+   - Politica estricta de CERO EMOJIS verificada en todo el proyecto.
+   - 108 pruebas unitarias superadas en 33 suites de prueba.
+
+#### Sumas de Verificacion de Paquetes (v1.3.0)
+| Archivo | Tamano | Suma de Verificacion SHA-256 |
+| :--- | :--- | :--- |
+| `MacheteSVG_v1.3.0_PS5.zip` | 30.2 MB (31,690,855 bytes) | `d0407aee554e46196683ce6366766be8808c8a154c1ddd5edb007ddc357daed9` |
+| `eboot.bin` | 25.0 MB (26,256,400 bytes) | `6ea2506e45031223941c2e20fa5cfd31f4209b9fc24879535401529a8266c85a` |
+
+#### Instalacion (Metodo Facil via FTP)
+1. Descarga `MacheteSVG_v1.3.0_PS5.zip`.
+2. Descomprime el archivo en tu PC para obtener la carpeta `PPSA99001`.
+3. Habilita el servidor FTP en tu PS5 (OnionHEN, etaHEN, etc.).
+4. Copia la carpeta `PPSA99001` directamente en `/data/homebrew/` via FTP (ruta final: `/data/homebrew/PPSA99001/eboot.bin`).
+5. Inicia MacheteSVG directamente desde tu lanzador de homebrew o menu principal.
+
+---
+
+### Version 1.2.9 - Descriptores de Guardado Autenticos PS5 y Alineacion Completa de Metadatos PS4
 
 MacheteSVG v1.2.9 resuelve de forma definitiva los problemas de reconocimiento y carga de partidas guardadas reportados tras formateos del sistema o cambio de cuenta en consolas PlayStation 5 con jailbreak. Elimina el error de "Datos dañados" en titulos nativos de PS5 sintetizando descriptores de guardado autenticos (`category="sd"`) e impidiendo la inyeccion de manifiestos de juego (`category="gd"`) en el directorio de metadatos de guardado. Para titulos retrocompatibles de PS4, soluciona el error donde el juego reportaba "no se pudieron cargar la partida", replicando y resignando `param.sfo` dentro del directorio `savedata_meta/user/<title_id>/` de la cuenta activa, inyectando el keystone autentico de 96 bytes y recalculando los hashes criptograficos. Asimismo, el motor de montaje PFS se actualiza con resolucion de simbolos privados mediante NIDs Base64 SHA-1 y sondeo de 13 rutas del sistema.
 

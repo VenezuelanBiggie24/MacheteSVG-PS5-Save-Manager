@@ -536,6 +536,7 @@ void reconstruct_prospero_metadata(const std::string &title_id,
                                    const std::string &dst_target,
                                    const std::string &meta_target,
                                    const std::string &backup_folder,
+                                   const std::string &preserved_dummy_dir,
                                    const std::string &game_title,
                                    uid_t target_uid, gid_t target_gid)
 {
@@ -554,6 +555,9 @@ void reconstruct_prospero_metadata(const std::string &title_id,
         backup_folder + "/meta/icon0.png",
         backup_folder + "/icon0.png",
         backup_folder + "/sce_sys/icon0.png",
+        preserved_dummy_dir + "/.meta_dummy/icon0.png",
+        preserved_dummy_dir + "/.meta_dummy/sce_sys/icon0.png",
+        preserved_dummy_dir + "/sce_sys/icon0.png",
         meta_target + "/icon0.png",
         meta_target + "/sce_sys/icon0.png",
         "/user/app/" + title_id + "/sce_sys/icon0.png",
@@ -586,32 +590,28 @@ void reconstruct_prospero_metadata(const std::string &title_id,
     // 2. param.json del guardado: CRUCIAL - Debe ser el descriptor de partida (category "sd"),
     // NUNCA el param.json de la instalacion del juego (category "gd")
     std::string found_param;
-    if (is_valid_save_param_json(meta_target + "/param.json"))
-    {
-        found_param = meta_target + "/param.json";
-    }
-    else if (is_valid_save_param_json(meta_target + "/sce_sys/param.json"))
-    {
-        found_param = meta_target + "/sce_sys/param.json";
-    }
-    else
-    {
-        const std::vector<std::string> param_candidates = {
-            backup_folder + "/.meta/param.json",
-            backup_folder + "/meta/param.json",
-            backup_folder + "/param.json",
-            backup_folder + "/sce_sys/param.json",
-            dst_target + "/sce_sys/param.json",
-            dst_target + "/param.json"
-        };
+    const std::vector<std::string> param_candidates = {
+        backup_folder + "/.meta/param.json",
+        backup_folder + "/.meta/sce_sys/param.json",
+        backup_folder + "/meta/param.json",
+        backup_folder + "/meta/sce_sys/param.json",
+        backup_folder + "/param.json",
+        backup_folder + "/sce_sys/param.json",
+        dst_target + "/sce_sys/param.json",
+        dst_target + "/param.json",
+        preserved_dummy_dir + "/.meta_dummy/param.json",
+        preserved_dummy_dir + "/.meta_dummy/sce_sys/param.json",
+        preserved_dummy_dir + "/sce_sys/param.json",
+        meta_target + "/param.json",
+        meta_target + "/sce_sys/param.json"
+    };
 
-        for (const auto &pc : param_candidates)
+    for (const auto &pc : param_candidates)
+    {
+        if (!pc.empty() && is_valid_save_param_json(pc))
         {
-            if (!pc.empty() && is_valid_save_param_json(pc))
-            {
-                found_param = pc;
-                break;
-            }
+            found_param = pc;
+            break;
         }
     }
 
@@ -827,7 +827,7 @@ void post_process_restored_save(const scanner::ScannedGame &game,
             }
 
             // Sincronizar garantizando descriptor de guardado auténtico (category "sd") y coherencia de tamaño
-            reconstruct_prospero_metadata(game.title_id, dst_target, meta_target, backup_folder, game.title, target_uid, target_gid);
+            reconstruct_prospero_metadata(game.title_id, dst_target, meta_target, backup_folder, preserved_dummy_dir, game.title, target_uid, target_gid);
             apply_permissions_recursive(meta_target, target_uid, target_gid);
         }
 
@@ -881,31 +881,39 @@ void post_process_restored_save(const scanner::ScannedGame &game,
             (void)copy_directory_recursive(backup_meta, meta_ps4_user, m_files, m_bytes, 0, nullptr, target_uid, target_gid);
         }
 
-        // Si meta_ps4_user no contiene param.sfo, buscar en backup, dst_target, o instalación
-        if (access((meta_ps4_user + "/param.sfo").c_str(), R_OK) != 0 &&
-            access((meta_ps4_user + "/sce_sys/param.sfo").c_str(), R_OK) != 0)
+        // Purgar cualquier param.sfo de aplicacion (CATEGORY="gd") que pudiera existir en meta_ps4_user
+        // y sincronizar exclusivamente con un param.sfo de guardado autentico (CATEGORY="sd")
         {
             const std::vector<std::string> sfo_candidates = {
-                backup_folder + "/.meta/param.sfo",
-                backup_folder + "/meta/param.sfo",
-                backup_folder + "/param.sfo",
-                backup_folder + "/sce_sys/param.sfo",
                 dst_target + "/sce_sys/param.sfo",
                 dst_target + "/param.sfo",
-                "/user/app/" + game.title_id + "/sce_sys/param.sfo",
-                "/user/appmeta/" + game.title_id + "/param.sfo",
-                "/user/appmeta/" + game.title_id + "/sce_sys/param.sfo",
-                "/system_data/priv/appmeta/" + game.title_id + "/param.sfo"
+                preserved_dummy_dir + "/.meta_dummy/param.sfo",
+                preserved_dummy_dir + "/.meta_dummy/sce_sys/param.sfo",
+                backup_folder + "/.meta/param.sfo",
+                backup_folder + "/.meta/sce_sys/param.sfo",
+                backup_folder + "/meta/param.sfo",
+                backup_folder + "/param.sfo",
+                backup_folder + "/sce_sys/param.sfo"
             };
+            bool sfo_synced = false;
             for (const auto &sp : sfo_candidates)
             {
-                if (access(sp.c_str(), R_OK) == 0)
+                if (!sp.empty() && machete::sfo::is_valid_save_param_sfo(sp))
                 {
                     (void)pfs::copy_file_atomic(sp, meta_ps4_user + "/param.sfo", target_uid, target_gid);
                     (void)pfs::copy_file_atomic(sp, meta_ps4_user + "/sce_sys/param.sfo", target_uid, target_gid);
-                    MACHETE_LOG("[RESTORE]", "Synchronized PS4 param.sfo to %s (from %s)", meta_ps4_user.c_str(), sp.c_str());
+                    MACHETE_LOG("[RESTORE]", "Synchronized authentic PS4 Save Data param.sfo to %s (from %s)",
+                                meta_ps4_user.c_str(), sp.c_str());
+                    sfo_synced = true;
                     break;
                 }
+            }
+            if (!sfo_synced)
+            {
+                if (!machete::sfo::is_valid_save_param_sfo(meta_ps4_user + "/param.sfo"))
+                    (void)unlink((meta_ps4_user + "/param.sfo").c_str());
+                if (!machete::sfo::is_valid_save_param_sfo(meta_ps4_user + "/sce_sys/param.sfo"))
+                    (void)unlink((meta_ps4_user + "/sce_sys/param.sfo").c_str());
             }
         }
 
@@ -913,18 +921,20 @@ void post_process_restored_save(const scanner::ScannedGame &game,
         if (access((meta_ps4_user + "/icon0.png").c_str(), R_OK) != 0)
         {
             const std::vector<std::string> icon_candidates = {
+                dst_target + "/sce_sys/icon0.png",
+                dst_target + "/icon0.png",
+                preserved_dummy_dir + "/.meta_dummy/icon0.png",
+                preserved_dummy_dir + "/.meta_dummy/sce_sys/icon0.png",
                 backup_folder + "/.meta/icon0.png",
                 backup_folder + "/meta/icon0.png",
                 backup_folder + "/icon0.png",
                 backup_folder + "/sce_sys/icon0.png",
-                dst_target + "/sce_sys/icon0.png",
-                dst_target + "/icon0.png",
                 "/user/app/" + game.title_id + "/sce_sys/icon0.png",
                 "/user/appmeta/" + game.title_id + "/icon0.png"
             };
             for (const auto &ic : icon_candidates)
             {
-                if (access(ic.c_str(), R_OK) == 0)
+                if (!ic.empty() && access(ic.c_str(), R_OK) == 0)
                 {
                     (void)pfs::copy_file_atomic(ic, meta_ps4_user + "/icon0.png", target_uid, target_gid);
                     (void)pfs::copy_file_atomic(ic, meta_ps4_user + "/sce_sys/icon0.png", target_uid, target_gid);
@@ -939,24 +949,30 @@ void post_process_restored_save(const scanner::ScannedGame &game,
         resign_sfo_directory_recursive(meta_ps4_user, rp, pfs_rep.sfo_resigned);
         apply_permissions_recursive(meta_ps4_user, target_uid, target_gid);
 
-        // 3. Garantizar que cada slot en dst_target este indexado en savedata.db con is_broken = 0
-        ScopedDir ddst(dst_target);
-        if (ddst.is_valid())
+        // 3. Si el montaje PFS no estuvo disponible, indexar en savedata.db usando el param.sfo disponible
+        if (!pfs_rep.used_pfs_mount)
         {
-            while (const dirent *de = readdir(ddst.get()))
+            const auto fallback_meta = machete::sfo::read_sfo_metadata(meta_ps4_user + "/param.sfo");
+            ScopedDir ddst(dst_target);
+            if (ddst.is_valid())
             {
-                const std::string sname = de->d_name;
-                if (machete::pfs::is_valid_ps4_slot_name(dst_target, sname))
+                while (const dirent *de = readdir(ddst.get()))
                 {
-                    struct stat st_s{};
-                    std::uint64_t s_size = 0;
-                    if (stat((dst_target + "/" + sname).c_str(), &st_s) == 0)
-                        s_size = static_cast<std::uint64_t>(st_s.st_size);
-                    db::update_or_register_ps4_savedata_db(user_id, active_account_id, game.title_id, sname, s_size);
+                    const std::string sname = de->d_name;
+                    if (machete::pfs::is_valid_ps4_slot_name(dst_target, sname))
+                    {
+                        struct stat st_s{};
+                        std::uint64_t s_size = 0;
+                        if (stat((dst_target + "/" + sname).c_str(), &st_s) == 0)
+                            s_size = static_cast<std::uint64_t>(st_s.st_size);
+                        db::update_or_register_ps4_savedata_db(
+                            user_id, active_account_id, game.title_id, sname, s_size,
+                            fallback_meta.valid ? &fallback_meta : nullptr);
+                    }
                 }
             }
+            db::repair_title_corruption_flags(user_id, game.title_id, active_account_id);
         }
-        db::repair_title_corruption_flags(user_id, game.title_id);
     }
 
     if (out_report)

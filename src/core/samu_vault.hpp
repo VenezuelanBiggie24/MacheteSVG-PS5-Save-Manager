@@ -18,6 +18,13 @@
 #include <unistd.h>
 #include <vector>
 
+#if defined(__PROSPERO__) || defined(__Prospero__) || defined(__PS5__)
+extern "C"
+{
+    int sceKernelGetOpenPsId(void *id);
+}
+#endif
+
 namespace machete::vault
 {
 
@@ -64,21 +71,25 @@ inline bool decrypt_blob_via_pfsmgr(const std::uint8_t in_blob[96], std::uint8_t
 
     int pfd = open("/dev/pfsmgr", O_RDWR);
     if (pfd < 0)
+    {
+        MACHETE_LOG("[VAULT]", "Could not open /dev/pfsmgr (errno=%d)", errno);
         return false;
+    }
 
+    // Buffer de 512 bytes en heap (el ioctl lee 0x60 bytes en +0x00 y escribe 0x20 bytes de clave en +0x60)
     std::vector<std::uint8_t> keybuf(512, 0);
     std::memcpy(keybuf.data(), in_blob, 96);
 
-    int r = ioctl(pfd, PFS_DECRYPT_KEK_CMD, keybuf.data());
+    const int r = ioctl(pfd, PFS_DECRYPT_KEK_CMD, keybuf.data());
+    const int saved_errno = errno;
     close(pfd);
 
     if (r < 0)
+    {
+        MACHETE_LOG("[VAULT]", "pfsmgr ioctl failed (ret=%d, errno=%d, hdr=%02x%02x%02x%02x)",
+                    r, saved_errno, in_blob[0], in_blob[1], in_blob[2], in_blob[3]);
         return false;
-
-    std::int32_t status = 0;
-    std::memcpy(&status, keybuf.data() + 0x80, sizeof(status));
-    if (status != 0)
-        return false;
+    }
 
     bool non_zero = false;
     for (std::size_t i = 0; i < 32; ++i)
@@ -90,7 +101,13 @@ inline bool decrypt_blob_via_pfsmgr(const std::uint8_t in_blob[96], std::uint8_t
         }
     }
     if (!non_zero)
+    {
+        std::int32_t status_80 = 0;
+        std::memcpy(&status_80, keybuf.data() + 0x80, sizeof(status_80));
+        MACHETE_LOG("[VAULT]", "pfsmgr ioctl returned %d but key at +0x60 is zero (status_0x80=%d, hdr=%02x%02x%02x%02x)",
+                    r, status_80, in_blob[0], in_blob[1], in_blob[2], in_blob[3]);
         return false;
+    }
 
     std::memcpy(out_plain_key, keybuf.data() + 0x60, 32);
     MACHETE_LOG("[VAULT]", "SAMU decrypted 32-byte PFS AES key via /dev/pfsmgr successfully");
@@ -125,10 +142,45 @@ inline bool read_vault_record(const std::string &backup_folder, CryptoVaultRecor
     return true;
 }
 
-
-// Obtiene el OpenPSID de 16 bytes de la consola fisica
+// Obtiene el OpenPSID de 16 bytes de la consola fisica (via syscall de libkernel o cache del sistema)
 inline bool get_console_open_psid(std::uint8_t out_psid[16])
 {
+    if (!out_psid)
+        return false;
+
+    static bool s_cached = false;
+    static std::uint8_t s_psid[16] = {0};
+    if (s_cached)
+    {
+        std::memcpy(out_psid, s_psid, 16);
+        return true;
+    }
+
+#if defined(__PROSPERO__) || defined(__Prospero__) || defined(__PS5__)
+    std::uint8_t kbuf[64] = {0};
+    if (sceKernelGetOpenPsId(kbuf) == 0)
+    {
+        bool nz = false;
+        for (int i = 0; i < 16; ++i)
+        {
+            if (kbuf[i] != 0)
+            {
+                nz = true;
+                break;
+            }
+        }
+        if (nz)
+        {
+            std::memcpy(s_psid, kbuf, 16);
+            std::memcpy(out_psid, s_psid, 16);
+            s_cached = true;
+            MACHETE_LOG("[VAULT]", "Console OpenPSID retrieved via sceKernelGetOpenPsId: %02x%02x...%02x%02x",
+                        s_psid[0], s_psid[1], s_psid[14], s_psid[15]);
+            return true;
+        }
+    }
+#endif
+
     for (const char *psid_path : {
              "/system_data/priv/cache/openpsid.dat",
              "/system_data/priv/home/openpsid.dat",
@@ -141,6 +193,8 @@ inline bool get_console_open_psid(std::uint8_t out_psid[16])
             std::fclose(fpsid);
             if (r == 16)
             {
+                std::memcpy(s_psid, out_psid, 16);
+                s_cached = true;
                 MACHETE_LOG("[VAULT]", "Console OpenPSID retrieved: %02x%02x...%02x%02x (16 bytes)",
                             out_psid[0], out_psid[1], out_psid[14], out_psid[15]);
                 return true;

@@ -6,7 +6,7 @@
 [![Firmware](https://img.shields.io/badge/Firmware-All_Jailbroken_Firmwares-blueviolet.svg)](https://github.com/VenezuelanBiggie24/MacheteSVG-PS5-Save-Manager)
 [![Title ID](https://img.shields.io/badge/Title_ID-PPSA99001-informational.svg)](https://github.com/VenezuelanBiggie24/MacheteSVG-PS5-Save-Manager)
 [![License](https://img.shields.io/badge/License-GPL_v3.0-green.svg)](LICENSE)
-[![Release](https://img.shields.io/badge/Release-v1.2.9-orange.svg)](https://github.com/VenezuelanBiggie24/MacheteSVG-PS5-Save-Manager/releases/tag/v1.2.9)
+[![Release](https://img.shields.io/badge/Release-v1.3.0-orange.svg)](https://github.com/VenezuelanBiggie24/MacheteSVG-PS5-Save-Manager/releases/tag/v1.3.0)
 
 **MacheteSVG** is a native PlayStation 5 homebrew application designed to back up and restore save data (*savegames*) for both PS5 native titles and PS4 backwards-compatible games with **100% reliability**, zero risk of data corruption (preventing errors `CE-108255-1` and `CE-107109-8`), cross-console PS5 Save Dummy injection, Apollo-style PS4 auto-resigning with savedata.db corruption repair, and an embedded high-speed **Web Save Station** HTTP server (:8383) featuring an **in-app QR Code** for instant one-scan access from any smartphone, tablet, or PC on your local Wi-Fi / LAN.
 
@@ -30,7 +30,7 @@ The user interface is powered by a custom hardware-accelerated OpenGL 4.6 SDF re
 
 ### Installation (Easy FTP Method)
 
-1. Download `MacheteSVG_v1.2.9_PS5.zip` from [Releases](https://github.com/VenezuelanBiggie24/MacheteSVG-PS5-Save-Manager/releases).
+1. Download `MacheteSVG_v1.3.0_PS5.zip` from [Releases](https://github.com/VenezuelanBiggie24/MacheteSVG-PS5-Save-Manager/releases).
 2. Extract the ZIP archive on your computer to obtain the `PPSA99001` application folder.
 3. Enable the FTP server on your PlayStation 5 (via OnionHEN, etaHEN, or your jailbreak payload).
 4. Using an FTP client (FileZilla, WinSCP, Cyberduck, etc.), copy the entire `PPSA99001` folder directly into:
@@ -114,7 +114,7 @@ La interfaz gráfica cuenta con un renderizador SDF sobre OpenGL 4.6 acelerado p
 
 ### Instalación (Método Fácil vía FTP)
 
-1. Descarga `MacheteSVG_v1.2.9_PS5.zip` desde la sección [Releases](https://github.com/VenezuelanBiggie24/MacheteSVG-PS5-Save-Manager/releases).
+1. Descarga `MacheteSVG_v1.3.0_PS5.zip` desde la sección [Releases](https://github.com/VenezuelanBiggie24/MacheteSVG-PS5-Save-Manager/releases).
 2. Extrae el archivo ZIP en tu computadora para obtener la carpeta `PPSA99001`.
 3. Habilita el servidor FTP en tu PlayStation 5 (a través de OnionHEN, etaHEN o tu payload jailbreak).
 4. Usando un cliente FTP (FileZilla, WinSCP, Cyberduck, etc.), copia la carpeta `PPSA99001` completa directamente en:

@@ -5,6 +5,7 @@
 #pragma once
 
 #include "core/logger.hpp"
+#include "core/sfo_resigner.hpp"
 
 #include <cstdint>
 #include <cstdio>
@@ -20,6 +21,20 @@
 
 namespace machete::db
 {
+
+inline std::string escape_sql_string(const std::string &in)
+{
+    std::string out;
+    out.reserve(in.size() + 8);
+    for (char c : in)
+    {
+        if (c == '\'')
+            out += "''";
+        else if (c != '\0')
+            out += c;
+    }
+    return out;
+}
 
 class SqliteAdapter
 {
@@ -97,8 +112,12 @@ inline std::vector<std::string> get_savedata_db_candidates(std::uint32_t user_id
     std::vector<std::string> paths;
     paths.push_back(std::string("/system_data/savedata/") + uid_8 + "/db/user/savedata.db");
     paths.push_back(std::string("/system_data/savedata/") + uid_clean + "/db/user/savedata.db");
+    paths.push_back(std::string("/system_data/savedata_prospero/") + uid_8 + "/db/user/savedata.db");
+    paths.push_back(std::string("/system_data/savedata_prospero/") + uid_clean + "/db/user/savedata.db");
     paths.push_back(std::string("/system_data/savedata/") + uid_8 + "/db/savedata.db");
     paths.push_back(std::string("/system_data/savedata/") + uid_clean + "/db/savedata.db");
+    paths.push_back(std::string("/system_data/savedata_prospero/") + uid_8 + "/db/savedata.db");
+    paths.push_back(std::string("/system_data/savedata_prospero/") + uid_clean + "/db/savedata.db");
     paths.push_back(std::string("/system_data/savedata/") + uid_8 + "/savedata.db");
     paths.push_back(std::string("/system_data/savedata/") + uid_clean + "/savedata.db");
     paths.push_back(std::string("/user/home/") + uid_8 + "/savedata.db");
@@ -152,12 +171,13 @@ inline std::uint64_t query_account_id_from_savedata_db(std::uint32_t user_id)
     return 0;
 }
 
-// Registra o actualiza un slot de guardado en savedata.db garantizando is_broken = 0 y fake_broken = 0
+// Registra o actualiza un slot de guardado en savedata.db preservando metadatos y garantizando is_broken = 0 y fake_broken = 0
 inline bool update_or_register_ps4_savedata_db(std::uint32_t user_id,
                                                std::uint64_t account_id,
                                                const std::string &title_id,
                                                const std::string &slot_name,
-                                               std::uint64_t file_size_bytes)
+                                               std::uint64_t file_size_bytes,
+                                               const sfo::SfoSaveMetadata *sfo_meta = nullptr)
 {
     SqliteAdapter &adapter = SqliteAdapter::instance();
     if (!adapter.is_available())
@@ -167,17 +187,43 @@ inline bool update_or_register_ps4_savedata_db(std::uint32_t user_id,
         return false;
     }
 
-    const std::uint32_t blocks = (file_size_bytes > 0) ? static_cast<std::uint32_t>((file_size_bytes + 32767) / 32768) : 32;
-    const std::uint32_t size_kib = (file_size_bytes > 0) ? static_cast<std::uint32_t>((file_size_bytes + 1023) / 1024) : 1024;
+    std::uint32_t blocks = (file_size_bytes > 0) ? static_cast<std::uint32_t>((file_size_bytes + 32767) / 32768) : 32;
+    if (sfo_meta && sfo_meta->blocks > 0)
+    {
+        blocks = static_cast<std::uint32_t>(sfo_meta->blocks);
+    }
+    const std::uint32_t size_kib = (file_size_bytes > 0) ? static_cast<std::uint32_t>((file_size_bytes + 1023) / 1024) : (blocks * 32);
+    const std::uint32_t user_param = (sfo_meta && sfo_meta->valid) ? sfo_meta->user_param : 0;
+
+    const std::string safe_tid = escape_sql_string(title_id);
+    const std::string safe_slot = escape_sql_string(slot_name);
+    const std::string safe_main = (sfo_meta && sfo_meta->valid) ? escape_sql_string(sfo_meta->main_title) : "";
+    const std::string safe_sub = (sfo_meta && sfo_meta->valid) ? escape_sql_string(sfo_meta->sub_title) : "";
+    const std::string safe_detail = (sfo_meta && sfo_meta->valid) ? escape_sql_string(sfo_meta->detail) : "";
 
     const auto candidates = get_savedata_db_candidates(user_id);
+    std::vector<std::string> unique_dbs;
+    for (const auto &c : candidates)
+    {
+        if (access(c.c_str(), F_OK) != 0)
+            continue;
+        bool dup = false;
+        for (const auto &u : unique_dbs)
+        {
+            if (u == c)
+            {
+                dup = true;
+                break;
+            }
+        }
+        if (!dup)
+            unique_dbs.push_back(c);
+    }
+
     bool any_updated = false;
 
-    for (const auto &dbp : candidates)
+    for (const auto &dbp : unique_dbs)
     {
-        if (access(dbp.c_str(), F_OK) != 0)
-            continue;
-
         MACHETE_LOG("[DB]", "Attempting to index PS4 save in %s: %s/%s", dbp.c_str(), title_id.c_str(), slot_name.c_str());
 
         void *db = nullptr;
@@ -199,47 +245,85 @@ inline bool update_or_register_ps4_savedata_db(std::uint32_t user_id,
             "cloud_revision INTEGER, game_title_id TEXT, PRIMARY KEY (title_id, dir_name));";
         (void)adapter.exec(db, create_tbl, nullptr, nullptr, nullptr);
 
-        // 2. Insertar o actualizar la fila correspondiente reseteando explicitamente los flags de corrupcion
-        char sql[1024];
-        std::snprintf(sql, sizeof(sql),
-                      "INSERT OR REPLACE INTO savedata ("
-                      "title_id, dir_name, main_title, sub_title, detail, tmp_dir_name, "
-                      "is_broken, user_param, blocks, free_blocks, size_kib, mtime, "
-                      "fake_broken, account_id, user_id, faked_owner, cloud_icon_url, "
-                      "cloud_revision, game_title_id"
-                      ") VALUES ("
-                      "'%s', '%s', '', '', '', '', "
-                      "0, 0, %u, %u, %u, strftime('%%Y-%%m-%%dT%%H:%%M:%%S.00Z', CURRENT_TIMESTAMP), "
-                      "0, %llu, %u, 0, '', "
-                      "0, '%s');",
-                      title_id.c_str(), slot_name.c_str(),
-                      blocks, blocks, size_kib,
-                      static_cast<unsigned long long>(account_id), user_id,
-                      title_id.c_str());
+        // 2. Comprobar si la fila ya existe en savedata para NUNCA destruir sus metadatos originales con cadenas vacias
+        int existing_count = 0;
+        auto count_cb = [](void *arg, int argc, char **argv, char **) -> int {
+            if (argc > 0 && argv && argv[0])
+            {
+                *reinterpret_cast<int *>(arg) = std::atoi(argv[0]);
+            }
+            return 0;
+        };
+        char sql_check[512];
+        std::snprintf(sql_check, sizeof(sql_check),
+                      "SELECT COUNT(*) FROM savedata WHERE title_id = '%s' AND dir_name = '%s';",
+                      safe_tid.c_str(), safe_slot.c_str());
+        (void)adapter.exec(db, sql_check, count_cb, &existing_count, nullptr);
 
         char *errmsg = nullptr;
-        int rc = adapter.exec(db, sql, nullptr, nullptr, &errmsg);
+        int rc = 0;
+        if (existing_count > 0)
+        {
+            char sql_update[2048];
+            if (sfo_meta && sfo_meta->valid && (!safe_main.empty() || !safe_sub.empty() || sfo_meta->user_param != 0))
+            {
+                std::snprintf(sql_update, sizeof(sql_update),
+                              "UPDATE savedata SET is_broken = 0, fake_broken = 0, faked_owner = 0, "
+                              "account_id = %llu, user_id = %u, main_title = '%s', sub_title = '%s', "
+                              "detail = '%s', user_param = %u, blocks = %u, free_blocks = 0, size_kib = %u, "
+                              "mtime = strftime('%%Y-%%m-%%dT%%H:%%M:%%S.00Z', CURRENT_TIMESTAMP) "
+                              "WHERE title_id = '%s' AND dir_name = '%s';",
+                              static_cast<unsigned long long>(account_id), user_id,
+                              safe_main.c_str(), safe_sub.c_str(), safe_detail.c_str(),
+                              user_param, blocks, size_kib,
+                              safe_tid.c_str(), safe_slot.c_str());
+            }
+            else
+            {
+                std::snprintf(sql_update, sizeof(sql_update),
+                              "UPDATE savedata SET is_broken = 0, fake_broken = 0, faked_owner = 0, "
+                              "account_id = %llu, user_id = %u, free_blocks = 0, "
+                              "mtime = strftime('%%Y-%%m-%%dT%%H:%%M:%%S.00Z', CURRENT_TIMESTAMP) "
+                              "WHERE title_id = '%s' AND dir_name = '%s';",
+                              static_cast<unsigned long long>(account_id), user_id,
+                              safe_tid.c_str(), safe_slot.c_str());
+            }
+            rc = adapter.exec(db, sql_update, nullptr, nullptr, &errmsg);
+        }
+        else
+        {
+            char sql_insert[2048];
+            std::snprintf(sql_insert, sizeof(sql_insert),
+                          "INSERT INTO savedata ("
+                          "title_id, dir_name, main_title, sub_title, detail, tmp_dir_name, "
+                          "is_broken, user_param, blocks, free_blocks, size_kib, mtime, "
+                          "fake_broken, account_id, user_id, faked_owner, cloud_icon_url, "
+                          "cloud_revision, game_title_id"
+                          ") VALUES ("
+                          "'%s', '%s', '%s', '%s', '%s', '', "
+                          "0, %u, %u, 0, %u, strftime('%%Y-%%m-%%dT%%H:%%M:%%S.00Z', CURRENT_TIMESTAMP), "
+                          "0, %llu, %u, 0, '', "
+                          "0, '%s');",
+                          safe_tid.c_str(), safe_slot.c_str(),
+                          safe_main.c_str(), safe_sub.c_str(), safe_detail.c_str(),
+                          user_param, blocks, size_kib,
+                          static_cast<unsigned long long>(account_id), user_id,
+                          safe_tid.c_str());
+            rc = adapter.exec(db, sql_insert, nullptr, nullptr, &errmsg);
+        }
+
         if (rc == 0)
         {
-            // Tambien forzar UPDATE para garantizar que si la fila ya existia se limpien is_broken y fake_broken
-            char sql_update[512];
-            std::snprintf(sql_update, sizeof(sql_update),
-                          "UPDATE savedata SET is_broken = 0, fake_broken = 0, account_id = %llu, user_id = %u "
-                          "WHERE title_id = '%s' AND dir_name = '%s';",
-                          static_cast<unsigned long long>(account_id), user_id,
-                          title_id.c_str(), slot_name.c_str());
-            (void)adapter.exec(db, sql_update, nullptr, nullptr, nullptr);
-
-            MACHETE_LOG("[DB]", "Indexed PS4 save in %s: %s/%s (is_broken=0, acc=0x%04llx...%04llx, blocks=%u)",
-                        dbp.c_str(), title_id.c_str(), slot_name.c_str(),
+            MACHETE_LOG("[DB]", "Indexed PS4 save in %s: %s/%s (existing=%d, is_broken=0, acc=0x%04llx...%04llx, blocks=%u, user_param=%u)",
+                        dbp.c_str(), title_id.c_str(), slot_name.c_str(), existing_count,
                         static_cast<unsigned long long>((account_id >> 48) & 0xffff),
                         static_cast<unsigned long long>(account_id & 0xffff),
-                        blocks);
+                        blocks, user_param);
             any_updated = true;
         }
         else
         {
-            MACHETE_LOG("[DB]", "Failed to execute savedata insert on %s: %s",
+            MACHETE_LOG("[DB]", "Failed to execute savedata query on %s: %s",
                         dbp.c_str(), errmsg ? errmsg : adapter.errmsg(db));
         }
 
@@ -258,31 +342,83 @@ inline bool update_or_register_ps4_savedata_db(std::uint32_t user_id,
     return any_updated;
 }
 
-// Limpia las banderas de corrupcion (is_broken, fake_broken) para todas las entradas de un Title ID
-inline bool repair_title_corruption_flags(std::uint32_t user_id, const std::string &title_id)
+// Limpia las banderas de corrupcion (is_broken, fake_broken) y sincroniza account_id/user_id para todas las entradas de un Title ID
+inline bool repair_title_corruption_flags(std::uint32_t user_id,
+                                          const std::string &title_id,
+                                          std::uint64_t account_id = 0)
 {
     SqliteAdapter &adapter = SqliteAdapter::instance();
     if (!adapter.is_available())
         return false;
 
     const auto candidates = get_savedata_db_candidates(user_id);
+    std::vector<std::string> unique_dbs;
+    for (const auto &c : candidates)
+    {
+        if (access(c.c_str(), F_OK) != 0)
+            continue;
+        bool dup = false;
+        for (const auto &u : unique_dbs)
+        {
+            if (u == c)
+            {
+                dup = true;
+                break;
+            }
+        }
+        if (!dup)
+            unique_dbs.push_back(c);
+    }
+
+    const std::string safe_tid = escape_sql_string(title_id);
     bool any_cleared = false;
 
-    for (const auto &dbp : candidates)
+    for (const auto &dbp : unique_dbs)
     {
-        if (access(dbp.c_str(), F_OK) != 0)
-            continue;
-
         void *db = nullptr;
         if (adapter.open(dbp.c_str(), &db) != 0 || !db)
             continue;
 
         (void)adapter.exec(db, "PRAGMA busy_timeout = 3000;", nullptr, nullptr, nullptr);
 
-        char sql[256];
-        std::snprintf(sql, sizeof(sql),
-                      "UPDATE savedata SET is_broken = 0, fake_broken = 0 WHERE title_id = '%s';",
-                      title_id.c_str());
+        // Registrar en log las filas actuales para este Title ID antes de limpiar
+        auto log_cb = [](void *arg, int argc, char **argv, char **) -> int {
+            const char *t_id = reinterpret_cast<const char *>(arg);
+            if (argc >= 6 && argv)
+            {
+                MACHETE_LOG("[DB]", "  Row [%s/%s]: is_broken=%s, fake_broken=%s, acc=%s, uid=%s, blocks=%s, free=%s",
+                            t_id ? t_id : "?",
+                            argv[0] ? argv[0] : "?",
+                            argv[1] ? argv[1] : "?",
+                            argv[2] ? argv[2] : "?",
+                            argv[3] ? argv[3] : "?",
+                            argv[4] ? argv[4] : "?",
+                            argv[5] ? argv[5] : "?",
+                            (argc >= 7 && argv[6]) ? argv[6] : "?");
+            }
+            return 0;
+        };
+        char sql_diag[512];
+        std::snprintf(sql_diag, sizeof(sql_diag),
+                      "SELECT dir_name, is_broken, fake_broken, account_id, user_id, blocks, free_blocks "
+                      "FROM savedata WHERE title_id = '%s';",
+                      safe_tid.c_str());
+        (void)adapter.exec(db, sql_diag, log_cb, const_cast<char *>(title_id.c_str()), nullptr);
+
+        char sql[512];
+        if (account_id != 0)
+        {
+            std::snprintf(sql, sizeof(sql),
+                          "UPDATE savedata SET is_broken = 0, fake_broken = 0, faked_owner = 0, "
+                          "account_id = %llu, user_id = %u WHERE title_id = '%s';",
+                          static_cast<unsigned long long>(account_id), user_id, safe_tid.c_str());
+        }
+        else
+        {
+            std::snprintf(sql, sizeof(sql),
+                          "UPDATE savedata SET is_broken = 0, fake_broken = 0, faked_owner = 0 WHERE title_id = '%s';",
+                          safe_tid.c_str());
+        }
 
         int rc = adapter.exec(db, sql, nullptr, nullptr, nullptr);
         if (rc == 0)

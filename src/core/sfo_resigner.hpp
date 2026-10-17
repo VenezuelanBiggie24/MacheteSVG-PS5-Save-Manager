@@ -11,6 +11,8 @@
 #include <cstdio>
 #include <cstring>
 #include <string>
+#include <sys/stat.h>
+#include <unistd.h>
 #include <vector>
 
 namespace machete::sfo
@@ -61,10 +63,30 @@ struct ResignParams
     std::uint64_t target_account_id = 0; // 64-bit Account ID (0 para cuenta offline no activada)
     bool apply_account_id = true;        // Escribir target_account_id incluso si es 0 (modo Apollo offline)
     const std::uint8_t *psid = nullptr;  // 16 bytes OpenPSID si se conoce
+    const std::uint8_t *exact_psid_hmac = nullptr; // 32 bytes psid_hmac extraido de Save Dummy local
 };
 
-inline bool read_account_id_from_sfo(const std::string &sfo_path, std::uint64_t &out_account_id)
+struct SfoSaveMetadata
 {
+    bool valid = false;
+    std::string category;
+    std::string main_title;
+    std::string sub_title;
+    std::string detail;
+    std::string savedata_dir;
+    std::uint32_t user_param = 0;
+    std::uint64_t blocks = 0;
+    std::uint64_t account_id = 0;
+    std::uint32_t user_id = 0;
+    std::uint8_t psid_hmac[32] = {0};
+    bool has_account_id = false;
+    bool has_params = false;
+    bool has_psid_hmac = false;
+};
+
+inline bool read_sfo_metadata(const std::string &sfo_path, SfoSaveMetadata &out)
+{
+    out = SfoSaveMetadata{};
     std::FILE *in = std::fopen(sfo_path.c_str(), "rb");
     if (!in)
         return false;
@@ -106,6 +128,16 @@ inline bool read_account_id_from_sfo(const std::string &sfo_path, std::uint64_t 
     const std::uint8_t *data_table = buffer.data() + header->data_table_offset;
     const std::size_t data_table_size = total_buf_size - header->data_table_offset;
 
+    auto read_safe_string = [&](const SfoIndexEntry &e) -> std::string {
+        const std::size_t rem = data_table_size - e.data_offset;
+        const std::size_t len = (e.param_length <= rem) ? e.param_length : rem;
+        const char *p = reinterpret_cast<const char *>(data_table + e.data_offset);
+        std::size_t slen = 0;
+        while (slen < len && p[slen] != '\0')
+            ++slen;
+        return std::string(p, slen);
+    };
+
     for (std::uint32_t i = 0; i < header->num_entries; ++i)
     {
         if (entries[i].key_offset >= key_table_size)
@@ -124,11 +156,94 @@ inline bool read_account_id_from_sfo(const std::string &sfo_path, std::uint64_t 
             continue;
 
         const std::size_t remaining = data_table_size - entries[i].data_offset;
-        if (std::strcmp(key, "ACCOUNT_ID") == 0 && entries[i].param_max_length >= 8 && remaining >= 8)
+        const std::uint8_t *val_ptr = data_table + entries[i].data_offset;
+
+        if (std::strcmp(key, "CATEGORY") == 0)
         {
-            std::memcpy(&out_account_id, data_table + entries[i].data_offset, 8);
-            return true;
+            out.category = read_safe_string(entries[i]);
         }
+        else if (std::strcmp(key, "MAINTITLE") == 0)
+        {
+            out.main_title = read_safe_string(entries[i]);
+        }
+        else if (std::strcmp(key, "SUBTITLE") == 0)
+        {
+            out.sub_title = read_safe_string(entries[i]);
+        }
+        else if (std::strcmp(key, "DETAIL") == 0)
+        {
+            out.detail = read_safe_string(entries[i]);
+        }
+        else if (std::strcmp(key, "SAVEDATA_DIRECTORY") == 0)
+        {
+            out.savedata_dir = read_safe_string(entries[i]);
+        }
+        else if (std::strcmp(key, "SAVEDATA_LIST_PARAM") == 0 && remaining >= 4)
+        {
+            std::memcpy(&out.user_param, val_ptr, 4);
+        }
+        else if (std::strcmp(key, "SAVEDATA_BLOCKS") == 0 && remaining >= 8)
+        {
+            std::memcpy(&out.blocks, val_ptr, 8);
+        }
+        else if (std::strcmp(key, "SAVEDATA_BLOCKS") == 0 && remaining >= 4)
+        {
+            std::uint32_t b32 = 0;
+            std::memcpy(&b32, val_ptr, 4);
+            out.blocks = b32;
+        }
+        else if (std::strcmp(key, "ACCOUNT_ID") == 0 && entries[i].param_max_length >= 8 && remaining >= 8)
+        {
+            std::memcpy(&out.account_id, val_ptr, 8);
+            out.has_account_id = true;
+        }
+        else if (std::strcmp(key, "PARAMS") == 0 &&
+                 entries[i].param_max_length >= sizeof(SfoParamsField) &&
+                 remaining >= sizeof(SfoParamsField))
+        {
+            const auto *p = reinterpret_cast<const SfoParamsField *>(val_ptr);
+            out.user_id = p->user_id;
+            std::memcpy(out.psid_hmac, p->psid_hmac, 32);
+            out.has_params = true;
+            for (int b = 0; b < 32; ++b)
+            {
+                if (out.psid_hmac[b] != 0)
+                {
+                    out.has_psid_hmac = true;
+                    break;
+                }
+            }
+        }
+    }
+    out.valid = true;
+    return true;
+}
+
+inline SfoSaveMetadata read_sfo_metadata(const std::string &sfo_path)
+{
+    SfoSaveMetadata meta;
+    (void)read_sfo_metadata(sfo_path, meta);
+    return meta;
+}
+
+// Verifica que el param.sfo sea un descriptor de guardado ("sd") y NO un descriptor de juego ("gd")
+inline bool is_valid_save_param_sfo(const std::string &sfo_path)
+{
+    SfoSaveMetadata meta;
+    if (!read_sfo_metadata(sfo_path, meta))
+        return false;
+    if (meta.category == "gd" || meta.category == "gp" || meta.category == "ac")
+        return false;
+    return (meta.category == "sd" || meta.has_account_id || meta.has_params);
+}
+
+inline bool read_account_id_from_sfo(const std::string &sfo_path, std::uint64_t &out_account_id)
+{
+    SfoSaveMetadata meta;
+    if (read_sfo_metadata(sfo_path, meta) && meta.has_account_id)
+    {
+        out_account_id = meta.account_id;
+        return true;
     }
     return false;
 }
@@ -218,7 +333,6 @@ inline bool resign_param_sfo(const std::string &sfo_path, const ResignParams &pa
             }
         }
 
-
         // 2. Modificar PARAMS (user_id, psid_hmac, title_id_2) de forma segura
         if (std::strcmp(key, "PARAMS") == 0 &&
             entries[i].param_max_length >= sizeof(SfoParamsField) &&
@@ -236,8 +350,14 @@ inline bool resign_param_sfo(const std::string &sfo_path, const ResignParams &pa
             // Sincronizar title_id_2 con title_id_1
             std::memcpy(p->title_id_2, p->title_id_1, sizeof(p->title_id_2));
 
-            // Si se suministra OpenPSID, recalcular HMAC de Sony
-            if (params.psid != nullptr)
+            // Si se cuenta con el psid_hmac exacto del Save Dummy local, aplicarlo directamente
+            if (params.exact_psid_hmac != nullptr)
+            {
+                std::memcpy(p->psid_hmac, params.exact_psid_hmac, 32);
+                modified = true;
+            }
+            // De lo contrario, si se suministra OpenPSID, recalcular HMAC de Sony
+            else if (params.psid != nullptr)
             {
                 crypto::hmac_sha256(PSID_HMAC_KEY, sizeof(PSID_HMAC_KEY),
                                     params.psid, 16,
@@ -259,6 +379,9 @@ inline bool resign_param_sfo(const std::string &sfo_path, const ResignParams &pa
 
     const std::size_t written = std::fwrite(buffer.data(), 1, buffer.size(), out);
     std::fflush(out);
+    int fd = fileno(out);
+    if (fd >= 0)
+        (void)::fsync(fd);
     std::fclose(out);
 
     if (written != buffer.size())
@@ -267,7 +390,17 @@ inline bool resign_param_sfo(const std::string &sfo_path, const ResignParams &pa
         return false;
     }
 
-    return (std::rename(tmp_path.c_str(), sfo_path.c_str()) == 0);
+    if (std::rename(tmp_path.c_str(), sfo_path.c_str()) != 0)
+    {
+        (void)unlink(sfo_path.c_str());
+        if (std::rename(tmp_path.c_str(), sfo_path.c_str()) != 0)
+        {
+            std::remove(tmp_path.c_str());
+            return false;
+        }
+    }
+    (void)chmod(sfo_path.c_str(), 0666);
+    return true;
 }
 
 } // namespace machete::sfo
