@@ -25,6 +25,7 @@ struct ScannedGame
     bool has_keystone = false;
     unsigned int icon_texture = 0; // Identificador de textura OpenGL (0 = sin cargar)
     bool has_save_dummy = false;   // Indica si existe contenedor PFS local (sdimg_*) para inyeccion Cross-Console
+    std::string save_title_id;     // Title ID del contenedor de guardado si difiere de title_id (ej. "PPSA01970")
 };
 
 // Escanea el almacenamiento de la consola (/user/home/*/savedata/, /user/app/, /data/MacheteSVG/)

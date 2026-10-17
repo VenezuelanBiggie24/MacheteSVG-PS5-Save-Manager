@@ -403,4 +403,171 @@ inline bool resign_param_sfo(const std::string &sfo_path, const ResignParams &pa
     return true;
 }
 
+// Genera un descriptor param.sfo de guardado de PS4 autentico (CATEGORY="sd") conforme a la especificacion PSF v1.1
+// con claves ordenadas lexicograficamente cuando el respaldo carece de un param.sfo de guardado externo
+inline bool synthesize_ps4_save_param_sfo(const std::string &out_sfo_path,
+                                          const std::string &title_id,
+                                          const std::string &savedata_dir,
+                                          const std::string &main_title,
+                                          const std::string &sub_title,
+                                          const std::string &detail,
+                                          std::uint32_t user_id,
+                                          std::uint64_t account_id,
+                                          std::uint64_t savedata_blocks,
+                                          std::uint32_t user_param = 0,
+                                          const std::uint8_t *psid = nullptr)
+{
+    struct RawEntry
+    {
+        const char *key;
+        std::uint16_t format; // 0x0004 = UTF8-S (binary/struct), 0x0204 = UTF8 null-terminated, 0x0404 = uint32
+        std::vector<std::uint8_t> data;
+        std::uint32_t max_len;
+    };
+
+    auto make_utf8 = [](const char *key, const std::string &val, std::uint32_t max_len) -> RawEntry {
+        RawEntry e;
+        e.key = key;
+        e.format = 0x0204;
+        e.max_len = max_len;
+        const std::size_t copy_len = (val.size() + 1 <= max_len) ? val.size() : (max_len - 1);
+        e.data.assign(max_len, 0);
+        if (copy_len > 0)
+            std::memcpy(e.data.data(), val.data(), copy_len);
+        // param_length incluye el byte nulo terminador
+        e.data.resize(copy_len + 1, 0);
+        return e;
+    };
+
+    auto make_u32 = [](const char *key, std::uint32_t val) -> RawEntry {
+        RawEntry e;
+        e.key = key;
+        e.format = 0x0404;
+        e.max_len = 4;
+        e.data.resize(4, 0);
+        std::memcpy(e.data.data(), &val, 4);
+        return e;
+    };
+
+    auto make_u64_bin = [](const char *key, std::uint64_t val) -> RawEntry {
+        RawEntry e;
+        e.key = key;
+        e.format = 0x0004;
+        e.max_len = 8;
+        e.data.resize(8, 0);
+        std::memcpy(e.data.data(), &val, 8);
+        return e;
+    };
+
+    SfoParamsField params_struct{};
+    params_struct.user_id = user_id;
+    std::strncpy(params_struct.title_id_1, title_id.c_str(), sizeof(params_struct.title_id_1) - 1);
+    std::strncpy(params_struct.title_id_2, title_id.c_str(), sizeof(params_struct.title_id_2) - 1);
+    if (psid != nullptr)
+    {
+        crypto::hmac_sha256(PSID_HMAC_KEY, sizeof(PSID_HMAC_KEY), psid, 16, params_struct.psid_hmac);
+    }
+
+    RawEntry params_entry;
+    params_entry.key = "PARAMS";
+    params_entry.format = 0x0004;
+    params_entry.max_len = sizeof(SfoParamsField);
+    params_entry.data.resize(sizeof(SfoParamsField), 0);
+    std::memcpy(params_entry.data.data(), &params_struct, sizeof(SfoParamsField));
+
+    const std::uint64_t blocks_val = (savedata_blocks > 0) ? savedata_blocks : 325;
+    const std::string safe_main = main_title.empty() ? title_id : main_title;
+    const std::string safe_sub = sub_title.empty() ? savedata_dir : sub_title;
+
+    // Las entradas de un archivo PSF/SFO DEBEN estar en estricto orden ASCII lexicografico por clave
+    std::vector<RawEntry> entries;
+    entries.push_back(make_u64_bin("ACCOUNT_ID", account_id));
+    entries.push_back(make_u32("ATTRIBUTE", 0));
+    entries.push_back(make_utf8("CATEGORY", "sd", 4));
+    entries.push_back(make_utf8("DETAIL", detail, 1024));
+    entries.push_back(make_utf8("FORMAT", "obs", 4));
+    entries.push_back(make_utf8("MAINTITLE", safe_main, 128));
+    entries.push_back(params_entry);
+    entries.push_back(make_u64_bin("SAVEDATA_BLOCKS", blocks_val));
+    entries.push_back(make_utf8("SAVEDATA_DIRECTORY", savedata_dir, 64));
+    entries.push_back(make_u32("SAVEDATA_LIST_PARAM", user_param));
+    entries.push_back(make_utf8("SUBTITLE", safe_sub, 128));
+    entries.push_back(make_utf8("TITLE_ID", title_id, 16));
+
+    std::vector<char> key_table;
+    std::vector<std::uint8_t> data_table;
+    std::vector<SfoIndexEntry> index_table(entries.size());
+
+    for (std::size_t i = 0; i < entries.size(); ++i)
+    {
+        index_table[i].key_offset = static_cast<std::uint16_t>(key_table.size());
+        const std::size_t klen = std::strlen(entries[i].key) + 1;
+        key_table.insert(key_table.end(), entries[i].key, entries[i].key + klen);
+
+        index_table[i].param_format = entries[i].format;
+        index_table[i].param_length = static_cast<std::uint32_t>(entries[i].data.size());
+        index_table[i].param_max_length = entries[i].max_len;
+        index_table[i].data_offset = static_cast<std::uint32_t>(data_table.size());
+
+        data_table.insert(data_table.end(), entries[i].data.begin(), entries[i].data.end());
+        if (entries[i].max_len > entries[i].data.size())
+        {
+            data_table.insert(data_table.end(), entries[i].max_len - entries[i].data.size(), 0);
+        }
+        while ((data_table.size() % 4) != 0)
+            data_table.push_back(0);
+    }
+
+    while ((key_table.size() % 4) != 0)
+        key_table.push_back('\0');
+
+    SfoHeader hdr{};
+    hdr.magic = SFO_MAGIC;
+    hdr.version = 0x00000101;
+    hdr.key_table_offset = static_cast<std::uint32_t>(sizeof(SfoHeader) + index_table.size() * sizeof(SfoIndexEntry));
+    hdr.data_table_offset = static_cast<std::uint32_t>(hdr.key_table_offset + key_table.size());
+    hdr.num_entries = static_cast<std::uint32_t>(index_table.size());
+
+    const std::string tmp_path = out_sfo_path + ".tmp";
+    std::FILE *out = std::fopen(tmp_path.c_str(), "wb");
+    if (!out)
+        return false;
+
+    bool ok = true;
+    if (std::fwrite(&hdr, 1, sizeof(hdr), out) != sizeof(hdr))
+        ok = false;
+    if (ok && std::fwrite(index_table.data(), sizeof(SfoIndexEntry), index_table.size(), out) != index_table.size())
+        ok = false;
+    if (ok && std::fwrite(key_table.data(), 1, key_table.size(), out) != key_table.size())
+        ok = false;
+    if (ok && std::fwrite(data_table.data(), 1, data_table.size(), out) != data_table.size())
+        ok = false;
+
+    std::fflush(out);
+    int fd = fileno(out);
+    if (fd >= 0)
+        (void)::fsync(fd);
+    std::fclose(out);
+
+    if (!ok)
+    {
+        (void)unlink(tmp_path.c_str());
+        return false;
+    }
+
+    if (std::rename(tmp_path.c_str(), out_sfo_path.c_str()) != 0)
+    {
+        (void)unlink(out_sfo_path.c_str());
+        if (std::rename(tmp_path.c_str(), out_sfo_path.c_str()) != 0)
+        {
+            (void)unlink(tmp_path.c_str());
+            return false;
+        }
+    }
+    (void)chmod(out_sfo_path.c_str(), 0666);
+    MACHETE_LOG("[SFO]", "Synthesized authentic PS4 Save Data param.sfo (CATEGORY='sd', slot='%s', blocks=%llu) at %s",
+                savedata_dir.c_str(), static_cast<unsigned long long>(blocks_val), out_sfo_path.c_str());
+    return true;
+}
+
 } // namespace machete::sfo

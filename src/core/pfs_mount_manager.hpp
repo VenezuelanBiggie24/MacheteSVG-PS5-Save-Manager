@@ -293,7 +293,8 @@ inline bool decrypt_pfs_key_for_slot(const std::string &save_dir,
 
     if (is_ps5)
     {
-        blob_read = vault::read_sealed_blob(sdimg_path, 0x800, sealed_blob);
+        off_t found_off = 0;
+        blob_read = vault::read_ps5_sealed_blob(sdimg_path, sealed_blob, &found_off);
     }
     else
     {
@@ -311,8 +312,7 @@ inline bool decrypt_pfs_key_for_slot(const std::string &save_dir,
         }
         if (!blob_read)
         {
-            blob_read = vault::read_sealed_blob(sdimg_path, 0x800, sealed_blob) ||
-                        vault::read_sealed_blob(sdimg_path, 0x400, sealed_blob);
+            blob_read = vault::read_ps5_sealed_blob(sdimg_path, sealed_blob);
         }
     }
 
@@ -337,6 +337,21 @@ inline bool decrypt_pfs_key_for_slot(const std::string &save_dir,
 
     return false;
 }
+
+#if defined(__PROSPERO__) || defined(__Prospero__) || defined(__PS5__)
+extern "C"
+{
+    int sceKernelLoadStartModule(const char *name, std::size_t argc, const void *argv,
+                                 std::uint32_t flags, void *opt, int *pRes);
+    int sceKernelDlsym(int handle, const char *symbol, void **addrp);
+    int sceKernelGetModuleList(int * handles, std::size_t num_handles, std::size_t *out_count);
+
+    int sceFsInitMountSaveDataOpt(SaveMountOpt *opt);
+    int sceFsMountSaveData(SaveMountOpt *opt, const char *device, const char *mountpoint, const void *key);
+    int sceFsInitUmountSaveDataOpt(SaveMountOpt *opt);
+    int sceFsUmountSaveData(SaveMountOpt *opt, const char *mountpoint, void *unused, int flags);
+}
+#endif
 
 inline std::mutex &pfs_global_mount_mutex()
 {
@@ -382,6 +397,19 @@ public:
             return true;
         }
 
+#if defined(__PROSPERO__) || defined(__Prospero__) || defined(__PS5__)
+        s_init_mount = &sceFsInitMountSaveDataOpt;
+        s_mount_fn = &sceFsMountSaveData;
+        s_init_umount = &sceFsInitUmountSaveDataOpt;
+        s_umount_fn = &sceFsUmountSaveData;
+        *out_init_mount = s_init_mount;
+        *out_mount = s_mount_fn;
+        *out_init_umount = s_init_umount;
+        *out_umount = s_umount_fn;
+        MACHETE_LOG("[PFS]", "Native libSceFsInternalForVsh symbols resolved directly via link-time stubs");
+        return true;
+#endif
+
         static const char *candidate_paths[] = {
             "/system/vsh/libSceFsInternalForVsh.sprx",
             "/system/common/lib/libSceFsInternalForVsh.sprx",
@@ -421,7 +449,94 @@ public:
             nullptr
         };
 
-        // Busqueda segura mediante dlopen/dlsym POSIX
+#if defined(__PROSPERO__) || defined(__Prospero__) || defined(__PS5__)
+        auto try_resolve_handle = [&](int mod_h, const char *label) -> bool {
+            if (mod_h < 0)
+                return false;
+            int (*found_init_m)(SaveMountOpt *) = nullptr;
+            int (*found_m)(SaveMountOpt *, const char *, const char *, const void *) = nullptr;
+            int (*found_init_u)(SaveMountOpt *) = nullptr;
+            int (*found_u)(SaveMountOpt *, const char *, void *, int) = nullptr;
+
+            for (int k = 0; kInitMountSyms[k]; ++k)
+            {
+                void *s = nullptr;
+                if (sceKernelDlsym(mod_h, kInitMountSyms[k], &s) == 0 && s)
+                {
+                    found_init_m = reinterpret_cast<int (*)(SaveMountOpt *)>(s);
+                    break;
+                }
+            }
+            for (int k = 0; kMountSyms[k]; ++k)
+            {
+                void *s = nullptr;
+                if (sceKernelDlsym(mod_h, kMountSyms[k], &s) == 0 && s)
+                {
+                    found_m = reinterpret_cast<int (*)(SaveMountOpt *, const char *, const char *, const void *)>(s);
+                    break;
+                }
+            }
+            for (int k = 0; kInitUmountSyms[k]; ++k)
+            {
+                void *s = nullptr;
+                if (sceKernelDlsym(mod_h, kInitUmountSyms[k], &s) == 0 && s)
+                {
+                    found_init_u = reinterpret_cast<int (*)(SaveMountOpt *)>(s);
+                    break;
+                }
+            }
+            for (int k = 0; kUmountSyms[k]; ++k)
+            {
+                void *s = nullptr;
+                if (sceKernelDlsym(mod_h, kUmountSyms[k], &s) == 0 && s)
+                {
+                    found_u = reinterpret_cast<int (*)(SaveMountOpt *, const char *, void *, int)>(s);
+                    break;
+                }
+            }
+
+            if (found_init_m && found_m && found_init_u && found_u)
+            {
+                s_init_mount = found_init_m;
+                s_mount_fn = found_m;
+                s_init_umount = found_init_u;
+                s_umount_fn = found_u;
+                *out_init_mount = s_init_mount;
+                *out_mount = s_mount_fn;
+                *out_init_umount = s_init_umount;
+                *out_umount = s_umount_fn;
+                MACHETE_LOG("[PFS]", "Resolved all PFS mount symbols via sceKernelDlsym (handle=%d, %s)", mod_h, label);
+                return true;
+            }
+            return false;
+        };
+
+        // 1. Buscar primero en los modulos que ya estan cargados en el proceso
+        int mod_list[256] = {0};
+        std::size_t actual_mods = 0;
+        if (sceKernelGetModuleList(mod_list, 256, &actual_mods) == 0 && actual_mods > 0)
+        {
+            const std::size_t limit = (actual_mods <= 256) ? actual_mods : 256;
+            for (std::size_t m = 0; m < limit; ++m)
+            {
+                if (try_resolve_handle(mod_list[m], "loaded_module"))
+                    return true;
+            }
+        }
+
+        // 2. Intentar cargar el modulo desde las rutas candidatas del sistema
+        for (int i = 0; candidate_paths[i]; ++i)
+        {
+            if (candidate_paths[i][0] == '/' && access(candidate_paths[i], R_OK) != 0)
+                continue;
+            int start_res = 0;
+            const int mod_h = sceKernelLoadStartModule(candidate_paths[i], 0, nullptr, 0, nullptr, &start_res);
+            if (mod_h >= 0 && try_resolve_handle(mod_h, candidate_paths[i]))
+                return true;
+        }
+#endif
+
+        // 3. Fallback a dlopen/dlsym POSIX
         for (int i = 0; candidate_paths[i]; ++i)
         {
             (void)dlerror();
@@ -483,8 +598,8 @@ public:
         if (mounted_)
             return false;
 
-        if (getuid() != 0)
-            return false;
+        (void)setuid(0);
+        (void)seteuid(0);
 
         int (*init_mount)(SaveMountOpt *) = nullptr;
         if (!ensure_pfs_symbols_resolved(&init_mount, &mount_fn_, &init_umount_fn_, &umount_fn_))
@@ -1104,12 +1219,16 @@ inline PfsRestoreReport inject_and_resign_save(const std::string &title_id,
             std::uint8_t plain_key[32] = {0};
             if (!decrypt_pfs_key_for_slot(dst_target, slot_name, is_ps5, plain_key, backup_folder))
             {
-                if (!is_ps5)
+                struct stat st_f{};
+                std::uint64_t fsz = 0;
+                if (stat((dst_target + "/" + slot_name).c_str(), &st_f) == 0)
+                    fsz = static_cast<std::uint64_t>(st_f.st_size);
+                if (is_ps5)
                 {
-                    struct stat st_f{};
-                    std::uint64_t fsz = 0;
-                    if (stat((dst_target + "/" + slot_name).c_str(), &st_f) == 0)
-                        fsz = static_cast<std::uint64_t>(st_f.st_size);
+                    db::update_or_register_ps5_savedata_db(user_id, active_account_id, title_id, slot_name, fsz);
+                }
+                else
+                {
                     db::update_or_register_ps4_savedata_db(user_id, active_account_id, title_id, slot_name, fsz);
                 }
                 continue;
@@ -1119,12 +1238,16 @@ inline PfsRestoreReport inject_and_resign_save(const std::string &title_id,
             const std::string image_path = dst_target + "/" + slot_name;
             if (!mnt.mount(image_path, plain_key, true))
             {
-                if (!is_ps5)
+                struct stat st_f{};
+                std::uint64_t fsz = 0;
+                if (stat(image_path.c_str(), &st_f) == 0)
+                    fsz = static_cast<std::uint64_t>(st_f.st_size);
+                if (is_ps5)
                 {
-                    struct stat st_f{};
-                    std::uint64_t fsz = 0;
-                    if (stat(image_path.c_str(), &st_f) == 0)
-                        fsz = static_cast<std::uint64_t>(st_f.st_size);
+                    db::update_or_register_ps5_savedata_db(user_id, active_account_id, title_id, slot_name, fsz);
+                }
+                else
+                {
                     db::update_or_register_ps4_savedata_db(user_id, active_account_id, title_id, slot_name, fsz);
                 }
                 continue;
@@ -1167,6 +1290,13 @@ inline PfsRestoreReport inject_and_resign_save(const std::string &title_id,
                 {
                     mnt.set_write_back(false);
                     (void)mnt.unmount();
+                    struct stat st_sd{};
+                    if (stat(image_path.c_str(), &st_sd) == 0 && st_sd.st_size > 0)
+                    {
+                        db::update_or_register_ps5_savedata_db(
+                            user_id, active_account_id, title_id, slot_name,
+                            static_cast<std::uint64_t>(st_sd.st_size));
+                    }
                     continue;
                 }
 
@@ -1204,10 +1334,20 @@ inline PfsRestoreReport inject_and_resign_save(const std::string &title_id,
                 struct stat st_sd{};
                 if (stat(image_path.c_str(), &st_sd) == 0 && st_sd.st_size > 0)
                 {
+                    // Sincronizar backup slot sdimg_sce_bu_<slot> si existe
+                    const std::string bu_img = dst_target + "/sdimg_sce_bu_" + slot_label;
+                    if (access(bu_img.c_str(), F_OK) == 0)
+                    {
+                        (void)copy_file_atomic(image_path, bu_img, owner_uid, owner_gid);
+                    }
+
                     update_ps5_param_json_size(dst_target + "/sce_sys/param.json",
                                                static_cast<std::uint64_t>(st_sd.st_size));
                     update_ps5_param_json_size(dst_target + "/param.json",
                                                static_cast<std::uint64_t>(st_sd.st_size));
+                    db::update_or_register_ps5_savedata_db(
+                        user_id, active_account_id, title_id, slot_name,
+                        static_cast<std::uint64_t>(st_sd.st_size));
                 }
             }
             else

@@ -52,6 +52,48 @@ inline bool read_sealed_blob(const std::string &path, off_t offset, std::uint8_t
     return (n == 96);
 }
 
+// Localiza y lee el blob sellado de 96 bytes ("pfsSKKey") dentro de un contenedor PS5 (sdimg_*)
+// Escanea los primeros 64 KB buscando la firma exacta "pfsSKKey" (70 66 73 53 4B 4B 65 79)
+inline bool read_ps5_sealed_blob(const std::string &sdimg_path, std::uint8_t out_blob[96], off_t *out_offset = nullptr)
+{
+    int fd = open(sdimg_path.c_str(), O_RDONLY);
+    if (fd < 0)
+        return false;
+
+    constexpr std::size_t kScanBytes = 64 * 1024;
+    std::vector<std::uint8_t> buf(kScanBytes, 0);
+    const ssize_t n = pread(fd, buf.data(), kScanBytes, 0);
+    close(fd);
+
+    if (n < 96)
+        return false;
+
+    // 1. Buscar la firma exacta de 8 bytes "pfsSKKey" en cualquier offset de los primeros 64 KB
+    static const std::uint8_t kPfsSkKeyMagic[8] = {'p', 'f', 's', 'S', 'K', 'K', 'e', 'y'};
+    const std::size_t limit = static_cast<std::size_t>(n) - 96;
+    for (std::size_t off = 0; off <= limit; ++off)
+    {
+        if (std::memcmp(buf.data() + off, kPfsSkKeyMagic, 8) == 0)
+        {
+            std::memcpy(out_blob, buf.data() + off, 96);
+            if (out_offset)
+                *out_offset = static_cast<off_t>(off);
+            return true;
+        }
+    }
+
+    // 2. Fallback al offset tradicional 0x800 si el archivo tiene al menos 0x800 + 96 bytes
+    if (static_cast<std::size_t>(n) >= 0x800 + 96)
+    {
+        std::memcpy(out_blob, buf.data() + 0x800, 96);
+        if (out_offset)
+            *out_offset = 0x800;
+        return true;
+    }
+
+    return false;
+}
+
 // Descifra el blob sellado a traves del driver de kernel /dev/pfsmgr utilizando SAMU
 inline bool decrypt_blob_via_pfsmgr(const std::uint8_t in_blob[96], std::uint8_t out_plain_key[32])
 {
@@ -201,10 +243,12 @@ inline bool archive_crypto_vault(const std::string &dest_folder,
                 if (std::strncmp(ent->d_name, "sdimg_", 6) == 0)
                 {
                     const std::string sd_path = source_save_dir + "/" + ent->d_name;
-                    if (read_sealed_blob(sd_path, 0x800, record.sealed_blob))
+                    off_t found_off = 0;
+                    if (read_ps5_sealed_blob(sd_path, record.sealed_blob, &found_off))
                     {
                         has_sealed = true;
-                        MACHETE_LOG("[VAULT]", "Preserved 96-byte SAMU sealed blob from %s (offset 0x800)", sd_path.c_str());
+                        MACHETE_LOG("[VAULT]", "Preserved 96-byte SAMU sealed blob from %s (offset 0x%llx)",
+                                    sd_path.c_str(), static_cast<unsigned long long>(found_off));
                         break;
                     }
                 }

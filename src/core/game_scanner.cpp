@@ -4,6 +4,7 @@
 
 #include "core/game_scanner.hpp"
 #include "core/logger.hpp"
+#include "core/sqlite_adapter.hpp"
 
 #include <algorithm>
 #include <chrono>
@@ -1030,16 +1031,85 @@ std::vector<ScannedGame> scan_installed_games_and_saves()
     }
 
     // =========================================================================
-    // 2c. Vincular entradas de distintas regiones / SKUs del mismo juego cuando
+    // 2c. Enriquecer desde savedata.db (main_title y vinculo title_id <-> game_title_id)
+    //     y vincular entradas de distintas regiones / SKUs del mismo juego cuando
     //     una entrada en appmeta tiene 0 bytes y otra entrada del mismo titulo
-    //     y plataforma posee la partida guardada real.
+    //     o SKU adyacente posee la partida guardada real (ej. PPSA01969 <-> PPSA01970).
     // =========================================================================
+    std::unordered_map<std::string, std::string> db_save_to_game_tid;
+    std::unordered_map<std::string, std::string> db_tid_to_title;
+    {
+        DIR *hdir = opendir("/user/home");
+        if (hdir)
+        {
+            while (const dirent *ue = readdir(hdir))
+            {
+                if (ue->d_name[0] == '.')
+                    continue;
+                const std::uint32_t uid_val = static_cast<std::uint32_t>(std::strtoul(ue->d_name, nullptr, 16));
+                const auto db_paths = db::filter_existing_unique_dbs(db::get_savedata_db_candidates(uid_val));
+                for (const auto &dbp : db_paths)
+                {
+                    void *pdb = nullptr;
+                    if (db::SqliteAdapter::instance().open(dbp.c_str(), &pdb) == 0 && pdb)
+                    {
+                        struct DbScanCtx
+                        {
+                            std::unordered_map<std::string, std::string> *save_to_game;
+                            std::unordered_map<std::string, std::string> *tid_to_title;
+                        } ctx{&db_save_to_game_tid, &db_tid_to_title};
+
+                        auto cb = [](void *arg, int argc, char **argv, char **) -> int {
+                            auto *c = reinterpret_cast<DbScanCtx *>(arg);
+                            if (argc >= 3 && argv)
+                            {
+                                const std::string tid = argv[0] ? argv[0] : "";
+                                const std::string gtid = argv[1] ? argv[1] : "";
+                                const std::string mtitle = argv[2] ? argv[2] : "";
+                                if (!tid.empty() && !gtid.empty() && tid != gtid)
+                                    (*c->save_to_game)[tid] = gtid;
+                                if (!tid.empty() && !mtitle.empty() && mtitle != tid)
+                                    (*c->tid_to_title)[tid] = mtitle;
+                            }
+                            return 0;
+                        };
+                        (void)db::SqliteAdapter::instance().exec(
+                            pdb, "SELECT title_id, game_title_id, main_title FROM savedata;", cb, &ctx, nullptr);
+                        db::SqliteAdapter::instance().close(pdb);
+                    }
+                }
+            }
+            closedir(hdir);
+        }
+    }
+
     for (auto &g : games)
     {
+        if (g.save_title_id.empty())
+        {
+            g.save_title_id = g.title_id;
+        }
+
+        if (g.title.empty() || g.title == g.title_id)
+        {
+            auto it = db_tid_to_title.find(g.title_id);
+            if (it != db_tid_to_title.end() && !it->second.empty() && is_renderable_latin(it->second))
+            {
+                // En PS4 main_title es el título del juego. En PS5 es la descripción del slot
+                // (ej. 'Datos guardados', 'Preferencias de usuario', etc.), por lo que no debe sobrescribir
+                // títulos de juegos en PS5 a menos que sea un homebrew sin appmeta.
+                if (g.platform == "PS4" || (g.app_path.empty() && it->second != "Datos guardados" && it->second != "Preferencias de usuario"))
+                {
+                    g.title = it->second;
+                }
+            }
+        }
         g.title = sanitize_title(g.title);
     }
 
     std::vector<bool> merged_away(games.size(), false);
+
+    // Pasada 1: Vinculo explicito en savedata.db (title_id != game_title_id) o por nombre identico normalizado
     for (std::size_t i = 0; i < games.size(); ++i)
     {
         auto &ga = games[i];
@@ -1049,12 +1119,10 @@ std::vector<ScannedGame> scan_installed_games_and_saves()
             continue;
 
         const std::string key_a = normalize_title_key(ga.title);
-        if (key_a.size() < 4)
-            continue;
 
         for (std::size_t j = 0; j < games.size(); ++j)
         {
-            if (i == j)
+            if (i == j || merged_away[j])
                 continue;
             auto &gb = games[j];
             if (gb.total_bytes == 0 || gb.save_path.empty())
@@ -1062,27 +1130,116 @@ std::vector<ScannedGame> scan_installed_games_and_saves()
             if (ga.platform != gb.platform)
                 continue;
 
-            const std::string key_b = normalize_title_key(gb.title);
-            if (key_a == key_b)
+            bool match = false;
+            auto db_it = db_save_to_game_tid.find(gb.title_id);
+            if (db_it != db_save_to_game_tid.end() && db_it->second == ga.title_id)
             {
-                // Si gb ya tiene la partida real y el mismo nombre, copiar el icono de ga si a gb le faltaba,
-                // y vincular ga con la partida de gb (o fusionar la entrada vacia ga en gb)
+                match = true;
+            }
+            else if (key_a.size() >= 4 && key_a == normalize_title_key(gb.title))
+            {
+                match = true;
+            }
+
+            if (match)
+            {
                 if (gb.icon_path.empty() && !ga.icon_path.empty())
                     gb.icon_path = ga.icon_path;
                 if (gb.app_path.empty() && !ga.app_path.empty())
                     gb.app_path = ga.app_path;
 
                 ga.save_path = gb.save_path;
+                ga.save_title_id = gb.title_id;
                 ga.total_bytes = gb.total_bytes;
                 ga.has_save_dummy = gb.has_save_dummy;
                 ga.size_str = gb.size_str;
                 ga.timestamp_str = gb.timestamp_str;
+
+                // Si gb era una carpeta de guardado huerfana de ga sin aplicacion propia instalada,
+                // SIEMPRE marcarla como fusionada para que NO aparezca duplicada en la lista.
+                if (gb.app_path.empty())
+                {
+                    merged_away[j] = true;
+                }
 
                 MACHETE_LOG("[SCANNER]", "Linked cross-SKU title %s ('%s') -> save from %s (%s, %s)",
                             ga.title_id.c_str(), ga.title.c_str(),
                             gb.title_id.c_str(), gb.save_path.c_str(), gb.size_str.c_str());
                 break;
             }
+        }
+    }
+
+    // Pasada 2: Para cualquier carpeta de guardado huerfana sin appmeta (gb.title == gb.title_id y gb.total_bytes > 0,
+    // como PPSA01970), si existe un juego instalado de la misma plataforma sin partida (ga.total_bytes == 0,
+    // como PPSA01969 'DEATH STRANDING DIRECTOR'S CUT') con ID numerico consecutivo (|numA - numB| <= 2),
+    // vincularlos automaticamente y ocultar la entrada sin nombre.
+    auto parse_tid_number = [](const std::string &tid) -> int {
+        if (tid.size() != 9)
+            return -1000;
+        for (std::size_t k = 4; k < 9; ++k)
+        {
+            if (tid[k] < '0' || tid[k] > '9')
+                return -1000;
+        }
+        return std::atoi(tid.c_str() + 4);
+    };
+
+    for (std::size_t j = 0; j < games.size(); ++j)
+    {
+        if (merged_away[j])
+            continue;
+        auto &gb = games[j];
+        if (gb.total_bytes == 0 || gb.save_path.empty())
+            continue;
+        if (!gb.title.empty() && gb.title != gb.title_id)
+            continue;
+
+        const int num_b = parse_tid_number(gb.title_id);
+        if (num_b < 0)
+            continue;
+
+        std::size_t best_i = games.size();
+        int best_diff = 999;
+
+        for (std::size_t i = 0; i < games.size(); ++i)
+        {
+            if (i == j || merged_away[i])
+                continue;
+            const auto &ga = games[i];
+            if (ga.platform != gb.platform)
+                continue;
+            if (ga.total_bytes > 0 || !ga.save_path.empty())
+                continue;
+            if (ga.title.empty() || ga.title == ga.title_id)
+                continue;
+
+            const int num_a = parse_tid_number(ga.title_id);
+            if (num_a < 0)
+                continue;
+
+            const int diff = std::abs(num_a - num_b);
+            if (diff >= 1 && diff <= 2 && diff < best_diff)
+            {
+                best_diff = diff;
+                best_i = i;
+            }
+        }
+
+        if (best_i < games.size())
+        {
+            auto &ga = games[best_i];
+            ga.save_path = gb.save_path;
+            ga.save_title_id = gb.title_id;
+            ga.total_bytes = gb.total_bytes;
+            ga.has_save_dummy = gb.has_save_dummy;
+            ga.size_str = gb.size_str;
+            ga.timestamp_str = gb.timestamp_str;
+            merged_away[j] = true;
+
+            MACHETE_LOG("[SCANNER]", "Linked adjacent-SKU orphan save %s -> installed title %s ('%s', %s, %s)",
+                        gb.title_id.c_str(), ga.title_id.c_str(), ga.title.c_str(),
+                        gb.save_path.c_str(), gb.size_str.c_str());
         }
     }
 
@@ -1128,15 +1285,15 @@ std::vector<ScannedGame> scan_installed_games_and_saves()
     if (valid_games.empty())
     {
         valid_games.push_back({"Marvel's Spider-Man 2", "PPSA01411", "PS5", "/tmp/machete_test_save", "", "", "14.2 MB",
-                               "Hoy, 05:30 PM", 14ULL * 1024ULL * 1024ULL, true, 0});
+                               "Hoy, 05:30 PM", 14ULL * 1024ULL * 1024ULL, true, 0, false, ""});
         valid_games.push_back({"God of War Ragnarok", "PPSA08331", "PS5", "", "", "", "8.1 MB",
-                               "Ayer, 09:15 PM", 8ULL * 1024ULL * 1024ULL, true, 0});
+                               "Ayer, 09:15 PM", 8ULL * 1024ULL * 1024ULL, true, 0, false, ""});
         valid_games.push_back({"Bloodborne", "CUSA03173", "PS4", "", "", "", "35.4 MB",
-                               "Hace 3 dias", 35ULL * 1024ULL * 1024ULL, true, 0});
+                               "Hace 3 dias", 35ULL * 1024ULL * 1024ULL, true, 0, false, ""});
         valid_games.push_back({"Elden Ring", "PPSA04609", "PS5", "", "", "", "24.8 MB",
-                               "12/09/2026", 24ULL * 1024ULL * 1024ULL, true, 0});
+                               "12/09/2026", 24ULL * 1024ULL * 1024ULL, true, 0, false, ""});
         valid_games.push_back({"Astro's Playroom", "PPSA01325", "PS5", "", "", "", "2.4 MB",
-                               "01/09/2026", 2ULL * 1024ULL * 1024ULL, true, 0});
+                               "01/09/2026", 2ULL * 1024ULL * 1024ULL, true, 0, false, ""});
     }
 
     MACHETE_LOG("[SCANNER]", "Scan completed. Valid titles detected: %zu", valid_games.size());
