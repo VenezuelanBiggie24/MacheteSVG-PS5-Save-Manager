@@ -141,8 +141,6 @@ std::uint32_t extract_user_id_from_path(const std::string &path)
 
 __attribute__((noinline)) bool ensure_directories_recursive(const std::string &path, uid_t owner_uid = 0, gid_t owner_gid = 0) noexcept
 {
-    (void)owner_uid;
-    (void)owner_gid;
     if (path.empty())
         return false;
 
@@ -166,16 +164,20 @@ __attribute__((noinline)) bool ensure_directories_recursive(const std::string &p
                     if (mkdir(buf, 0777) == 0)
                     {
                         (void)chmod(buf, 0777);
+                        if (owner_uid != 0 || owner_gid != 0)
+                            (void)chown(buf, owner_uid, owner_gid);
                     }
                 }
                 else
                 {
-                    // CRUCIAL: Asegurar permisos 0777 en rutas de usuario y datos para que los juegos puedan escribir
+                    // CRUCIAL: Asegurar permisos 0777 y propiedad de usuario en rutas de guardado
                     if (std::strstr(buf, "/savedata") != nullptr ||
                         std::strstr(buf, "/MacheteSVG") != nullptr ||
                         std::strstr(buf, "/user/home") != nullptr)
                     {
                         (void)chmod(buf, 0777);
+                        if (owner_uid != 0 || owner_gid != 0)
+                            (void)chown(buf, owner_uid, owner_gid);
                     }
                 }
             }
@@ -273,8 +275,6 @@ bool copy_file_with_fsync(const std::string &src, const std::string &dst,
                           const ProgressCallback &progress_cb,
                           uid_t owner_uid = 0, gid_t owner_gid = 0)
 {
-    (void)owner_uid;
-    (void)owner_gid;
     ScopedFile in(std::fopen(src.c_str(), "rb"));
     if (!in.is_valid())
     {
@@ -373,6 +373,8 @@ bool copy_file_with_fsync(const std::string &src, const std::string &dst,
 
     // Otorgar permisos abiertos al destino para que Prospero y los juegos puedan leerlo libremente
     (void)chmod(dst.c_str(), 0666);
+    if (owner_uid != 0 || owner_gid != 0)
+        (void)chown(dst.c_str(), owner_uid, owner_gid);
     MACHETE_LOG("[COPY]", "File completed: %s", dst.c_str());
     return true;
 }
@@ -471,6 +473,8 @@ void apply_permissions_recursive(const std::string &path, uid_t uid = 0, gid_t g
     if (S_ISDIR(st.st_mode))
     {
         (void)chmod(path.c_str(), 0777);
+        if (uid != 0 || gid != 0)
+            (void)chown(path.c_str(), uid, gid);
 
         ScopedDir dir(path);
         if (dir.is_valid())
@@ -487,6 +491,8 @@ void apply_permissions_recursive(const std::string &path, uid_t uid = 0, gid_t g
     else if (S_ISREG(st.st_mode))
     {
         (void)chmod(path.c_str(), 0666);
+        if (uid != 0 || gid != 0)
+            (void)chown(path.c_str(), uid, gid);
     }
 }
 
@@ -906,6 +912,8 @@ void post_process_restored_save(const scanner::ScannedGame &game,
                 {
                     if (access((meta_ps4_user + "/icon0.png").c_str(), R_OK) != 0)
                         (void)pfs::copy_file_atomic(ic, meta_ps4_user + "/icon0.png", target_uid, target_gid);
+                    if (access((meta_ps4_user + "/system0020_icon0.png").c_str(), R_OK) != 0)
+                        (void)pfs::copy_file_atomic(ic, meta_ps4_user + "/system0020_icon0.png", target_uid, target_gid);
                     if (access((meta_ps4_user + "/sce_sys/icon0.png").c_str(), R_OK) != 0)
                         (void)pfs::copy_file_atomic(ic, meta_ps4_user + "/sce_sys/icon0.png", target_uid, target_gid);
                     if (access((meta_ps4_user + "/icon0.png_" + primary_ps4_slot).c_str(), R_OK) != 0)

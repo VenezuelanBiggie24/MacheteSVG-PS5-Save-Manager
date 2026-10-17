@@ -340,7 +340,8 @@ inline bool update_or_register_ps4_savedata_db(std::uint32_t user_id,
                 std::snprintf(sql_update, sizeof(sql_update),
                               "UPDATE savedata SET is_broken = 0, fake_broken = 0, faked_owner = 0, "
                               "account_id = %llu, user_id = %u, main_title = '%s', sub_title = '%s', "
-                              "detail = '%s', user_param = %u, blocks = %u, free_blocks = 0, size_kib = %u, "
+                              "detail = '%s', user_param = %u, blocks = %u, "
+                              "free_blocks = CASE WHEN free_blocks IS NULL THEN 0 ELSE free_blocks END, size_kib = %u, "
                               "mtime = strftime('%%Y-%%m-%%dT%%H:%%M:%%S.00Z', CURRENT_TIMESTAMP) "
                               "WHERE title_id = '%s' AND dir_name = '%s';",
                               static_cast<unsigned long long>(account_id), user_id,

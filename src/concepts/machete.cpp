@@ -312,6 +312,7 @@ class Machete final : public app::Concept
         age_ = 0.0f;
         dialog_ = false;
         web_server_dialog_ = false;
+        alert_dialog_ = false;
         notification_timer_ = 0.0f;
         storage_poll_timer_ = 0.0f;
         jb_poll_timer_ = 0.0f;
@@ -455,6 +456,16 @@ class Machete final : public app::Concept
             {
                 refresh_games();
             }
+
+            const bool is_es = (machete::i18n::current_language() == machete::i18n::Language::Spanish);
+            if (!res.success || res.message.size() > 45)
+            {
+                const std::string title = !res.success
+                    ? (is_es ? "Aviso de Operacion" : "Operation Notice")
+                    : (is_es ? "Operacion Completada" : "Operation Completed");
+                open_alert_dialog(!res.success, title, res.message, feedback);
+            }
+
             op_type_ = OperationType::None;
         }
 
@@ -491,6 +502,10 @@ class Machete final : public app::Concept
                 refuse_.trigger();
                 feedback.play(audio::Cue::error, 1.0f, 0.0f);
             }
+        }
+        else if (alert_dialog_)
+        {
+            update_alert_dialog(input, feedback);
         }
         // Atajo Triangle: Abrir / alternar servidor web local directamente
         else if (input.is_pressed(Action::north))
@@ -548,7 +563,7 @@ class Machete final : public app::Concept
 
         for (int i = 0; i < kItemCount; ++i)
         {
-            const bool focused = (!dialog_ && !web_server_dialog_ && i == focus_ && !operating &&
+            const bool focused = (!alert_dialog_ && !dialog_ && !web_server_dialog_ && i == focus_ && !operating &&
                                   op_overlay_show_.value <= 0.05f);
             focus_amount_[i].target = focused ? 1.0f : 0.0f;
             focus_amount_[i].update(dt, std::max(omega, 22.0f));
@@ -560,6 +575,9 @@ class Machete final : public app::Concept
 
         web_server_dialog_show_.target = web_server_dialog_ ? 1.0f : 0.0f;
         web_server_dialog_show_.update(dt, std::min(omega, 26.0f));
+
+        alert_dialog_show_.target = alert_dialog_ ? 1.0f : 0.0f;
+        alert_dialog_show_.update(dt, std::min(omega, 26.0f));
 
         dialog_focus_value_.target = static_cast<float>(dialog_focus_);
         dialog_focus_value_.update(dt, std::max(omega, 20.0f));
@@ -770,6 +788,76 @@ class Machete final : public app::Concept
         else if (focus_ == kBtnWebServer || focus_ == kBtnWebServerHeader)
         {
             open_web_server_dialog(feedback);
+        }
+    }
+
+    static std::vector<std::string> wrap_text_into_lines(std::string_view text, std::size_t max_chars = 62)
+    {
+        std::vector<std::string> lines;
+        if (text.empty())
+            return lines;
+
+        std::size_t pos = 0;
+        while (pos < text.size())
+        {
+            const std::size_t next_nl = text.find('\n', pos);
+            const std::string_view segment = (next_nl == std::string_view::npos)
+                                                 ? text.substr(pos)
+                                                 : text.substr(pos, next_nl - pos);
+
+            if (segment.empty())
+            {
+                lines.emplace_back("");
+            }
+            else
+            {
+                std::size_t start = 0;
+                while (start < segment.size())
+                {
+                    if (start + max_chars >= segment.size())
+                    {
+                        lines.emplace_back(std::string(segment.substr(start)));
+                        break;
+                    }
+                    const std::size_t end = start + max_chars;
+                    const std::size_t last_space = segment.rfind(' ', end);
+                    if (last_space != std::string_view::npos && last_space > start)
+                    {
+                        lines.emplace_back(std::string(segment.substr(start, last_space - start)));
+                        start = last_space + 1;
+                    }
+                    else
+                    {
+                        lines.emplace_back(std::string(segment.substr(start, max_chars)));
+                        start += max_chars;
+                    }
+                }
+            }
+
+            if (next_nl == std::string_view::npos)
+                break;
+            pos = next_nl + 1;
+        }
+        return lines;
+    }
+
+    void open_alert_dialog(bool is_error, const std::string &title, const std::string &message,
+                           app::Feedback &feedback)
+    {
+        alert_is_error_ = is_error;
+        alert_title_ = title;
+        alert_message_ = message;
+        alert_lines_ = wrap_text_into_lines(message, 62);
+        alert_dialog_ = true;
+        feedback.play(is_error ? audio::Cue::error : audio::Cue::saved, 1.0f, 0.0f);
+    }
+
+    void update_alert_dialog(const InputFrame &input, app::Feedback &feedback)
+    {
+        if (input.is_pressed(Action::confirm) || input.is_pressed(Action::back))
+        {
+            alert_dialog_ = false;
+            feedback.play(audio::Cue::modal_close, 1.0f, 0.0f);
         }
     }
 
@@ -1747,6 +1835,66 @@ class Machete final : public app::Concept
         }
 
         // ==========================================
+        // 5.7. DIALOGO MODAL: ALERTA / AVISO DETALLADO (Apple Liquid Glass)
+        // ==========================================
+        const float alert_show = alert_dialog_show_.value;
+        if (alert_show > 0.005f)
+        {
+            list.rounded_rect({0, 0, gfx::kVirtualWidth, gfx::kVirtualHeight}, 0,
+                              Color::rgb(0x000000).with_alpha(0.74f * alert_show));
+            list.push_opacity(tween::clamp01(alert_show));
+            list.push_transform(0.93f + 0.07f * tween::clamp01(alert_show), 960, 540, 0, 0);
+
+            const Rect dlg{420, 180, 1080, 720};
+            paint.panel(dlg);
+
+            const bool is_es = (machete::i18n::current_language() == machete::i18n::Language::Spanish);
+
+            // Badge / Icono de Encabezado (Rojo para error / advertencia, Verde para exito)
+            const Rect badge_rect{465, 215, 48, 48};
+            list.rounded_rect(badge_rect, 12.0f,
+                              alert_is_error_ ? Color::rgb(0x381216).with_alpha(0.9f)
+                                              : Color::rgb(0x0a2d1f).with_alpha(0.9f));
+            paint.stroke(badge_rect, 12.0f, 1.5f,
+                         alert_is_error_ ? Color::rgb(0xff4455).with_alpha(0.8f)
+                                         : Color::rgb(0x38ef7d).with_alpha(0.8f));
+            paint.heading(alert_is_error_ ? "!" : "OK",
+                          badge_rect.cx(), badge_rect.cy() + 9, 22,
+                          alert_is_error_ ? Color::rgb(0xff5566) : Color::rgb(0x38ef7d),
+                          gfx::Align::center);
+
+            // Titulo del Modal
+            paint.heading(alert_title_.c_str(), 530, 252, 30, theme.text);
+
+            // Caja de Contenido del Mensaje
+            const Rect msg_box{465, 290, 990, 500};
+            list.rounded_rect(msg_box, 14.0f, Color::rgb(0xffffff).with_alpha(0.04f));
+            paint.stroke(msg_box, 14.0f, 1.0f,
+                         alert_is_error_ ? Color::rgb(0xff4455).with_alpha(0.3f)
+                                         : Color::rgb(0xffffff).with_alpha(0.08f));
+
+            float line_y = msg_box.y + 36.0f;
+            for (const auto &l : alert_lines_)
+            {
+                if (line_y > msg_box.y + msg_box.h - 26.0f)
+                    break;
+                paint.body(l.c_str(), msg_box.x + 24.0f, line_y, 20, theme.text.with_alpha(0.95f));
+                line_y += 32.0f;
+            }
+
+            // Boton Aceptar enfocado
+            const Rect btn_ok{dlg.cx() - 180, 816, 360, 54};
+            ui::Look ok_look;
+            ok_look.focus = 1.0f;
+            paint.button(btn_ok, is_es ? "[X] Aceptar" : "[X] OK",
+                         alert_is_error_ ? ui::ButtonKind::primary : ui::ButtonKind::primary,
+                         ok_look);
+
+            list.pop_transform();
+            list.pop_opacity();
+        }
+
+        // ==========================================
         // 6. TECLAS Y CONTROLES DUALSENSE
         // ==========================================
         const ui::GlyphStyle glyphs = theme.dark ? ui::GlyphStyle::dark() : ui::GlyphStyle::light();
@@ -1802,6 +1950,14 @@ class Machete final : public app::Concept
     bool web_server_dialog_ = false;
     int web_server_dialog_focus_ = 0;
     tween::Spring web_server_dialog_show_;
+
+    // Modal de Alerta / Notificacion Detallada con Boton Aceptar
+    bool alert_dialog_ = false;
+    bool alert_is_error_ = false;
+    std::string alert_title_;
+    std::string alert_message_;
+    std::vector<std::string> alert_lines_;
+    tween::Spring alert_dialog_show_;
 
     // Cache de Codigo QR para el Servidor Web (calculo unico al cambiar URL)
     mutable std::string cached_qr_url_;

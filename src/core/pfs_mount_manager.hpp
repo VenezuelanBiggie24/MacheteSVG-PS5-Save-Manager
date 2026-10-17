@@ -212,13 +212,13 @@ inline bool copy_file_atomic(const std::string &src, const std::string &dst, uid
     }
 
     (void)chmod(dst.c_str(), 0666);
+    if (uid != 0 || gid != 0)
+        (void)chown(dst.c_str(), uid, gid);
     return true;
 }
 
 inline void ensure_dir_tree(const std::string &path, uid_t uid = 0, gid_t gid = 0)
 {
-    (void)uid;
-    (void)gid;
     if (path.empty())
         return;
     std::string cur;
@@ -235,7 +235,15 @@ inline void ensure_dir_tree(const std::string &path, uid_t uid = 0, gid_t gid = 
                 if (mkdir(cur.c_str(), 0777) == 0)
                 {
                     (void)chmod(cur.c_str(), 0777);
+                    if (uid != 0 || gid != 0)
+                        (void)chown(cur.c_str(), uid, gid);
                 }
+            }
+            else
+            {
+                (void)chmod(cur.c_str(), 0777);
+                if (uid != 0 || gid != 0)
+                    (void)chown(cur.c_str(), uid, gid);
             }
         }
     }
@@ -703,20 +711,17 @@ inline bool is_backup_from_different_console(const std::string &backup_folder, b
         }
     }
 
-    // 3. Verificacion criptografica directa en hardware de PS5:
-    //    Si es un juego de PS5, probar si el SAMU de ESTA consola puede descifrar la clave sellada
-    //    de al menos un slot del respaldo. Si SAMU retorna error (status_0x80 != 0, ej. -53),
-    //    el respaldo proviene de una instalacion anterior previa al formateo de la consola.
-    if (is_ps5 && access("/dev/pfsmgr", F_OK) == 0)
+    // 3. Verificacion de clave sellada para PS4:
+    //    Si es un juego de PS4, probar si el SAMU de ESTA consola puede descifrar la clave sellada (.bin).
+    if (!is_ps5 && access("/dev/pfsmgr", F_OK) == 0)
     {
         std::vector<std::string> bslots;
-        if (has_local_save_dummy(backup_folder, is_ps5, &bslots) && !bslots.empty())
+        if (has_local_save_dummy(backup_folder, false, &bslots) && !bslots.empty())
         {
             std::uint8_t test_key[32] = {0};
-            if (!decrypt_pfs_key_for_slot(backup_folder, bslots[0], is_ps5, test_key))
+            if (!decrypt_pfs_key_for_slot(backup_folder, bslots[0], false, test_key))
             {
-                MACHETE_LOG("[PFS]", "Backup sealed key rejected by local SAMU (different installation/console: %s)",
-                            bslots[0].c_str());
+                MACHETE_LOG("[PFS]", "Backup PS4 sealed key rejected by local SAMU: %s", bslots[0].c_str());
                 return true;
             }
         }
