@@ -1,5 +1,5 @@
 =====================================================
-   MacheteSVG v1.3.0 - PS5 & PS4 Savegame Manager
+   MacheteSVG v1.3.1 - PS5 & PS4 Savegame Manager
 =====================================================
 
 [ENGLISH GUIDE]

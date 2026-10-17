@@ -6,7 +6,44 @@
 
 ## English Documentation
 
-### Version 1.3.0 (Latest Release) - Native Kernel SPRX Loader, PS5 Pre-Format Save Dummy Injection & Non-Destructive PS4 DB Resigning
+### Version 1.3.1 (Latest Release) - Deep Savegame Scanner, Symlink Traversal & Cross-SKU Save Linking
+
+MacheteSVG v1.3.1 (Build #56) resolves the issue where certain installed PS5 titles (such as `PPSA01969` — *Death Stranding Director's Cut*) appeared as `"Instalado"` (0 bytes, `save_path=""`) even when a valid savegame existed on the console.
+
+#### Key Enhancements in v1.3.1
+1. **Symlink-Aware Directory Size Calculation (`stat` instead of `lstat`):**
+   - Replaced `lstat` (which rejected symbolic links via `S_ISLNK` and returned 0 bytes for symlinked save directories or M.2/external storage mounts) with `stat` across up to 4 directory levels in `calculate_dir_size_and_mtime` (`src/core/game_scanner.cpp`).
+2. **Multi-Partition & Nested Savegame Discovery:**
+   - Expanded `scan_installed_games_and_saves()` (`src/core/game_scanner.cpp`) to inspect `/user/home/*`, `/mnt/ext0/user/home/*`, `/mnt/ext1/user/home/*`, `/system_data/savedata_prospero/*`, `/system_data/savedata/*` (including `/user/` subdirectories), and active PFS sandbox mounts `/mnt/sandbox/pfsmnt/*-savedata0`.
+   - Added flexible case-insensitive Title ID extraction (`extract_valid_title_id`) to match `PPSAxxxxx`, `CUSAxxxxx`, and `PPCXxxxxx` anywhere in directory names.
+3. **Expanded `appmeta` & Save Metadata Enrichment:**
+   - Added `/user/appmeta/external`, `/system_data/priv/appmeta`, `/system_data/priv/appmeta/external`, `/mnt/ext0/user/appmeta/external`, and `/mnt/ext1/user/appmeta/external` to `meta_bases`.
+   - Enriches saves lacking `appmeta` entries directly from `savedata_prospero_meta` and `savedata_meta/user` (`param.json`, `param.sfo`, and `icon0.png`) so external or standalone saves always display their authentic game title and cover art instead of raw Title IDs.
+4. **Automatic Cross-SKU / Regional Save Linking:**
+   - When a console has both an `appmeta` entry for one regional SKU (e.g., `PPSA01969` US with 0 bytes) and an active save directory under another SKU of the exact same game title and platform (e.g., `PPSA01968` EU with >0 bytes), MacheteSVG automatically links the 0-byte entry to the active save path so backing up or restoring from the game entry works seamlessly.
+   - Added `resolve_existing_save_path` fallback in `backup_game_save` (`src/core/save_manager.cpp`) and full 1..N diagnostic logging of all detected games and save paths in `machete.log`.
+5. **App Version & Build Tracking:**
+   - App Version: `1.3.1` | Internal Build: `#56`.
+6. **Verified Zero Emojis & 108 Passing Unit Tests:**
+   - 100% clean zero-emoji policy across all source files, logs, and documentation.
+   - All 108 unit tests passing across 33 test suites.
+
+#### Package Checksums (v1.3.1)
+| File | Size | SHA-256 Checksum |
+| :--- | :--- | :--- |
+| `MacheteSVG_v1.3.1_PS5.zip` | 30.2 MB (31,697,707 bytes) | `4b03d7d556f954212e6194b5dabca32f7b441974427e4945698742369c660af2` |
+| `eboot.bin` | 25.1 MB (26,268,816 bytes) | `25b8e2d1f1ffc59a5e29ed628dd00abbefaa187a3fbf652e5ba3c471a7080df1` |
+
+#### Installation (Easy FTP Method)
+1. Download `MacheteSVG_v1.3.1_PS5.zip`.
+2. Extract the archive on your PC to get the `PPSA99001` folder.
+3. Enable FTP on your PS5 (OnionHEN, etaHEN, etc.).
+4. Upload the `PPSA99001` folder directly to `/data/homebrew/` via FTP (resulting path: `/data/homebrew/PPSA99001/eboot.bin`).
+5. Launch MacheteSVG from your homebrew launcher or system menu.
+
+---
+
+### Version 1.3.0 - Native Kernel SPRX Loader, PS5 Pre-Format Save Dummy Injection & Non-Destructive PS4 DB Resigning
 
 MacheteSVG v1.3.0 (Build #55) resolves the remaining restoration edge cases identified on real PlayStation 5 hardware (FW 12.40): restoring PS5 backups created prior to a console format (`PPSA13427`) and loading PS4 backwards-compatible saves (`CUSA18600`) inside the game without triggering "no se pudieron cargar la partida".
 
@@ -422,7 +459,44 @@ Upload the `PPSA99001` folder directly to `/data/homebrew/` via FTP.
 
 ## Notas de la Version en Espanol (Spanish Documentation)
 
-### Version 1.3.0 (Ultima Version) - Cargador Kernel SPRX Nativo, Inyeccion Save Dummy PS5 Pre-Formateo y Resignado No Destructivo PS4
+### Version 1.3.1 (Ultima Version) - Escaneo Profundo de Partidas, Soporte de Symlinks y Vinculacion Cross-SKU
+
+MacheteSVG v1.3.1 (Build #56) soluciona el problema por el cual ciertos juegos instalados de PS5 (como `PPSA01969` — *Death Stranding Director's Cut*) aparecian en la lista como `"Instalado"` (0 bytes, `save_path=""`) a pesar de tener una partida guardada real en la consola.
+
+#### Mejoras Principales en v1.3.1
+1. **Calculo de Tamano Compatible con Enlaces Simbolicos (`stat` en lugar de `lstat`):**
+   - Se reemplazo `lstat` (que descartaba enlaces simbolicos mediante `S_ISLNK` y devolvia 0 bytes en directorios de guardado enlazados o montados en almacenamiento externo/M.2) por `stat` con hasta 4 niveles de profundidad en `calculate_dir_size_and_mtime` (`src/core/game_scanner.cpp`).
+2. **Busqueda Multi-Particion y Subdirectorios Anidados de Guardado:**
+   - Se amplio `scan_installed_games_and_saves()` (`src/core/game_scanner.cpp`) para inspeccionar `/user/home/*`, `/mnt/ext0/user/home/*`, `/mnt/ext1/user/home/*`, `/system_data/savedata_prospero/*`, `/system_data/savedata/*` (incluyendo subdirectorios `/user/`) y montajes PFS activos en `/mnt/sandbox/pfsmnt/*-savedata0`.
+   - Extraccion flexible e insensible a mayusculas/minusculas del Title ID (`extract_valid_title_id`) para detectar `PPSAxxxxx`, `CUSAxxxxx` y `PPCXxxxxx` en cualquier parte del nombre de carpeta.
+3. **Ampliacion de `appmeta` y Enriquecimiento desde Metadatos de Guardado:**
+   - Se agregaron `/user/appmeta/external`, `/system_data/priv/appmeta`, `/system_data/priv/appmeta/external`, `/mnt/ext0/user/appmeta/external` y `/mnt/ext1/user/appmeta/external` a `meta_bases`.
+   - Si una partida no tiene entrada en `/user/appmeta`, el escaner recupera su nombre oficial y caratula directamente desde `savedata_prospero_meta` o `savedata_meta/user` (`param.json`, `param.sfo` e `icon0.png`), evitando que aparezca solo el codigo `PPSA`/`CUSA`.
+4. **Vinculacion Automatica Cross-SKU / Multi-Region y Respaldo Directo:**
+   - Cuando la consola registra un `appmeta` de una region (ej. `PPSA01969` US con 0 bytes) pero la partida guardada reside bajo otro SKU del mismo titulo (ej. `PPSA01968` EU con >0 bytes), MacheteSVG vincula automaticamente la entrada a la ruta real de guardado.
+   - Se anadio `resolve_existing_save_path` en `backup_game_save` (`src/core/save_manager.cpp`) y el listado completo `1..N` de todos los juegos y sus rutas `save=` en `machete.log`.
+5. **Identificacion de Version y Compilacion:**
+   - Version de la aplicacion: `1.3.1` | Numero de compilacion: `#56`.
+6. **Certificacion de Cero Emojis y 108 Pruebas Unitarias Exitosas:**
+   - Politica estricta de CERO EMOJIS verificada en todo el proyecto.
+   - 108 pruebas unitarias superadas en 33 suites de prueba.
+
+#### Sumas de Verificacion de Paquetes (v1.3.1)
+| Archivo | Tamano | Suma de Verificacion SHA-256 |
+| :--- | :--- | :--- |
+| `MacheteSVG_v1.3.1_PS5.zip` | 30.2 MB (31,697,707 bytes) | `4b03d7d556f954212e6194b5dabca32f7b441974427e4945698742369c660af2` |
+| `eboot.bin` | 25.1 MB (26,268,816 bytes) | `25b8e2d1f1ffc59a5e29ed628dd00abbefaa187a3fbf652e5ba3c471a7080df1` |
+
+#### Instalacion (Metodo Facil via FTP)
+1. Descarga `MacheteSVG_v1.3.1_PS5.zip`.
+2. Descomprime el archivo en tu PC para obtener la carpeta `PPSA99001`.
+3. Habilita el servidor FTP en tu PS5 (OnionHEN, etaHEN, etc.).
+4. Copia la carpeta `PPSA99001` directamente en `/data/homebrew/` via FTP (ruta final: `/data/homebrew/PPSA99001/eboot.bin`).
+5. Inicia MacheteSVG directamente desde tu lanzador de homebrew o menu principal.
+
+---
+
+### Version 1.3.0 - Cargador Kernel SPRX Nativo, Inyeccion Save Dummy PS5 Pre-Formateo y Resignado No Destructivo PS4
 
 MacheteSVG v1.3.0 (Build #55) soluciona de raiz los dos casos restantes verificados en hardware real de PlayStation 5 (FW 12.40): la restauracion de respaldos de PS5 creados antes de formatear la consola (`PPSA13427`) y la carga de partidas retrocompatibles de PS4 (`CUSA18600`) dentro del juego sin el mensaje "no se pudieron cargar la partida".
 

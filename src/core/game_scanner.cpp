@@ -100,13 +100,60 @@ bool is_valid_title_id(const std::string &id)
     return true;
 }
 
+std::string extract_valid_title_id(const std::string &name)
+{
+    if (name.size() < 9)
+        return "";
+
+    for (std::size_t pos = 0; pos + 9 <= name.size(); ++pos)
+    {
+        std::string cand = name.substr(pos, 9);
+        for (char &ch : cand)
+        {
+            if (ch >= 'a' && ch <= 'z')
+                ch = static_cast<char>(ch - 'a' + 'A');
+        }
+        if (is_valid_title_id(cand) &&
+            (cand.rfind("PPSA", 0) == 0 || cand.rfind("CUSA", 0) == 0 ||
+             cand.rfind("PPCX", 0) == 0 || cand.rfind("NPXS", 0) == 0))
+        {
+            return cand;
+        }
+    }
+
+    std::string prefix = name.substr(0, 9);
+    for (char &ch : prefix)
+    {
+        if (ch >= 'a' && ch <= 'z')
+            ch = static_cast<char>(ch - 'a' + 'A');
+    }
+    if (is_valid_title_id(prefix))
+        return prefix;
+
+    return "";
+}
+
+std::string normalize_title_key(const std::string &title)
+{
+    std::string key;
+    key.reserve(title.size());
+    for (unsigned char c : title)
+    {
+        if (c >= 'A' && c <= 'Z')
+            key.push_back(static_cast<char>(c - 'A' + 'a'));
+        else if ((c >= 'a' && c <= 'z') || (c >= '0' && c <= '9'))
+            key.push_back(static_cast<char>(c));
+    }
+    return key;
+}
+
 std::uint64_t calculate_dir_size_and_mtime(const std::string &path, std::time_t &out_mtime, int depth = 0)
 {
-    if (depth > 2)
+    if (depth > 3)
         return 0;
 
     struct stat st{};
-    if (lstat(path.c_str(), &st) != 0)
+    if (stat(path.c_str(), &st) != 0)
         return 0;
 
     if (S_ISREG(st.st_mode))
@@ -115,7 +162,7 @@ std::uint64_t calculate_dir_size_and_mtime(const std::string &path, std::time_t 
         return static_cast<std::uint64_t>(st.st_size);
     }
 
-    if (!S_ISDIR(st.st_mode) || S_ISLNK(st.st_mode))
+    if (!S_ISDIR(st.st_mode))
         return 0;
 
     DIR *dir = opendir(path.c_str());
@@ -132,9 +179,9 @@ std::uint64_t calculate_dir_size_and_mtime(const std::string &path, std::time_t 
 
         const std::string full = path + "/" + entry->d_name;
         struct stat entry_st{};
-        if (lstat(full.c_str(), &entry_st) == 0)
+        if (stat(full.c_str(), &entry_st) == 0)
         {
-            if (S_ISDIR(entry_st.st_mode) && !S_ISLNK(entry_st.st_mode))
+            if (S_ISDIR(entry_st.st_mode))
             {
                 std::time_t sub_mtime = 0;
                 total += calculate_dir_size_and_mtime(full, sub_mtime, depth + 1);
@@ -654,6 +701,7 @@ std::vector<ScannedGame> scan_installed_games_and_saves()
 
     std::vector<ScannedGame> games;
     std::unordered_map<std::string, std::time_t> latest_mtimes;
+    std::vector<std::string> counted_save_dirs;
 
     auto find_or_add_game = [&](const std::string &title_id) -> ScannedGame &
     {
@@ -676,16 +724,85 @@ std::vector<ScannedGame> scan_installed_games_and_saves()
 
     // =========================================================================
     // 1. Escanear Metadatos de Aplicaciones Instaladas Reales
-    //    En PS5, el directorio canonico de metadatos de titulos instalados es:
-    //    /user/appmeta/ (interno) y /mnt/ext0/user/appmeta / /mnt/ext1/user/appmeta (externo)
-    //    NOTA CRITICA: NUNCA escanear /user/app (punto de montaje PFS de contenedores cifrados)
+    //    Incluye /user/appmeta, /user/appmeta/external, /system_data/priv/appmeta,
+    //    /mnt/ext0 y /mnt/ext1 (tanto internos como externos)
     // =========================================================================
     MACHETE_BREADCRUMB("scanner:appmeta");
     const char *meta_bases[] = {
         "/user/appmeta",
+        "/user/appmeta/external",
+        "/system_data/priv/appmeta",
+        "/system_data/priv/appmeta/external",
         "/mnt/ext0/user/appmeta",
+        "/mnt/ext0/user/appmeta/external",
         "/mnt/ext1/user/appmeta",
+        "/mnt/ext1/user/appmeta/external",
+        "/mnt/ext0/appmeta",
+        "/mnt/ext1/appmeta",
         "/data/homebrew",
+    };
+
+    auto enrich_game_metadata = [&](ScannedGame &game, const std::string &title_id, const std::string &hint_dir = "")
+    {
+        // 1. Icono
+        if (game.icon_path.empty())
+        {
+            std::vector<std::string> icon_candidates;
+            if (!hint_dir.empty())
+            {
+                icon_candidates.push_back(hint_dir + "/icon0.png");
+                icon_candidates.push_back(hint_dir + "/sce_sys/icon0.png");
+                icon_candidates.push_back(hint_dir + "/icon0.PNG");
+                icon_candidates.push_back(hint_dir + "/sce_sys/icon0.PNG");
+            }
+            for (const char *mb : meta_bases)
+            {
+                icon_candidates.push_back(std::string(mb) + "/" + title_id + "/icon0.png");
+                icon_candidates.push_back(std::string(mb) + "/" + title_id + "/sce_sys/icon0.png");
+            }
+            for (const auto &p : icon_candidates)
+            {
+                if (file_exists(p))
+                {
+                    game.icon_path = p;
+                    break;
+                }
+            }
+        }
+
+        // 2. Titulo oficial
+        if (game.title.empty() || game.title == title_id)
+        {
+            std::vector<std::string> meta_files;
+            if (!hint_dir.empty())
+            {
+                meta_files.push_back(hint_dir + "/param.json");
+                meta_files.push_back(hint_dir + "/sce_sys/param.json");
+                meta_files.push_back(hint_dir + "/param.sfo");
+                meta_files.push_back(hint_dir + "/sce_sys/param.sfo");
+                meta_files.push_back(hint_dir + "/sce_sys/PARAM.SFO");
+            }
+            for (const char *mb : meta_bases)
+            {
+                meta_files.push_back(std::string(mb) + "/" + title_id + "/param.json");
+                meta_files.push_back(std::string(mb) + "/" + title_id + "/sce_sys/param.json");
+                meta_files.push_back(std::string(mb) + "/" + title_id + "/param.sfo");
+                meta_files.push_back(std::string(mb) + "/" + title_id + "/sce_sys/param.sfo");
+                meta_files.push_back(std::string(mb) + "/" + title_id + "/sce_sys/PARAM.SFO");
+            }
+            for (const auto &mf : meta_files)
+            {
+                if (file_exists(mf))
+                {
+                    if (mf.rfind(".json") != std::string::npos)
+                        game.title = extract_title_from_param_json(mf);
+                    else
+                        game.title = extract_title_from_param_sfo(mf);
+                    if (!game.title.empty() && game.title != title_id)
+                        break;
+                }
+            }
+        }
     };
 
     for (const char *meta_base : meta_bases)
@@ -699,53 +816,17 @@ std::vector<ScannedGame> scan_installed_games_and_saves()
             if (entry->d_name[0] == '.')
                 continue;
 
-            const std::string title_id = entry->d_name;
-            if (!is_valid_title_id(title_id))
+            const std::string title_id = extract_valid_title_id(entry->d_name);
+            if (title_id.empty())
                 continue;
 
-            const std::string entry_path = std::string(meta_base) + "/" + title_id;
+            const std::string entry_path = std::string(meta_base) + "/" + entry->d_name;
 
             auto &game = find_or_add_game(title_id);
             if (game.app_path.empty())
                 game.app_path = entry_path;
 
-            // Ruta de icono
-            if (game.icon_path.empty())
-            {
-                for (const std::string &p : {
-                         entry_path + "/icon0.png",
-                         entry_path + "/sce_sys/icon0.png",
-                         std::string("/user/appmeta/") + title_id + "/icon0.png",
-                         std::string("/mnt/ext0/user/appmeta/") + title_id + "/icon0.png",
-                         std::string("/mnt/ext1/user/appmeta/") + title_id + "/icon0.png",
-                     })
-                {
-                    if (file_exists(p))
-                    {
-                        game.icon_path = p;
-                        break;
-                    }
-                }
-            }
-
-            // Nombre oficial del juego
-            if (game.title.empty() || game.title == title_id)
-            {
-                if (file_exists(entry_path + "/param.json"))
-                    game.title = extract_title_from_param_json(entry_path + "/param.json");
-                if (game.title.empty() && file_exists(entry_path + "/sce_sys/param.json"))
-                    game.title = extract_title_from_param_json(entry_path + "/sce_sys/param.json");
-                if (game.title.empty() && file_exists(entry_path + "/param.sfo"))
-                    game.title = extract_title_from_param_sfo(entry_path + "/param.sfo");
-                if (game.title.empty() && file_exists(entry_path + "/sce_sys/param.sfo"))
-                    game.title = extract_title_from_param_sfo(entry_path + "/sce_sys/param.sfo");
-                if (game.title.empty() && file_exists(entry_path + "/sce_sys/PARAM.SFO"))
-                    game.title = extract_title_from_param_sfo(entry_path + "/sce_sys/PARAM.SFO");
-                if (game.title.empty() && file_exists(std::string("/user/appmeta/") + title_id + "/param.json"))
-                    game.title = extract_title_from_param_json(std::string("/user/appmeta/") + title_id + "/param.json");
-                if (game.title.empty() && file_exists(std::string("/user/appmeta/") + title_id + "/param.sfo"))
-                    game.title = extract_title_from_param_sfo(std::string("/user/appmeta/") + title_id + "/param.sfo");
-            }
+            enrich_game_metadata(game, title_id, entry_path);
 
             if (game.size_str.empty())
             {
@@ -758,144 +839,251 @@ std::vector<ScannedGame> scan_installed_games_and_saves()
     }
 
     // =========================================================================
-    // 2. Escanear Partidas Guardadas:
-    //    - PS5: /user/home/*/savedata_prospero/
-    //    - PS4: /user/home/*/savedata/
-    //    - Copias: /user/home/*/savedata_backup/
+    // 2. Escanear Partidas Guardadas en todas las ubicaciones del sistema:
+    //    - /user/home/<uid>/{savedata_prospero, savedata_prospero/user, savedata, savedata/user, savedata_backup}
+    //    - /system_data/savedata_prospero/<uid>, /system_data/savedata/<uid>
+    //    - /mnt/ext0/user/home/<uid>/..., /mnt/ext1/user/home/<uid>/...
+    //    - /user/home/<uid>/{savedata_prospero_meta, savedata_prospero_meta/user, savedata_meta/user} (para enriquecer metadatos)
     // =========================================================================
     MACHETE_BREADCRUMB("scanner:savedata");
-    DIR *home_dir = opendir("/user/home");
-    if (home_dir)
+
+    auto was_save_dir_counted = [&](const std::string &path) -> bool
     {
+        struct stat st{};
+        if (stat(path.c_str(), &st) == 0 && st.st_ino != 0)
+        {
+            char key[128];
+            std::snprintf(key, sizeof(key), "dev=%llu:ino=%llu",
+                          static_cast<unsigned long long>(st.st_dev),
+                          static_cast<unsigned long long>(st.st_ino));
+            const std::string skey(key);
+            if (std::find(counted_save_dirs.begin(), counted_save_dirs.end(), skey) != counted_save_dirs.end())
+                return true;
+            counted_save_dirs.push_back(skey);
+            return false;
+        }
+        if (std::find(counted_save_dirs.begin(), counted_save_dirs.end(), path) != counted_save_dirs.end())
+            return true;
+        counted_save_dirs.push_back(path);
+        return false;
+    };
+
+    auto scan_save_container_dir = [&](const std::string &savedata_path, const std::string &user_base)
+    {
+        DIR *savedata_dir = opendir(savedata_path.c_str());
+        if (!savedata_dir)
+            return;
+
+        while (const dirent *game_entry = readdir(savedata_dir))
+        {
+            if (game_entry->d_name[0] == '.')
+                continue;
+
+            const std::string entry_name = game_entry->d_name;
+            const std::string title_id = extract_valid_title_id(entry_name);
+            if (title_id.empty())
+                continue;
+
+            const std::string game_save_item = savedata_path + "/" + entry_name;
+            if (was_save_dir_counted(game_save_item))
+                continue;
+
+            auto &game = find_or_add_game(title_id);
+
+            // Enriquecer con metadatos de appmeta, la propia partida y savedata_prospero_meta / savedata_meta
+            enrich_game_metadata(game, title_id, game_save_item);
+            if (!user_base.empty())
+            {
+                enrich_game_metadata(game, title_id, user_base + "/savedata_prospero_meta/" + title_id);
+                enrich_game_metadata(game, title_id, user_base + "/savedata_prospero_meta/user/" + title_id);
+                enrich_game_metadata(game, title_id, user_base + "/savedata_meta/user/" + title_id);
+            }
+
+            game.has_keystone = true;
+
+            std::time_t mtime = 0;
+            const std::uint64_t bytes = calculate_dir_size_and_mtime(game_save_item, mtime);
+            if (game.save_path.empty() || (bytes > 0 && game.total_bytes == 0))
+            {
+                game.save_path = game_save_item;
+            }
+
+            if (bytes > 0)
+            {
+                game.total_bytes += bytes;
+                game.has_save_dummy = true;
+                game.size_str = format_bytes(game.total_bytes);
+                if (mtime > latest_mtimes[title_id])
+                {
+                    latest_mtimes[title_id] = mtime;
+                    game.timestamp_str = format_timestamp(mtime);
+                }
+            }
+        }
+        closedir(savedata_dir);
+    };
+
+    const char *home_roots[] = {
+        "/user/home",
+        "/mnt/ext0/user/home",
+        "/mnt/ext1/user/home",
+    };
+
+    for (const char *home_root : home_roots)
+    {
+        DIR *home_dir = opendir(home_root);
+        if (!home_dir)
+            continue;
+
         while (const dirent *user_entry = readdir(home_dir))
         {
             if (user_entry->d_name[0] == '.')
                 continue;
 
-            const std::string user_base = std::string("/user/home/") + user_entry->d_name;
+            const std::string uid_str = user_entry->d_name;
+            const std::string user_base = std::string(home_root) + "/" + uid_str;
 
-            for (const char *save_sub : {"savedata_prospero", "savedata", "savedata_backup"})
+            for (const char *save_sub : {
+                     "savedata_prospero",
+                     "savedata_prospero/user",
+                     "savedata",
+                     "savedata/user",
+                     "savedata_backup",
+                 })
             {
-                const std::string savedata_path = user_base + "/" + save_sub;
-                DIR *savedata_dir = opendir(savedata_path.c_str());
-                if (!savedata_dir)
+                scan_save_container_dir(user_base + "/" + save_sub, user_base);
+            }
+
+            // También verificar /system_data/savedata_prospero/<uid> y /system_data/savedata/<uid>
+            scan_save_container_dir("/system_data/savedata_prospero/" + uid_str, user_base);
+            scan_save_container_dir("/system_data/savedata_prospero/" + uid_str + "/user", user_base);
+            scan_save_container_dir("/system_data/savedata/" + uid_str, user_base);
+            scan_save_container_dir("/system_data/savedata/" + uid_str + "/user", user_base);
+
+            // Escanear savedata_prospero_meta y savedata_meta/user para enriquecer titulos/iconos
+            // de cualquier partida que ya exista o tenga metadatos registrados
+            for (const char *meta_sub : {
+                     "savedata_prospero_meta",
+                     "savedata_prospero_meta/user",
+                     "savedata_meta/user",
+                 })
+            {
+                const std::string mpath = user_base + "/" + meta_sub;
+                DIR *mdir = opendir(mpath.c_str());
+                if (!mdir)
                     continue;
-
-                while (const dirent *game_entry = readdir(savedata_dir))
+                while (const dirent *me = readdir(mdir))
                 {
-                    if (game_entry->d_name[0] == '.')
+                    if (me->d_name[0] == '.')
                         continue;
-
-                    const std::string entry_name = game_entry->d_name;
-                    if (entry_name.size() < 9)
+                    const std::string tid = extract_valid_title_id(me->d_name);
+                    if (tid.empty())
                         continue;
-
-                    const std::string title_id = entry_name.substr(0, 9);
-                    if (!is_valid_title_id(title_id))
-                        continue;
-
-                    const std::string game_save_item = savedata_path + "/" + entry_name;
-
-                    auto &game = find_or_add_game(title_id);
-                    if (game.save_path.empty())
-                        game.save_path = game_save_item;
-
-                    // Si aun no tenia titulo, buscar en metadatos conocidos o en la propia partida
-                    if (game.title.empty() || game.title == title_id)
+                    for (auto &g : games)
                     {
-                        for (const char *base : {"/user/appmeta", "/mnt/ext0/user/appmeta", "/mnt/ext1/user/appmeta", "/data/homebrew"})
+                        if (g.title_id == tid)
                         {
-                            const std::string p_json = std::string(base) + "/" + title_id + "/param.json";
-                            if (file_exists(p_json))
-                            {
-                                game.title = extract_title_from_param_json(p_json);
-                                if (!game.title.empty())
-                                    break;
-                            }
-                            const std::string p_sfo = std::string(base) + "/" + title_id + "/param.sfo";
-                            if (file_exists(p_sfo))
-                            {
-                                game.title = extract_title_from_param_sfo(p_sfo);
-                                if (!game.title.empty())
-                                    break;
-                            }
-                        }
-
-                        if (game.title.empty() || game.title == title_id)
-                        {
-                            for (const std::string &p_save : {
-                                     game_save_item + "/sce_sys/param.sfo",
-                                     game_save_item + "/sce_sys/PARAM.SFO",
-                                     game_save_item + "/param.sfo",
-                                     game_save_item + "/sce_sys/param.json",
-                                     game_save_item + "/param.json",
-                                 })
-                            {
-                                if (file_exists(p_save))
-                                {
-                                    if (p_save.rfind(".json") != std::string::npos)
-                                        game.title = extract_title_from_param_json(p_save);
-                                    else
-                                        game.title = extract_title_from_param_sfo(p_save);
-                                    if (!game.title.empty())
-                                        break;
-                                }
-                            }
-                        }
-                    }
-
-                    // Si no tenia icono, buscar en metadatos conocidos o en la propia partida
-                    if (game.icon_path.empty())
-                    {
-                        for (const char *base : {"/user/appmeta", "/mnt/ext0/user/appmeta", "/mnt/ext1/user/appmeta", "/data/homebrew"})
-                        {
-                            const std::string p_ico = std::string(base) + "/" + title_id + "/icon0.png";
-                            if (file_exists(p_ico))
-                            {
-                                game.icon_path = p_ico;
-                                break;
-                            }
-                        }
-
-                        if (game.icon_path.empty())
-                        {
-                            for (const std::string &p_ico : {
-                                     game_save_item + "/sce_sys/icon0.png",
-                                     game_save_item + "/icon0.png",
-                                     game_save_item + "/sce_sys/icon0.PNG",
-                                     game_save_item + "/icon0.PNG",
-                                 })
-                            {
-                                if (file_exists(p_ico))
-                                {
-                                    game.icon_path = p_ico;
-                                    break;
-                                }
-                            }
-                        }
-                    }
-
-                    game.has_keystone = true;
-
-                    // Acumular tamano total de partidas para este titulo y registrar ultima fecha
-                    std::time_t mtime = 0;
-                    const std::uint64_t bytes = calculate_dir_size_and_mtime(game_save_item, mtime);
-                    if (bytes > 0)
-                    {
-                        game.total_bytes += bytes;
-                        game.has_save_dummy = true;
-                        game.size_str = format_bytes(game.total_bytes);
-                        if (mtime > latest_mtimes[title_id])
-                        {
-                            latest_mtimes[title_id] = mtime;
-                            game.timestamp_str = format_timestamp(mtime);
+                            enrich_game_metadata(g, tid, mpath + "/" + me->d_name);
+                            break;
                         }
                     }
                 }
-                closedir(savedata_dir);
+                closedir(mdir);
             }
         }
         closedir(home_dir);
+    }
+
+    // 2b. Si un juego está suspendido o montado en /mnt/sandbox/pfsmnt/<TitleID>-savedata0
+    {
+        DIR *pfs_dir = opendir("/mnt/sandbox/pfsmnt");
+        if (pfs_dir)
+        {
+            while (const dirent *pe = readdir(pfs_dir))
+            {
+                if (pe->d_name[0] == '.')
+                    continue;
+                const std::string dname = pe->d_name;
+                if (dname.find("savedata") == std::string::npos)
+                    continue;
+                const std::string tid = extract_valid_title_id(dname);
+                if (tid.empty())
+                    continue;
+                auto &game = find_or_add_game(tid);
+                if (game.save_path.empty())
+                {
+                    const std::string full_pfs = "/mnt/sandbox/pfsmnt/" + dname;
+                    std::time_t mtime = 0;
+                    const std::uint64_t bytes = calculate_dir_size_and_mtime(full_pfs, mtime);
+                    if (bytes > 0)
+                    {
+                        game.save_path = full_pfs;
+                        game.total_bytes = bytes;
+                        game.has_save_dummy = true;
+                        game.size_str = format_bytes(bytes);
+                        game.timestamp_str = format_timestamp(mtime);
+                    }
+                }
+            }
+            closedir(pfs_dir);
+        }
+    }
+
+    // =========================================================================
+    // 2c. Vincular entradas de distintas regiones / SKUs del mismo juego cuando
+    //     una entrada en appmeta tiene 0 bytes y otra entrada del mismo titulo
+    //     y plataforma posee la partida guardada real.
+    // =========================================================================
+    for (auto &g : games)
+    {
+        g.title = sanitize_title(g.title);
+    }
+
+    std::vector<bool> merged_away(games.size(), false);
+    for (std::size_t i = 0; i < games.size(); ++i)
+    {
+        auto &ga = games[i];
+        if (ga.total_bytes > 0 || !ga.save_path.empty())
+            continue;
+        if (ga.title.empty() || ga.title == ga.title_id)
+            continue;
+
+        const std::string key_a = normalize_title_key(ga.title);
+        if (key_a.size() < 4)
+            continue;
+
+        for (std::size_t j = 0; j < games.size(); ++j)
+        {
+            if (i == j)
+                continue;
+            auto &gb = games[j];
+            if (gb.total_bytes == 0 || gb.save_path.empty())
+                continue;
+            if (ga.platform != gb.platform)
+                continue;
+
+            const std::string key_b = normalize_title_key(gb.title);
+            if (key_a == key_b)
+            {
+                // Si gb ya tiene la partida real y el mismo nombre, copiar el icono de ga si a gb le faltaba,
+                // y vincular ga con la partida de gb (o fusionar la entrada vacia ga en gb)
+                if (gb.icon_path.empty() && !ga.icon_path.empty())
+                    gb.icon_path = ga.icon_path;
+                if (gb.app_path.empty() && !ga.app_path.empty())
+                    gb.app_path = ga.app_path;
+
+                ga.save_path = gb.save_path;
+                ga.total_bytes = gb.total_bytes;
+                ga.has_save_dummy = gb.has_save_dummy;
+                ga.size_str = gb.size_str;
+                ga.timestamp_str = gb.timestamp_str;
+
+                MACHETE_LOG("[SCANNER]", "Linked cross-SKU title %s ('%s') -> save from %s (%s, %s)",
+                            ga.title_id.c_str(), ga.title.c_str(),
+                            gb.title_id.c_str(), gb.save_path.c_str(), gb.size_str.c_str());
+                break;
+            }
+        }
     }
 
     // =========================================================================
@@ -904,8 +1092,11 @@ std::vector<ScannedGame> scan_installed_games_and_saves()
     MACHETE_BREADCRUMB("scanner:filter");
     std::vector<ScannedGame> valid_games;
     valid_games.reserve(games.size());
-    for (auto &game : games)
+    for (std::size_t i = 0; i < games.size(); ++i)
     {
+        if (merged_away[i])
+            continue;
+        auto &game = games[i];
         const bool has_saves = (game.total_bytes > 0 || !game.save_path.empty());
         const bool has_real_title = (!game.title.empty() && game.title != game.title_id);
         const bool has_icon = (!game.icon_path.empty());
@@ -949,11 +1140,12 @@ std::vector<ScannedGame> scan_installed_games_and_saves()
     }
 
     MACHETE_LOG("[SCANNER]", "Scan completed. Valid titles detected: %zu", valid_games.size());
-    for (std::size_t i = 0; i < std::min<std::size_t>(10, valid_games.size()); ++i)
+    for (std::size_t i = 0; i < valid_games.size(); ++i)
     {
         const auto &g = valid_games[i];
-        MACHETE_LOG("[SCANNER]", "  [%zu] %s: '%s' (%s, %s)", i + 1,
-                    g.title_id.c_str(), g.title.c_str(), g.platform.c_str(), g.size_str.c_str());
+        MACHETE_LOG("[SCANNER]", "  [%zu] %s: '%s' (%s, %s, save='%s')", i + 1,
+                    g.title_id.c_str(), g.title.c_str(), g.platform.c_str(),
+                    g.size_str.c_str(), g.save_path.c_str());
     }
     MACHETE_BREADCRUMB("scanner:done");
     return valid_games;

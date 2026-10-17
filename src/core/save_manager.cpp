@@ -1010,6 +1010,52 @@ std::string resolve_default_save_path(const scanner::ScannedGame &game)
     return target;
 }
 
+std::string resolve_existing_save_path(const scanner::ScannedGame &game)
+{
+    if (!game.save_path.empty() && access(game.save_path.c_str(), F_OK) == 0 &&
+        calculate_directory_size(game.save_path) > 0)
+    {
+        return game.save_path;
+    }
+
+    const char *home_roots[] = {
+        "/user/home",
+        "/mnt/ext0/user/home",
+        "/mnt/ext1/user/home",
+    };
+
+    for (const char *hr : home_roots)
+    {
+        ScopedDir hdir(hr);
+        if (!hdir.is_valid())
+            continue;
+        while (const dirent *uent = readdir(hdir.get()))
+        {
+            if (uent->d_name[0] == '.')
+                continue;
+            const std::string uid_s = uent->d_name;
+            const std::vector<std::string> candidates = {
+                std::string(hr) + "/" + uid_s + "/savedata_prospero/" + game.title_id,
+                std::string(hr) + "/" + uid_s + "/savedata_prospero/user/" + game.title_id,
+                std::string(hr) + "/" + uid_s + "/savedata/" + game.title_id,
+                std::string(hr) + "/" + uid_s + "/savedata/user/" + game.title_id,
+                std::string(hr) + "/" + uid_s + "/savedata_backup/" + game.title_id,
+                "/system_data/savedata_prospero/" + uid_s + "/" + game.title_id,
+                "/system_data/savedata_prospero/" + uid_s + "/user/" + game.title_id,
+                "/system_data/savedata/" + uid_s + "/" + game.title_id,
+                "/system_data/savedata/" + uid_s + "/user/" + game.title_id,
+            };
+            for (const auto &cand : candidates)
+            {
+                if (access(cand.c_str(), F_OK) == 0 && calculate_directory_size(cand) > 0)
+                    return cand;
+            }
+        }
+    }
+
+    return game.save_path;
+}
+
 } // namespace
 
 bool has_local_save_dummy_for_game(const scanner::ScannedGame &game)
@@ -1077,14 +1123,15 @@ __attribute__((noinline)) OperationResult backup_game_save(const scanner::Scanne
                 root_dir = "/mnt/usb0/" + std::string(storage::ROOT_DIR_NAME);
         }
 
-        if (game.save_path.empty() || access(game.save_path.c_str(), F_OK) != 0)
+        const std::string active_save_path = resolve_existing_save_path(game);
+        if (active_save_path.empty() || access(active_save_path.c_str(), F_OK) != 0)
         {
             res.success = false;
             res.message = is_es
                 ? ("No se encontraron datos de guardado en consola para " + game.title_id)
                 : ("No save data found on console for " + game.title_id);
             MACHETE_LOG("[BACKUP]", "Error: save_path '%s' inaccessible for %s",
-                        game.save_path.c_str(), game.title_id.c_str());
+                        active_save_path.c_str(), game.title_id.c_str());
             return res;
         }
 
@@ -1097,19 +1144,19 @@ __attribute__((noinline)) OperationResult backup_game_save(const scanner::Scanne
 
         std::uint64_t total_bytes = game.total_bytes;
         if (total_bytes == 0)
-            total_bytes = calculate_directory_size(game.save_path);
+            total_bytes = calculate_directory_size(active_save_path);
 
         int files_count = 0;
         std::uint64_t bytes_copied = 0;
         MACHETE_LOG("[BACKUP]", "Starting backup of %s -> %s",
-                    game.save_path.c_str(), dest_game_folder.c_str());
-        const bool ok = copy_directory_recursive(game.save_path, dest_game_folder, files_count,
+                    active_save_path.c_str(), dest_game_folder.c_str());
+        const bool ok = copy_directory_recursive(active_save_path, dest_game_folder, files_count,
                                                  bytes_copied, total_bytes, progress_cb);
 
         const bool is_ps5 = (game.platform == "PS5" || game.title_id.rfind("PPSA", 0) == 0);
         if (is_ps5)
         {
-            std::string meta_path = game.save_path;
+            std::string meta_path = active_save_path;
             std::size_t pos = meta_path.find("/savedata_prospero/");
             if (pos != std::string::npos)
             {
@@ -1135,7 +1182,7 @@ __attribute__((noinline)) OperationResult backup_game_save(const scanner::Scanne
         }
         else
         {
-            std::string meta_path = game.save_path;
+            std::string meta_path = active_save_path;
             std::size_t pos = meta_path.find("/savedata/");
             if (pos != std::string::npos)
             {
@@ -1159,13 +1206,13 @@ __attribute__((noinline)) OperationResult backup_game_save(const scanner::Scanne
         }
 
         // Archivar boveda criptografica SAMU (incluyendo decrypted_pfs_key si /dev/pfsmgr esta disponible)
-        std::uint32_t active_user_id = extract_user_id_from_path(game.save_path);
+        std::uint32_t active_user_id = extract_user_id_from_path(active_save_path);
         (void)machete::vault::archive_crypto_vault(dest_game_folder, game.title_id, game.platform,
-                                                   game.save_path, active_user_id);
+                                                   active_save_path, active_user_id);
 
         // Extraer archivos desencriptados (decrypted/<slot>/) mediante montaje PFS para soporte Cross-Console universal
         const int dec_extracted = machete::pfs::extract_decrypted_slots_to_backup(
-            game.save_path, dest_game_folder, game.title_id, is_ps5);
+            active_save_path, dest_game_folder, game.title_id, is_ps5);
         if (dec_extracted > 0)
         {
             files_count += dec_extracted;
@@ -1174,7 +1221,7 @@ __attribute__((noinline)) OperationResult backup_game_save(const scanner::Scanne
         // Asegurar copia del keystone autentico en el respaldo
         if (access((dest_game_folder + "/keystone").c_str(), F_OK) != 0)
         {
-            (void)machete::keystone::inject_authentic_keystone(dest_game_folder, game.title_id, game.save_path);
+            (void)machete::keystone::inject_authentic_keystone(dest_game_folder, game.title_id, active_save_path);
         }
 
         ::sync();
