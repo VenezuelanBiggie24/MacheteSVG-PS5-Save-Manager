@@ -1439,6 +1439,20 @@ __attribute__((noinline)) OperationResult restore_from_folder(const scanner::Sca
         const bool had_local_dummy = pfs::has_local_save_dummy(dst_target, is_ps5);
         const bool cross_console = pfs::is_backup_from_different_console(backup_folder, is_ps5);
 
+        // Si es una partida de PS5 protegida por SAMU de otra consola o previa al formateo,
+        // y el respaldo NO incluye carpeta decrypted/, el SAMU de la consola nunca podra descifrarla.
+        // Detener inmediatamente para proteger los datos de la consola y no generar 'datos dañados'.
+        if (is_ps5 && cross_console && !pfs::has_decrypted_payload(backup_folder))
+        {
+            res.success = false;
+            res.message = is_es
+                ? "Partida protegida por SAMU: Este respaldo fue creado en otra instalacion o antes de formatear la consola. El procesador criptografico SAMU de tu PS5 no puede descifrar los contenedores sdimg_* de este respaldo. Para evitar datos dañados, no se sobreescribio la partida."
+                : "Save protected by SAMU: This backup was created under a different console installation or prior to formatting. The PS5 SAMU processor cannot decrypt these sdimg_* containers. Restore aborted to prevent corrupted data.";
+            MACHETE_LOG("[RESTORE]", "PS5 backup sealed key not decryptable by current SAMU and has no decrypted/ payload for %s",
+                        game.title_id.c_str());
+            return res;
+        }
+
         // Si es una partida de PS5 de otra consola (o solo trae decrypted/) y NO existe un Save Dummy local en la consola,
         // detener antes de escribir un sdimg_* foraneo corrupto e instruir al usuario como crear el Save Dummy
         if (is_ps5 && cross_console && !had_local_dummy)

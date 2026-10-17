@@ -1155,12 +1155,8 @@ std::vector<ScannedGame> scan_installed_games_and_saves()
                 ga.size_str = gb.size_str;
                 ga.timestamp_str = gb.timestamp_str;
 
-                // Si gb era una carpeta de guardado huerfana de ga sin aplicacion propia instalada,
-                // SIEMPRE marcarla como fusionada para que NO aparezca duplicada en la lista.
-                if (gb.app_path.empty())
-                {
-                    merged_away[j] = true;
-                }
+                // Marcar gb como fusionada para que NO aparezca duplicada en la interfaz
+                merged_away[j] = true;
 
                 MACHETE_LOG("[SCANNER]", "Linked cross-SKU title %s ('%s') -> save from %s (%s, %s)",
                             ga.title_id.c_str(), ga.title.c_str(),

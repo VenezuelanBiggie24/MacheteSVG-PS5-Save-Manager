@@ -70,13 +70,18 @@ inline std::string find_authentic_game_keystone(const std::string &title_id, con
         "/mnt/ext1/user/appmeta/" + title_id + "/sce_sys/keystone",
         "/data/apollo/" + title_id + ".keystone",
         "/data/MacheteSVG/keystones/" + title_id + ".keystone",
+        "/data/save_staging/preserved_dummy_" + title_id + "/.meta_dummy/keystone",
+        "/data/save_staging/preserved_dummy_" + title_id + "/.meta_dummy/sce_sys/keystone",
+        "/data/save_staging/preserved_dummy_" + title_id + "/harvested_keystone",
+        "/data/save_staging/preserved_dummy_" + title_id + "/keystone",
+        "/data/save_staging/preserved_dummy_" + title_id + "/sce_sys/keystone",
         "/data/pkg/" + title_id + "/sce_sys/keystone",
         "/data/homebrew/" + title_id + "/sce_sys/keystone",
         "/data/homebrew/" + title_id + "/keystone"};
 
     for (const auto &p : candidates)
     {
-        if (access(p.c_str(), R_OK) == 0)
+        if (access(p.c_str(), R_OK) == 0 && is_valid_keystone_file(p))
         {
             MACHETE_LOG("[KEYSTONE]", "Authentic keystone located at: %s", p.c_str());
             return p;
@@ -85,9 +90,17 @@ inline std::string find_authentic_game_keystone(const std::string &title_id, con
 
     if (!backup_folder.empty())
     {
-        for (const std::string &bp : {backup_folder + "/keystone", backup_folder + "/sce_sys/keystone"})
+        for (const std::string &bp : {
+                 backup_folder + "/keystone",
+                 backup_folder + "/sce_sys/keystone",
+                 backup_folder + "/.meta/keystone",
+                 backup_folder + "/.meta/sce_sys/keystone",
+                 backup_folder + "/meta/keystone",
+                 backup_folder + "/meta/sce_sys/keystone",
+                 backup_folder + "/.meta_dummy/keystone",
+                 backup_folder + "/.meta_dummy/sce_sys/keystone"})
         {
-            if (access(bp.c_str(), R_OK) == 0)
+            if (access(bp.c_str(), R_OK) == 0 && is_valid_keystone_file(bp))
             {
                 MACHETE_LOG("[KEYSTONE]", "Using preserved keystone from backup: %s", bp.c_str());
                 return bp;

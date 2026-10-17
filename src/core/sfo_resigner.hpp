@@ -234,7 +234,7 @@ inline bool is_valid_save_param_sfo(const std::string &sfo_path)
         return false;
     if (meta.category == "gd" || meta.category == "gp" || meta.category == "ac")
         return false;
-    return (meta.category == "sd" || meta.has_account_id || meta.has_params);
+    return (meta.category == "sd" || meta.has_account_id || meta.has_params || !meta.savedata_dir.empty());
 }
 
 inline bool read_account_id_from_sfo(const std::string &sfo_path, std::uint64_t &out_account_id)
