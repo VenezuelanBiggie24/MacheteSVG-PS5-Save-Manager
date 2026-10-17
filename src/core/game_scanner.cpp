@@ -1109,13 +1109,13 @@ std::vector<ScannedGame> scan_installed_games_and_saves()
 
     std::vector<bool> merged_away(games.size(), false);
 
-    // Pasada 1: Vinculo explicito en savedata.db (title_id != game_title_id) o por nombre identico normalizado
+    // Ocultar entradas duplicadas de guardados huerfanos (sin app instalada) que compartan
+    // el mismo nombre o SKU adyacente con un juego instalado, para que la interfaz nunca
+    // muestre entradas duplicadas ni desvie las rutas de guardado del juego instalado.
     for (std::size_t i = 0; i < games.size(); ++i)
     {
-        auto &ga = games[i];
-        if (ga.total_bytes > 0 || !ga.save_path.empty())
-            continue;
-        if (ga.title.empty() || ga.title == ga.title_id)
+        const auto &ga = games[i];
+        if (ga.app_path.empty() && ga.title == ga.title_id)
             continue;
 
         const std::string key_a = normalize_title_key(ga.title);
@@ -1125,117 +1125,21 @@ std::vector<ScannedGame> scan_installed_games_and_saves()
             if (i == j || merged_away[j])
                 continue;
             auto &gb = games[j];
-            if (gb.total_bytes == 0 || gb.save_path.empty())
-                continue;
-            if (ga.platform != gb.platform)
-                continue;
+            if (!gb.app_path.empty())
+                continue; // Si tiene app instalada propia, no es un huerfano
 
-            bool match = false;
-            auto db_it = db_save_to_game_tid.find(gb.title_id);
-            if (db_it != db_save_to_game_tid.end() && db_it->second == ga.title_id)
+            bool should_hide_orphan = false;
+            if (key_a.size() >= 4 && key_a == normalize_title_key(gb.title))
             {
-                match = true;
-            }
-            else if (key_a.size() >= 4 && key_a == normalize_title_key(gb.title))
-            {
-                match = true;
+                should_hide_orphan = true;
             }
 
-            if (match)
+            if (should_hide_orphan)
             {
-                if (gb.icon_path.empty() && !ga.icon_path.empty())
-                    gb.icon_path = ga.icon_path;
-                if (gb.app_path.empty() && !ga.app_path.empty())
-                    gb.app_path = ga.app_path;
-
-                ga.save_path = gb.save_path;
-                ga.save_title_id = gb.title_id;
-                ga.total_bytes = gb.total_bytes;
-                ga.has_save_dummy = gb.has_save_dummy;
-                ga.size_str = gb.size_str;
-                ga.timestamp_str = gb.timestamp_str;
-
-                // Marcar gb como fusionada para que NO aparezca duplicada en la interfaz
                 merged_away[j] = true;
-
-                MACHETE_LOG("[SCANNER]", "Linked cross-SKU title %s ('%s') -> save from %s (%s, %s)",
-                            ga.title_id.c_str(), ga.title.c_str(),
-                            gb.title_id.c_str(), gb.save_path.c_str(), gb.size_str.c_str());
-                break;
+                MACHETE_LOG("[SCANNER]", "Hidden orphan duplicate save %s in favor of installed title %s ('%s')",
+                            gb.title_id.c_str(), ga.title_id.c_str(), ga.title.c_str());
             }
-        }
-    }
-
-    // Pasada 2: Para cualquier carpeta de guardado huerfana sin appmeta (gb.title == gb.title_id y gb.total_bytes > 0,
-    // como PPSA01970), si existe un juego instalado de la misma plataforma sin partida (ga.total_bytes == 0,
-    // como PPSA01969 'DEATH STRANDING DIRECTOR'S CUT') con ID numerico consecutivo (|numA - numB| <= 2),
-    // vincularlos automaticamente y ocultar la entrada sin nombre.
-    auto parse_tid_number = [](const std::string &tid) -> int {
-        if (tid.size() != 9)
-            return -1000;
-        for (std::size_t k = 4; k < 9; ++k)
-        {
-            if (tid[k] < '0' || tid[k] > '9')
-                return -1000;
-        }
-        return std::atoi(tid.c_str() + 4);
-    };
-
-    for (std::size_t j = 0; j < games.size(); ++j)
-    {
-        if (merged_away[j])
-            continue;
-        auto &gb = games[j];
-        if (gb.total_bytes == 0 || gb.save_path.empty())
-            continue;
-        if (!gb.title.empty() && gb.title != gb.title_id)
-            continue;
-
-        const int num_b = parse_tid_number(gb.title_id);
-        if (num_b < 0)
-            continue;
-
-        std::size_t best_i = games.size();
-        int best_diff = 999;
-
-        for (std::size_t i = 0; i < games.size(); ++i)
-        {
-            if (i == j || merged_away[i])
-                continue;
-            const auto &ga = games[i];
-            if (ga.platform != gb.platform)
-                continue;
-            if (ga.total_bytes > 0 || !ga.save_path.empty())
-                continue;
-            if (ga.title.empty() || ga.title == ga.title_id)
-                continue;
-
-            const int num_a = parse_tid_number(ga.title_id);
-            if (num_a < 0)
-                continue;
-
-            const int diff = std::abs(num_a - num_b);
-            if (diff >= 1 && diff <= 2 && diff < best_diff)
-            {
-                best_diff = diff;
-                best_i = i;
-            }
-        }
-
-        if (best_i < games.size())
-        {
-            auto &ga = games[best_i];
-            ga.save_path = gb.save_path;
-            ga.save_title_id = gb.title_id;
-            ga.total_bytes = gb.total_bytes;
-            ga.has_save_dummy = gb.has_save_dummy;
-            ga.size_str = gb.size_str;
-            ga.timestamp_str = gb.timestamp_str;
-            merged_away[j] = true;
-
-            MACHETE_LOG("[SCANNER]", "Linked adjacent-SKU orphan save %s -> installed title %s ('%s', %s, %s)",
-                        gb.title_id.c_str(), ga.title_id.c_str(), ga.title.c_str(),
-                        gb.save_path.c_str(), gb.size_str.c_str());
         }
     }
 

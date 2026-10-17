@@ -506,14 +506,18 @@ inline bool update_or_register_ps5_savedata_db(std::uint32_t user_id,
             char sql_update[1024];
             std::snprintf(sql_update, sizeof(sql_update),
                           "UPDATE savedata SET is_broken = 0, fake_broken = 0, faked_owner = 0, "
-                          "account_id = %llu, user_id = %u, "
-                          "blocks = %u, system_blocks = %u, "
-                          "free_blocks = CASE WHEN free_blocks <= 0 THEN %u ELSE free_blocks END, "
-                          "size_kib = %u, game_title_id = '%s', "
+                          "account_id = CASE WHEN %llu != 0 THEN %llu ELSE account_id END, "
+                          "user_id = CASE WHEN %u != 0 THEN %u ELSE user_id END, "
+                          "blocks = CASE WHEN blocks <= 0 THEN %u ELSE blocks END, "
+                          "system_blocks = CASE WHEN (system_blocks IS NULL OR system_blocks <= 0) THEN %u ELSE system_blocks END, "
+                          "free_blocks = CASE WHEN (free_blocks IS NULL OR free_blocks <= 0) THEN %u ELSE free_blocks END, "
+                          "size_kib = CASE WHEN size_kib <= 0 THEN %u ELSE size_kib END, "
+                          "game_title_id = '%s', "
                           "convert_performance = 0, account_id_in_usb_path = '0000000000000000', "
                           "mtime = strftime('%%Y-%%m-%%dT%%H:%%M:%%S.00Z', CURRENT_TIMESTAMP) "
                           "WHERE title_id = '%s' AND dir_name = '%s';",
-                          static_cast<unsigned long long>(account_id), user_id,
+                          static_cast<unsigned long long>(account_id), static_cast<unsigned long long>(account_id),
+                          user_id, user_id,
                           blocks, system_blocks, free_blocks, size_kib, safe_gtid.c_str(),
                           safe_tid.c_str(), safe_slot.c_str());
             rc = adapter.exec(db, sql_update, nullptr, nullptr, &errmsg);

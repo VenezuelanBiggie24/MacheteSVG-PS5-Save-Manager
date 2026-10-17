@@ -711,17 +711,19 @@ inline bool is_backup_from_different_console(const std::string &backup_folder, b
         }
     }
 
-    // 3. Verificacion de clave sellada para PS4:
-    //    Si es un juego de PS4, probar si el SAMU de ESTA consola puede descifrar la clave sellada (.bin).
-    if (!is_ps5 && access("/dev/pfsmgr", F_OK) == 0)
+    // 3. Verificacion de clave sellada para PS4 y PS5:
+    //    Probar si el SAMU de ESTA consola puede descifrar la clave sellada (.bin / sdimg_*).
+    //    Si la consola fue reinstalada/formateada o proviene de otra consola, el SAMU la rechazara.
+    if (access("/dev/pfsmgr", F_OK) == 0 && getuid() == 0)
     {
         std::vector<std::string> bslots;
-        if (has_local_save_dummy(backup_folder, false, &bslots) && !bslots.empty())
+        if (has_local_save_dummy(backup_folder, is_ps5, &bslots) && !bslots.empty())
         {
             std::uint8_t test_key[32] = {0};
-            if (!decrypt_pfs_key_for_slot(backup_folder, bslots[0], false, test_key))
+            if (!decrypt_pfs_key_for_slot(backup_folder, bslots[0], is_ps5, test_key))
             {
-                MACHETE_LOG("[PFS]", "Backup PS4 sealed key rejected by local SAMU: %s", bslots[0].c_str());
+                MACHETE_LOG("[PFS]", "Backup %s sealed key rejected by local SAMU (fresh OS reinstall or foreign console): %s",
+                            is_ps5 ? "PS5" : "PS4", bslots[0].c_str());
                 return true;
             }
         }
