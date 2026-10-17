@@ -26,18 +26,6 @@
 #include <vector>
 #include <mutex>
 
-
-
-#if defined(__PROSPERO__) || defined(__Prospero__) || defined(__PS5__)
-extern "C"
-{
-    int sceKernelLoadStartModule(const char *name, std::size_t argc, const void *argv,
-                                 std::uint32_t flags, void *opt, int *res);
-    int sceKernelDlsym(int handle, const char *symbol, void **addrp);
-    int sceKernelGetModuleList(int *handles, std::size_t num_handles, std::size_t *actual_num);
-}
-#endif
-
 namespace machete::pfs
 {
 
@@ -433,105 +421,7 @@ public:
             nullptr
         };
 
-#if defined(__PROSPERO__) || defined(__Prospero__) || defined(__PS5__)
-        auto resolve_via_kernel_handle = [&](int mod_h, const char *label) -> bool {
-            if (mod_h < 0)
-                return false;
-
-            int (*found_init_m)(SaveMountOpt *) = nullptr;
-            int (*found_m)(SaveMountOpt *, const char *, const char *, const void *) = nullptr;
-            int (*found_init_u)(SaveMountOpt *) = nullptr;
-            int (*found_u)(SaveMountOpt *, const char *, void *, int) = nullptr;
-
-            for (int k = 0; kInitMountSyms[k]; ++k)
-            {
-                void *sym = nullptr;
-                if (sceKernelDlsym(mod_h, kInitMountSyms[k], &sym) == 0 && sym)
-                {
-                    found_init_m = reinterpret_cast<int (*)(SaveMountOpt *)>(sym);
-                    break;
-                }
-            }
-            for (int k = 0; kMountSyms[k]; ++k)
-            {
-                void *sym = nullptr;
-                if (sceKernelDlsym(mod_h, kMountSyms[k], &sym) == 0 && sym)
-                {
-                    found_m = reinterpret_cast<int (*)(SaveMountOpt *, const char *, const char *, const void *)>(sym);
-                    break;
-                }
-            }
-            for (int k = 0; kInitUmountSyms[k]; ++k)
-            {
-                void *sym = nullptr;
-                if (sceKernelDlsym(mod_h, kInitUmountSyms[k], &sym) == 0 && sym)
-                {
-                    found_init_u = reinterpret_cast<int (*)(SaveMountOpt *)>(sym);
-                    break;
-                }
-            }
-            for (int k = 0; kUmountSyms[k]; ++k)
-            {
-                void *sym = nullptr;
-                if (sceKernelDlsym(mod_h, kUmountSyms[k], &sym) == 0 && sym)
-                {
-                    found_u = reinterpret_cast<int (*)(SaveMountOpt *, const char *, void *, int)>(sym);
-                    break;
-                }
-            }
-
-            if (found_init_m && found_m && found_init_u && found_u)
-            {
-                s_init_mount = found_init_m;
-                s_mount_fn = found_m;
-                s_init_umount = found_init_u;
-                s_umount_fn = found_u;
-                MACHETE_LOG("[PFS]", "Resolved libSceFs symbols via sceKernelDlsym (%s, handle=0x%x)",
-                            label ? label : "module", static_cast<unsigned int>(mod_h));
-                return true;
-            }
-            return false;
-        };
-
-        // 1. Cargar directamente con sceKernelLoadStartModule (importado de libkernel.so)
-        for (int i = 0; candidate_paths[i]; ++i)
-        {
-            int mod_res = 0;
-            int mod_h = sceKernelLoadStartModule(candidate_paths[i], 0, nullptr, 0, nullptr, &mod_res);
-            if (mod_h >= 0)
-            {
-                if (resolve_via_kernel_handle(mod_h, candidate_paths[i]))
-                {
-                    *out_init_mount = s_init_mount;
-                    *out_mount = s_mount_fn;
-                    *out_init_umount = s_init_umount;
-                    *out_umount = s_umount_fn;
-                    return true;
-                }
-            }
-        }
-
-        // 2. Si el modulo ya estaba cargado en el proceso, escanear lista de modulos activos
-        int mod_list[256] = {0};
-        std::size_t actual_mods = 0;
-        if (sceKernelGetModuleList(mod_list, 256, &actual_mods) == 0 && actual_mods > 0)
-        {
-            const std::size_t limit = (actual_mods > 256) ? 256 : actual_mods;
-            for (std::size_t m = 0; m < limit; ++m)
-            {
-                if (resolve_via_kernel_handle(mod_list[m], "sceKernelGetModuleList"))
-                {
-                    *out_init_mount = s_init_mount;
-                    *out_mount = s_mount_fn;
-                    *out_init_umount = s_init_umount;
-                    *out_umount = s_umount_fn;
-                    return true;
-                }
-            }
-        }
-#endif
-
-        // 3. Fallback POSIX dlopen/dlsym
+        // Busqueda segura mediante dlopen/dlsym POSIX
         for (int i = 0; candidate_paths[i]; ++i)
         {
             (void)dlerror();

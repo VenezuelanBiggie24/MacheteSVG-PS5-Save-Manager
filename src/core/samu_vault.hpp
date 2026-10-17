@@ -18,13 +18,6 @@
 #include <unistd.h>
 #include <vector>
 
-#if defined(__PROSPERO__) || defined(__Prospero__) || defined(__PS5__)
-extern "C"
-{
-    int sceKernelGetOpenPsId(void *id);
-}
-#endif
-
 namespace machete::vault
 {
 
@@ -155,31 +148,6 @@ inline bool get_console_open_psid(std::uint8_t out_psid[16])
         std::memcpy(out_psid, s_psid, 16);
         return true;
     }
-
-#if defined(__PROSPERO__) || defined(__Prospero__) || defined(__PS5__)
-    std::uint8_t kbuf[64] = {0};
-    if (sceKernelGetOpenPsId(kbuf) == 0)
-    {
-        bool nz = false;
-        for (int i = 0; i < 16; ++i)
-        {
-            if (kbuf[i] != 0)
-            {
-                nz = true;
-                break;
-            }
-        }
-        if (nz)
-        {
-            std::memcpy(s_psid, kbuf, 16);
-            std::memcpy(out_psid, s_psid, 16);
-            s_cached = true;
-            MACHETE_LOG("[VAULT]", "Console OpenPSID retrieved via sceKernelGetOpenPsId: %02x%02x...%02x%02x",
-                        s_psid[0], s_psid[1], s_psid[14], s_psid[15]);
-            return true;
-        }
-    }
-#endif
 
     for (const char *psid_path : {
              "/system_data/priv/cache/openpsid.dat",

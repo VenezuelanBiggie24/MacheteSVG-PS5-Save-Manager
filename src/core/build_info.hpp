@@ -10,7 +10,7 @@ namespace machete::build
 {
 
 #ifndef MACHETE_APP_VERSION
-#define MACHETE_APP_VERSION "1.3.1"
+#define MACHETE_APP_VERSION "1.3.0"
 #endif
 
 #ifndef MACHETE_BUILD_NUMBER
@@ -18,7 +18,7 @@ namespace machete::build
 #endif
 
 #ifndef MACHETE_GIT_COMMIT
-#define MACHETE_GIT_COMMIT "fa5f509"
+#define MACHETE_GIT_COMMIT "f5cfe92"
 #endif
 
 #ifndef MACHETE_BUILD_DATE
