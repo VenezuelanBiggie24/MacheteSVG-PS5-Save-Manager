@@ -1125,17 +1125,28 @@ std::vector<ScannedGame> scan_installed_games_and_saves()
             if (i == j || merged_away[j])
                 continue;
             auto &gb = games[j];
-            if (!gb.app_path.empty())
-                continue; // Si tiene app instalada propia, no es un huerfano
-
             bool should_hide_orphan = false;
-            if (key_a.size() >= 4 && key_a == normalize_title_key(gb.title))
+            if (is_paired_sku(ga.title_id, gb.title_id))
             {
-                should_hide_orphan = true;
+                if (ga.title_id == "PPSA01969")
+                {
+                    should_hide_orphan = true;
+                }
+                else if (gb.title_id == "PPSA01969")
+                {
+                    continue;
+                }
+                else
+                {
+                    should_hide_orphan = true;
+                }
             }
-            else if (is_paired_sku(ga.title_id, gb.title_id))
+            else if (gb.app_path.empty())
             {
-                should_hide_orphan = true;
+                if (key_a.size() >= 4 && key_a == normalize_title_key(gb.title))
+                {
+                    should_hide_orphan = true;
+                }
             }
 
             if (should_hide_orphan)
@@ -1157,7 +1168,7 @@ std::vector<ScannedGame> scan_installed_games_and_saves()
                     ga.has_save_dummy = true;
                 }
 
-                MACHETE_LOG("[SCANNER]", "Hidden orphan duplicate save %s in favor of installed title %s ('%s', %s, %llu bytes)",
+                MACHETE_LOG("[SCANNER]", "Merged duplicate/paired SKU %s in favor of title %s ('%s', %s, %llu bytes)",
                             gb.title_id.c_str(), ga.title_id.c_str(), ga.title.c_str(),
                             ga.save_path.c_str(), static_cast<unsigned long long>(ga.total_bytes));
             }

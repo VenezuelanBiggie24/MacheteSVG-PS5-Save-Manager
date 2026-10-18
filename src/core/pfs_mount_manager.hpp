@@ -738,6 +738,29 @@ inline bool is_backup_from_different_console(const std::string &backup_folder, b
 // Respalda temporalmente el Save Dummy local antes de que copy_directory_recursive escriba en dst_target
 inline bool preserve_local_save_dummy(const std::string &dst_target, const std::string &staging_backup_dir, bool is_ps5)
 {
+    // Preservar keystone autentico del destino local si existe (vital para restauraciones de PS4)
+    for (const std::string &ks_cand : {
+             dst_target + "/keystone",
+             dst_target + "/sce_sys/keystone"})
+    {
+        if (access(ks_cand.c_str(), R_OK) == 0 && keystone::is_valid_keystone_file(ks_cand))
+        {
+            ensure_dir_tree(staging_backup_dir);
+            (void)copy_file_atomic(ks_cand, staging_backup_dir + "/keystone");
+            (void)copy_file_atomic(ks_cand, staging_backup_dir + "/.meta_dummy/keystone");
+            ensure_dir_tree("/data/MacheteSVG/keystones");
+            std::string save_tid;
+            const std::size_t slash = dst_target.find_last_of('/');
+            if (slash != std::string::npos)
+                save_tid = dst_target.substr(slash + 1);
+            if (save_tid.size() == 9)
+                (void)copy_file_atomic(ks_cand, "/data/MacheteSVG/keystones/" + save_tid + ".keystone");
+            MACHETE_LOG("[KEYSTONE]", "Preserved authentic local keystone from %s -> %s/keystone",
+                        ks_cand.c_str(), staging_backup_dir.c_str());
+            break;
+        }
+    }
+
     std::vector<std::string> local_slots;
     if (!has_local_save_dummy(dst_target, is_ps5, &local_slots))
         return false;
@@ -762,28 +785,6 @@ inline bool preserve_local_save_dummy(const std::string &dst_target, const std::
     if (access((dst_target + "/sce_sys").c_str(), F_OK) == 0)
     {
         (void)copy_tree_simple(dst_target + "/sce_sys", staging_backup_dir + "/sce_sys", false);
-    }
-
-    // Preservar keystone autentico del destino local si existe (vital para restauraciones de PS4)
-    for (const std::string &ks_cand : {
-             dst_target + "/keystone",
-             dst_target + "/sce_sys/keystone"})
-    {
-        if (access(ks_cand.c_str(), R_OK) == 0 && keystone::is_valid_keystone_file(ks_cand))
-        {
-            (void)copy_file_atomic(ks_cand, staging_backup_dir + "/keystone");
-            (void)copy_file_atomic(ks_cand, staging_backup_dir + "/.meta_dummy/keystone");
-            ensure_dir_tree("/data/MacheteSVG/keystones");
-            std::string save_tid;
-            const std::size_t slash = dst_target.find_last_of('/');
-            if (slash != std::string::npos)
-                save_tid = dst_target.substr(slash + 1);
-            if (save_tid.size() == 9)
-                (void)copy_file_atomic(ks_cand, "/data/MacheteSVG/keystones/" + save_tid + ".keystone");
-            MACHETE_LOG("[KEYSTONE]", "Preserved authentic local keystone from %s -> %s/keystone",
-                        ks_cand.c_str(), staging_backup_dir.c_str());
-            break;
-        }
     }
 
     // Preservar tambien los metadatos actuales del Save Dummy en savedata_prospero_meta / savedata_meta

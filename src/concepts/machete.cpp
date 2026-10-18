@@ -449,9 +449,6 @@ class Machete final : public app::Concept
                 std::lock_guard<std::mutex> lock(op_mutex_);
                 res = operation_result_;
             }
-            notification_timer_ = 4.5f;
-            std::snprintf(notification_text_, sizeof(notification_text_), "%s", res.message.c_str());
-            feedback.play(res.success ? audio::Cue::saved : audio::Cue::error, 1.0f, 0.0f);
             if (op_type_ == OperationType::Restore && res.success)
             {
                 refresh_games();
@@ -463,7 +460,15 @@ class Machete final : public app::Concept
                 const std::string title = !res.success
                     ? (is_es ? "Aviso de Operacion" : "Operation Notice")
                     : (is_es ? "Operacion Completada" : "Operation Completed");
+                notification_timer_ = 0.0f;
+                notification_text_[0] = '\0';
                 open_alert_dialog(!res.success, title, res.message, feedback);
+            }
+            else
+            {
+                notification_timer_ = 4.0f;
+                std::snprintf(notification_text_, sizeof(notification_text_), "%s", res.message.c_str());
+                feedback.play(res.success ? audio::Cue::saved : audio::Cue::error, 1.0f, 0.0f);
             }
 
             op_type_ = OperationType::None;
@@ -849,6 +854,8 @@ class Machete final : public app::Concept
         alert_message_ = message;
         alert_lines_ = wrap_text_into_lines(message, 62);
         alert_dialog_ = true;
+        notification_timer_ = 0.0f;
+        notification_text_[0] = '\0';
         feedback.play(is_error ? audio::Cue::error : audio::Cue::saved, 1.0f, 0.0f);
     }
 
@@ -1417,8 +1424,8 @@ class Machete final : public app::Concept
             }
         }
 
-        // Toast de notificación
-        if (notification_timer_ > 0.0f)
+        // Toast de notificación (solo si no hay un diálogo de alerta activo)
+        if (notification_timer_ > 0.0f && alert_dialog_show_.value <= 0.01f)
         {
             const Rect toast{560, 40, 800, 54};
             list.rounded_rect(toast, 27.0f, Color::rgb(0x0e271a).with_alpha(0.95f));

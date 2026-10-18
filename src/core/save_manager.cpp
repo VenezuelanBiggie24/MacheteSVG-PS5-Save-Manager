@@ -859,8 +859,18 @@ void post_process_restored_save(const scanner::ScannedGame &game,
     {
         // 2. Partidas PS4: Inyeccion de Keystone autentico y Resignado SFO para la cuenta activa (Modo Apollo)
         MACHETE_LOG("[RESTORE]", "Processing PS4 save for active account: Keystone & param.sfo...");
+        const bool backup_has_keystone = (access((backup_folder + "/keystone").c_str(), R_OK) == 0 &&
+                                          machete::keystone::is_valid_keystone_file(backup_folder + "/keystone")) ||
+                                         (access((backup_folder + "/sce_sys/keystone").c_str(), R_OK) == 0 &&
+                                          machete::keystone::is_valid_keystone_file(backup_folder + "/sce_sys/keystone"));
+
         const std::string preserved_ks = preserved_dummy_dir + "/keystone";
-        if (access(preserved_ks.c_str(), R_OK) == 0 && machete::keystone::is_valid_keystone_file(preserved_ks))
+        if (backup_has_keystone)
+        {
+            pfs_rep.keystone_injected = true;
+            MACHETE_LOG("[KEYSTONE]", "Using authentic keystone from backup: %s", backup_folder.c_str());
+        }
+        else if (access(preserved_ks.c_str(), R_OK) == 0 && machete::keystone::is_valid_keystone_file(preserved_ks))
         {
             (void)pfs::copy_file_atomic(preserved_ks, dst_target + "/keystone", target_uid, target_gid);
             (void)chmod((dst_target + "/keystone").c_str(), 0666);
@@ -1674,6 +1684,22 @@ __attribute__((noinline)) OperationResult restore_from_folder(const scanner::Sca
         res.success = ok && (files_count > 0 || pfs_report.used_save_dummy || pfs_report.used_pfs_mount);
         res.files_transferred = files_count;
         res.bytes_transferred = bytes_copied > 0 ? bytes_copied : total_dir_bytes;
+
+        const bool has_final_keystone = (access((dst_target + "/keystone").c_str(), R_OK) == 0 &&
+                                         machete::keystone::is_valid_keystone_file(dst_target + "/keystone")) ||
+                                        (access((dst_target + "/sce_sys/keystone").c_str(), R_OK) == 0 &&
+                                         machete::keystone::is_valid_keystone_file(dst_target + "/sce_sys/keystone"));
+
+        if (!is_ps5 && !has_final_keystone)
+        {
+            res.success = false;
+            res.message = is_es
+                ? "Falta Keystone de PS4: Abre el juego 1 vez en esta consola para que cree un archivo de guardado inicial (Keystone), cierralo y vuelve a pulsar Restaurar."
+                : "PS4 Keystone missing: Launch the game once on this console to create an initial save file (Keystone), close it, and press Restore again.";
+            MACHETE_LOG("[RESTORE]", "PS4 restore aborted: No valid authentic keystone present for %s in %s",
+                        game.title_id.c_str(), dst_target.c_str());
+            return res;
+        }
 
         if (res.success)
         {
