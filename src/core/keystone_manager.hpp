@@ -101,7 +101,7 @@ inline bool extract_keystone_from_pkg(const std::string &pkg_path, std::uint8_t 
         const std::uint32_t entry_offset = be32(entry + 0x10);
         const std::uint32_t entry_size = be32(entry + 0x14);
 
-        if (entry_id == 0x1200 && entry_size == KEYSTONE_SIZE)
+        if ((entry_id == 0x1260 || entry_id == 0x1200) && entry_size == KEYSTONE_SIZE)
         {
             if (pread(fd, out_buf, KEYSTONE_SIZE, entry_offset) == KEYSTONE_SIZE)
             {
@@ -156,6 +156,7 @@ inline std::string find_authentic_game_keystone(const std::string &title_id,
         "/mnt/ext0/user/appmeta/" + title_id + "/sce_sys/keystone",
         "/mnt/ext1/user/appmeta/" + title_id + "/sce_sys/keystone",
         "/data/apollo/" + title_id + ".keystone",
+        "/data/apollo/keystones/" + title_id + ".keystone",
         "/data/MacheteSVG/keystones/" + title_id + ".keystone",
         "/data/save_staging/preserved_dummy_" + title_id + "/keystone",
         "/data/save_staging/preserved_dummy_" + title_id + "/harvested_keystone",

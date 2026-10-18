@@ -53,4 +53,20 @@ void release_texture(unsigned int &texture_id);
 // Verifica si un texto contiene caracteres legibles en la fuente SDF latina/occidental
 bool is_renderable_latin(const std::string &str);
 
+// Devuelve los Title IDs de SKUs emparejados (ej. Base vs Digital Deluxe en Death Stranding)
+inline std::vector<std::string> get_paired_sku_title_ids(const std::string &title_id)
+{
+    if (title_id == "PPSA01969") return {"PPSA01970"};
+    if (title_id == "PPSA01970") return {"PPSA01969"};
+    return {};
+}
+
+inline bool is_paired_sku(const std::string &a, const std::string &b)
+{
+    if ((a == "PPSA01969" && b == "PPSA01970") || (a == "PPSA01970" && b == "PPSA01969"))
+        return true;
+    return false;
+}
+
 } // namespace machete::scanner
+

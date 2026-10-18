@@ -1114,7 +1114,7 @@ std::vector<ScannedGame> scan_installed_games_and_saves()
     // muestre entradas duplicadas ni desvie las rutas de guardado del juego instalado.
     for (std::size_t i = 0; i < games.size(); ++i)
     {
-        const auto &ga = games[i];
+        auto &ga = games[i];
         if (ga.app_path.empty() && ga.title == ga.title_id)
             continue;
 
@@ -1133,12 +1133,33 @@ std::vector<ScannedGame> scan_installed_games_and_saves()
             {
                 should_hide_orphan = true;
             }
+            else if (is_paired_sku(ga.title_id, gb.title_id))
+            {
+                should_hide_orphan = true;
+            }
 
             if (should_hide_orphan)
             {
                 merged_away[j] = true;
-                MACHETE_LOG("[SCANNER]", "Hidden orphan duplicate save %s in favor of installed title %s ('%s')",
-                            gb.title_id.c_str(), ga.title_id.c_str(), ga.title.c_str());
+                // Si el juego instalado no tenia datos de guardado pero el huerfano si, transferir atributos
+                if (ga.total_bytes == 0 && gb.total_bytes > 0)
+                {
+                    ga.total_bytes = gb.total_bytes;
+                    ga.save_path = gb.save_path;
+                    ga.has_save_dummy = gb.has_save_dummy;
+                    ga.size_str = gb.size_str;
+                    ga.timestamp_str = gb.timestamp_str;
+                    if (ga.save_title_id.empty())
+                        ga.save_title_id = gb.title_id;
+                }
+                else if (gb.has_save_dummy)
+                {
+                    ga.has_save_dummy = true;
+                }
+
+                MACHETE_LOG("[SCANNER]", "Hidden orphan duplicate save %s in favor of installed title %s ('%s', %s, %llu bytes)",
+                            gb.title_id.c_str(), ga.title_id.c_str(), ga.title.c_str(),
+                            ga.save_path.c_str(), static_cast<unsigned long long>(ga.total_bytes));
             }
         }
     }

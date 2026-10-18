@@ -341,12 +341,12 @@ inline bool update_or_register_ps4_savedata_db(std::uint32_t user_id,
                               "UPDATE savedata SET is_broken = 0, fake_broken = 0, faked_owner = 0, "
                               "account_id = %llu, user_id = %u, main_title = '%s', sub_title = '%s', "
                               "detail = '%s', user_param = %u, blocks = %u, "
-                              "free_blocks = CASE WHEN free_blocks IS NULL THEN 0 ELSE free_blocks END, size_kib = %u, "
+                              "free_blocks = CASE WHEN (free_blocks IS NULL OR free_blocks <= 0) THEN %u ELSE free_blocks END, size_kib = %u, "
                               "mtime = strftime('%%Y-%%m-%%dT%%H:%%M:%%S.00Z', CURRENT_TIMESTAMP) "
                               "WHERE title_id = '%s' AND dir_name = '%s';",
                               static_cast<unsigned long long>(account_id), user_id,
                               safe_main.c_str(), safe_sub.c_str(), safe_detail.c_str(),
-                              user_param, blocks, size_kib,
+                              user_param, blocks, blocks, size_kib,
                               safe_tid.c_str(), safe_slot.c_str());
             }
             else
@@ -357,12 +357,13 @@ inline bool update_or_register_ps4_savedata_db(std::uint32_t user_id,
                               "account_id = %llu, user_id = %u, "
                               "main_title = CASE WHEN (main_title IS NULL OR main_title = '' OR main_title = '%s') THEN '%s' ELSE main_title END, "
                               "blocks = CASE WHEN blocks <= 0 THEN %u ELSE blocks END, "
+                              "free_blocks = CASE WHEN (free_blocks IS NULL OR free_blocks <= 0) THEN %u ELSE free_blocks END, "
                               "size_kib = CASE WHEN size_kib <= 0 THEN %u ELSE size_kib END, "
                               "mtime = strftime('%%Y-%%m-%%dT%%H:%%M:%%S.00Z', CURRENT_TIMESTAMP) "
                               "WHERE title_id = '%s' AND dir_name = '%s';",
                               static_cast<unsigned long long>(account_id), user_id,
                               safe_tid.c_str(), safe_main.c_str(),
-                              blocks, size_kib,
+                              blocks, blocks, size_kib,
                               safe_tid.c_str(), safe_slot.c_str());
             }
             rc = adapter.exec(db, sql_update, nullptr, nullptr, &errmsg);
@@ -378,12 +379,12 @@ inline bool update_or_register_ps4_savedata_db(std::uint32_t user_id,
                           "cloud_revision, game_title_id"
                           ") VALUES ("
                           "'%s', '%s', '%s', '%s', '%s', '', "
-                          "0, %u, %u, 0, %u, strftime('%%Y-%%m-%%dT%%H:%%M:%%S.00Z', CURRENT_TIMESTAMP), "
+                          "0, %u, %u, %u, %u, strftime('%%Y-%%m-%%dT%%H:%%M:%%S.00Z', CURRENT_TIMESTAMP), "
                           "0, %llu, %u, 0, '', "
                           "0, '%s');",
                           safe_tid.c_str(), safe_slot.c_str(),
                           safe_main.c_str(), safe_sub.c_str(), safe_detail.c_str(),
-                          user_param, blocks, size_kib,
+                          user_param, blocks, blocks, size_kib,
                           static_cast<unsigned long long>(account_id), user_id,
                           safe_tid.c_str());
             rc = adapter.exec(db, sql_insert, nullptr, nullptr, &errmsg);
@@ -538,7 +539,7 @@ inline bool update_or_register_ps5_savedata_db(std::uint32_t user_id,
                           "0, %llu, %u, 0, '', "
                           "0, '%s', %u, 0, '0000000000000000');",
                           safe_tid.c_str(), safe_slot.c_str(),
-                          safe_main.c_str(), safe_slot.c_str(),
+                          safe_main.c_str(), "",
                           blocks, free_blocks, size_kib,
                           static_cast<unsigned long long>(account_id), user_id,
                           safe_gtid.c_str(), system_blocks);

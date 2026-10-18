@@ -1103,4 +1103,45 @@ TEST(MacheteKeystoneValidationTest, Validate96ByteKeystoneCheck)
     EXPECT_FALSE(machete::keystone::is_valid_keystone_file(ks_path));
 }
 
+TEST(MacheteScannerPairedSkuTest, DeathStrandingPairedSkus)
+{
+    const auto p69 = machete::scanner::get_paired_sku_title_ids("PPSA01969");
+    ASSERT_EQ(p69.size(), 1u);
+    EXPECT_EQ(p69[0], "PPSA01970");
+
+    const auto p70 = machete::scanner::get_paired_sku_title_ids("PPSA01970");
+    ASSERT_EQ(p70.size(), 1u);
+    EXPECT_EQ(p70[0], "PPSA01969");
+
+    EXPECT_TRUE(machete::scanner::get_paired_sku_title_ids("PPSA13427").empty());
+    EXPECT_TRUE(machete::scanner::is_paired_sku("PPSA01969", "PPSA01970"));
+    EXPECT_TRUE(machete::scanner::is_paired_sku("PPSA01970", "PPSA01969"));
+    EXPECT_FALSE(machete::scanner::is_paired_sku("PPSA01969", "PPSA13427"));
+}
+
+TEST(MacheteParamJsonSizeTest, UpdateFileSizeAndMtimeInParamJson)
+{
+    const std::string test_json = "/tmp/machete_test_param.json";
+    {
+        std::FILE *f = std::fopen(test_json.c_str(), "w");
+        ASSERT_NE(f, nullptr);
+        std::fputs("{\n  \"titleId\": \"PPSA13427\",\n  \"fileSize\": 1024,\n  \"mtime\": 0\n}\n", f);
+        std::fclose(f);
+    }
+
+    machete::pfs::update_ps5_param_json_size(test_json, 12582912ULL);
+
+    std::FILE *f = std::fopen(test_json.c_str(), "r");
+    ASSERT_NE(f, nullptr);
+    char buf[512] = {0};
+    const std::size_t n = std::fread(buf, 1, sizeof(buf) - 1, f);
+    std::fclose(f);
+    std::remove(test_json.c_str());
+
+    ASSERT_GT(n, 0u);
+    const std::string content(buf, n);
+    EXPECT_NE(content.find("\"fileSize\": 12582912"), std::string::npos);
+    EXPECT_EQ(content.find("\"fileSize\": 1024"), std::string::npos);
+}
+
 } // namespace hui::testing
