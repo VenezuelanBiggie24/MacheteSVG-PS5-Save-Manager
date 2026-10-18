@@ -82,15 +82,6 @@ inline bool read_ps5_sealed_blob(const std::string &sdimg_path, std::uint8_t out
         }
     }
 
-    // 2. Fallback al offset tradicional 0x800 si el archivo tiene al menos 0x800 + 96 bytes
-    if (static_cast<std::size_t>(n) >= 0x800 + 96)
-    {
-        std::memcpy(out_blob, buf.data() + 0x800, 96);
-        if (out_offset)
-            *out_offset = 0x800;
-        return true;
-    }
-
     return false;
 }
 

@@ -711,19 +711,22 @@ inline bool is_backup_from_different_console(const std::string &backup_folder, b
         }
     }
 
-    // 3. Verificacion de clave sellada para PS4 y PS5:
-    //    Probar si el SAMU de ESTA consola puede descifrar la clave sellada (.bin / sdimg_*).
+    // 3. Verificacion de clave sellada para PS4:
+    //    Probar si el SAMU de ESTA consola puede descifrar la clave sellada (.bin).
     //    Si la consola fue reinstalada/formateada o proviene de otra consola, el SAMU la rechazara.
-    if (access("/dev/pfsmgr", F_OK) == 0 && getuid() == 0)
+    //    IMPORTANTE: Esta verificacion aplica exclusivamente a PS4, ya que /dev/pfsmgr descifra
+    //    claves selladas de PS4 (0xc0845302). Los contenedores sdimg_* de PS5 son particiones PFS
+    //    completas gestionadas por SAMU al arrancar el juego en la misma consola.
+    if (!is_ps5 && access("/dev/pfsmgr", F_OK) == 0 && getuid() == 0)
     {
         std::vector<std::string> bslots;
-        if (has_local_save_dummy(backup_folder, is_ps5, &bslots) && !bslots.empty())
+        if (has_local_save_dummy(backup_folder, false, &bslots) && !bslots.empty())
         {
             std::uint8_t test_key[32] = {0};
-            if (!decrypt_pfs_key_for_slot(backup_folder, bslots[0], is_ps5, test_key))
+            if (!decrypt_pfs_key_for_slot(backup_folder, bslots[0], false, test_key))
             {
-                MACHETE_LOG("[PFS]", "Backup %s sealed key rejected by local SAMU (fresh OS reinstall or foreign console): %s",
-                            is_ps5 ? "PS5" : "PS4", bslots[0].c_str());
+                MACHETE_LOG("[PFS]", "Backup PS4 sealed key rejected by local SAMU (fresh OS reinstall or foreign console): %s",
+                            bslots[0].c_str());
                 return true;
             }
         }
@@ -759,6 +762,28 @@ inline bool preserve_local_save_dummy(const std::string &dst_target, const std::
     if (access((dst_target + "/sce_sys").c_str(), F_OK) == 0)
     {
         (void)copy_tree_simple(dst_target + "/sce_sys", staging_backup_dir + "/sce_sys", false);
+    }
+
+    // Preservar keystone autentico del destino local si existe (vital para restauraciones de PS4)
+    for (const std::string &ks_cand : {
+             dst_target + "/keystone",
+             dst_target + "/sce_sys/keystone"})
+    {
+        if (access(ks_cand.c_str(), R_OK) == 0 && keystone::is_valid_keystone_file(ks_cand))
+        {
+            (void)copy_file_atomic(ks_cand, staging_backup_dir + "/keystone");
+            (void)copy_file_atomic(ks_cand, staging_backup_dir + "/.meta_dummy/keystone");
+            ensure_dir_tree("/data/MacheteSVG/keystones");
+            std::string save_tid;
+            const std::size_t slash = dst_target.find_last_of('/');
+            if (slash != std::string::npos)
+                save_tid = dst_target.substr(slash + 1);
+            if (save_tid.size() == 9)
+                (void)copy_file_atomic(ks_cand, "/data/MacheteSVG/keystones/" + save_tid + ".keystone");
+            MACHETE_LOG("[KEYSTONE]", "Preserved authentic local keystone from %s -> %s/keystone",
+                        ks_cand.c_str(), staging_backup_dir.c_str());
+            break;
+        }
     }
 
     // Preservar tambien los metadatos actuales del Save Dummy en savedata_prospero_meta / savedata_meta

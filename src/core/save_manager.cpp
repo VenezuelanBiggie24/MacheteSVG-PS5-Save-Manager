@@ -739,9 +739,29 @@ void post_process_restored_save(const scanner::ScannedGame &game,
     {
         // 2. Partidas PS4: Inyeccion de Keystone autentico y Resignado SFO para la cuenta activa (Modo Apollo)
         MACHETE_LOG("[RESTORE]", "Processing PS4 save for active account: Keystone & param.sfo...");
-        if (machete::keystone::inject_authentic_keystone(dst_target, save_dir_tid, backup_folder))
+        const std::string preserved_ks = preserved_dummy_dir + "/keystone";
+        if (access(preserved_ks.c_str(), R_OK) == 0 && machete::keystone::is_valid_keystone_file(preserved_ks))
+        {
+            (void)pfs::copy_file_atomic(preserved_ks, dst_target + "/keystone", target_uid, target_gid);
+            (void)chmod((dst_target + "/keystone").c_str(), 0666);
+            if (access((dst_target + "/sce_sys").c_str(), F_OK) == 0)
+            {
+                (void)pfs::copy_file_atomic(preserved_ks, dst_target + "/sce_sys/keystone", target_uid, target_gid);
+                (void)chmod((dst_target + "/sce_sys/keystone").c_str(), 0666);
+            }
+            pfs_rep.keystone_injected = true;
+            MACHETE_LOG("[KEYSTONE]", "Restored preserved local dummy keystone to %s/keystone", dst_target.c_str());
+        }
+        else if (machete::keystone::inject_authentic_keystone(dst_target, save_dir_tid, backup_folder))
         {
             pfs_rep.keystone_injected = true;
+        }
+
+        if (access((dst_target + "/keystone").c_str(), R_OK) == 0)
+        {
+            (void)chmod((dst_target + "/keystone").c_str(), 0666);
+            if (target_uid != 0 || target_gid != 0)
+                (void)chown((dst_target + "/keystone").c_str(), target_uid, target_gid);
         }
 
         std::uint8_t console_psid[16] = {0};
@@ -1457,6 +1477,22 @@ __attribute__((noinline)) OperationResult restore_from_folder(const scanner::Sca
         {
             pfs::remove_dir_recursive_simple(preserved_dummy_dir);
             (void)pfs::preserve_local_save_dummy(dst_target, preserved_dummy_dir, is_ps5);
+        }
+        else
+        {
+            for (const std::string &ks_cand : {dst_target + "/keystone", dst_target + "/sce_sys/keystone"})
+            {
+                if (access(ks_cand.c_str(), R_OK) == 0 && machete::keystone::is_valid_keystone_file(ks_cand))
+                {
+                    pfs::ensure_dir_tree(preserved_dummy_dir);
+                    (void)pfs::copy_file_atomic(ks_cand, preserved_dummy_dir + "/keystone");
+                    (void)pfs::copy_file_atomic(ks_cand, preserved_dummy_dir + "/.meta_dummy/keystone");
+                    pfs::ensure_dir_tree("/data/MacheteSVG/keystones");
+                    (void)pfs::copy_file_atomic(ks_cand, "/data/MacheteSVG/keystones/" + game.title_id + ".keystone");
+                    MACHETE_LOG("[KEYSTONE]", "Preserved authentic keystone from dst_target before restore: %s", ks_cand.c_str());
+                    break;
+                }
+            }
         }
 
         int files_count = 0;
