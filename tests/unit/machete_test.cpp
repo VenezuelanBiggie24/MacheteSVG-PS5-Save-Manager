@@ -988,6 +988,65 @@ TEST(MacheteSaveTest, Ps4SaveRestoreBypassesSaveDummy)
     rmdir(test_root.c_str());
 }
 
+TEST(MacheteRestoreTest, Ps4RestoreFallbackKeystoneWhenNoKeystonePresent)
+{
+    const std::string test_root = "/tmp/machete_ps4_no_ks_test";
+    const std::string dst_save = test_root + "/dst_save";
+    const std::string backup_dir = test_root + "/CUSA18600 - DragonQuest";
+
+    (void)mkdir(test_root.c_str(), 0777);
+    (void)mkdir(dst_save.c_str(), 0777);
+    (void)mkdir(backup_dir.c_str(), 0777);
+
+    // Crear unicamente archivos de datos de guardado (sin keystone en el respaldo ni en el destino)
+    {
+        std::FILE *f = std::fopen((backup_dir + "/Book").c_str(), "wb");
+        ASSERT_NE(f, nullptr);
+        std::fputs("DUMMY_PS4_SAVE_PAYLOAD", f);
+        std::fclose(f);
+    }
+    {
+        std::FILE *f = std::fopen((backup_dir + "/Book.bin").c_str(), "wb");
+        ASSERT_NE(f, nullptr);
+        std::fputs("DUMMY_PS4_SEALED_KEY", f);
+        std::fclose(f);
+    }
+
+    machete::scanner::ScannedGame game;
+    game.title_id = "CUSA18600";
+    game.title = "Dragon Quest XI S";
+    game.platform = "PS4";
+    game.save_path = dst_save;
+
+    machete::save::BackupItem item;
+    item.title_id = "CUSA18600";
+    item.folder_path = backup_dir;
+    item.has_decrypted = false;
+    item.has_crypto_vault = false;
+
+    auto res = machete::save::restore_backup_item(game, item);
+    EXPECT_TRUE(res.success);
+    EXPECT_NE(res.message.find("FPKG"), std::string::npos);
+
+    // Comprobar que los archivos existen en el destino y que se inyecto el keystone FPKG
+    struct stat st{};
+    EXPECT_EQ(stat((dst_save + "/Book").c_str(), &st), 0);
+    EXPECT_EQ(stat((dst_save + "/keystone").c_str(), &st), 0);
+    EXPECT_TRUE(machete::keystone::is_valid_keystone_file(dst_save + "/keystone"));
+
+    // Limpieza
+    std::remove((dst_save + "/Book").c_str());
+    std::remove((dst_save + "/Book.bin").c_str());
+    std::remove((dst_save + "/keystone").c_str());
+    (void)std::remove((dst_save + "/sce_sys/keystone").c_str());
+    (void)rmdir((dst_save + "/sce_sys").c_str());
+    rmdir(dst_save.c_str());
+    std::remove((backup_dir + "/Book").c_str());
+    std::remove((backup_dir + "/Book.bin").c_str());
+    rmdir(backup_dir.c_str());
+    rmdir(test_root.c_str());
+}
+
 TEST(MacheteDbTest, SqliteAdapterAvailability)
 {
     auto &adapter = machete::db::SqliteAdapter::instance();
@@ -1101,6 +1160,36 @@ TEST(MacheteKeystoneValidationTest, Validate96ByteKeystoneCheck)
     EXPECT_TRUE(machete::keystone::is_valid_keystone_file(ks_path));
     std::remove(ks_path.c_str());
     EXPECT_FALSE(machete::keystone::is_valid_keystone_file(ks_path));
+}
+
+TEST(MacheteKeystoneValidationTest, FallbackFpkgKeystoneInjection)
+{
+    const std::string test_dir = "/tmp/machete_test_fallback_ks";
+    (void)mkdir(test_dir.c_str(), 0777);
+
+    EXPECT_TRUE(machete::keystone::inject_fallback_fpkg_keystone(test_dir, "CUSA18600"));
+
+    const std::string out_ks = test_dir + "/keystone";
+    struct stat st{};
+    EXPECT_EQ(stat(out_ks.c_str(), &st), 0);
+    EXPECT_EQ(st.st_size, 96);
+    EXPECT_TRUE(machete::keystone::is_valid_keystone_file(out_ks));
+
+    std::uint8_t buf[96] = {0};
+    std::FILE *f = std::fopen(out_ks.c_str(), "rb");
+    ASSERT_NE(f, nullptr);
+    EXPECT_EQ(std::fread(buf, 1, 96, f), 96u);
+    std::fclose(f);
+    EXPECT_EQ(std::memcmp(buf, "keystone", 8), 0);
+    EXPECT_EQ(buf[8], 0x00);
+    EXPECT_EQ(buf[9], 0x02); // Type 2 (PS4)
+    EXPECT_EQ(buf[10], 0x00);
+    EXPECT_EQ(buf[11], 0x01); // Version 1
+
+    (void)std::remove(out_ks.c_str());
+    (void)std::remove((test_dir + "/sce_sys/keystone").c_str());
+    (void)rmdir((test_dir + "/sce_sys").c_str());
+    (void)rmdir(test_dir.c_str());
 }
 
 TEST(MacheteScannerPairedSkuTest, DeathStrandingPairedSkus)

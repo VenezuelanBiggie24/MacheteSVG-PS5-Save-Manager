@@ -882,9 +882,19 @@ void post_process_restored_save(const scanner::ScannedGame &game,
             pfs_rep.keystone_injected = true;
             MACHETE_LOG("[KEYSTONE]", "Restored preserved local dummy keystone to %s/keystone", dst_target.c_str());
         }
-        else if (machete::keystone::inject_authentic_keystone(dst_target, save_dir_tid, backup_folder))
+        else if (machete::keystone::inject_authentic_keystone(dst_target, save_dir_tid, backup_folder, game.app_path))
         {
             pfs_rep.keystone_injected = true;
+        }
+        else
+        {
+            if (machete::keystone::inject_fallback_fpkg_keystone(dst_target, save_dir_tid))
+            {
+                pfs_rep.keystone_injected = true;
+                pfs_rep.fallback_keystone_used = true;
+                MACHETE_LOG("[KEYSTONE]", "Notice: Injected Apollo FPKG fallback keystone for %s into %s",
+                            save_dir_tid.c_str(), dst_target.c_str());
+            }
         }
 
         if (access((dst_target + "/keystone").c_str(), R_OK) == 0)
@@ -1692,13 +1702,13 @@ __attribute__((noinline)) OperationResult restore_from_folder(const scanner::Sca
 
         if (!is_ps5 && !has_final_keystone)
         {
-            res.success = false;
-            res.message = is_es
-                ? "Falta Keystone de PS4: Abre el juego 1 vez en esta consola para que cree un archivo de guardado inicial (Keystone), cierralo y vuelve a pulsar Restaurar."
-                : "PS4 Keystone missing: Launch the game once on this console to create an initial save file (Keystone), close it, and press Restore again.";
-            MACHETE_LOG("[RESTORE]", "PS4 restore aborted: No valid authentic keystone present for %s in %s",
-                        game.title_id.c_str(), dst_target.c_str());
-            return res;
+            if (machete::keystone::inject_fallback_fpkg_keystone(dst_target, game.title_id))
+            {
+                pfs_report.keystone_injected = true;
+                pfs_report.fallback_keystone_used = true;
+                MACHETE_LOG("[KEYSTONE]", "Injected emergency FPKG fallback keystone for %s into %s",
+                            game.title_id.c_str(), dst_target.c_str());
+            }
         }
 
         if (res.success)
@@ -1713,11 +1723,22 @@ __attribute__((noinline)) OperationResult restore_from_folder(const scanner::Sca
             }
             else if (!is_ps5 && (pfs_report.sfo_resigned || pfs_report.keystone_injected))
             {
-                res.message = is_es
-                    ? ("Partida PS4 restaurada y resignada [Modo Apollo: Account ID + Keystone] (" +
-                       std::to_string(files_count) + " archivos)")
-                    : ("PS4 save restored & resigned [Apollo Mode: Account ID + Keystone] (" +
-                       std::to_string(files_count) + " files)");
+                if (pfs_report.fallback_keystone_used)
+                {
+                    res.message = is_es
+                        ? ("Partida PS4 restaurada [Keystone FPKG: si tu juego es disco/PSN oficial y dice datos danados, abre el juego 1 vez y vuelve a restaurar] (" +
+                           std::to_string(files_count) + " archivos)")
+                        : ("PS4 save restored [FPKG Keystone: if retail disc/PSN and shows corrupted data, launch game once and restore again] (" +
+                           std::to_string(files_count) + " files)");
+                }
+                else
+                {
+                    res.message = is_es
+                        ? ("Partida PS4 restaurada y resignada [Modo Apollo: Account ID + Keystone Autentico] (" +
+                           std::to_string(files_count) + " archivos)")
+                        : ("PS4 save restored & resigned [Apollo Mode: Account ID + Authentic Keystone] (" +
+                           std::to_string(files_count) + " files)");
+                }
             }
             else
             {

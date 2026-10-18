@@ -46,6 +46,7 @@ struct PfsRestoreReport
     bool cross_console_detected = false;
     bool missing_save_dummy_error = false;
     bool keystone_injected = false;
+    bool fallback_keystone_used = false;
     bool sfo_resigned = false;
     int injected_files = 0;
     std::string status_detail;
