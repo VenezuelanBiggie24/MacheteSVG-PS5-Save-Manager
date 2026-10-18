@@ -159,6 +159,19 @@ inline std::vector<std::string> get_ps5_savedata_db_candidates(std::uint32_t use
     paths.push_back(std::string("/system_data/savedata_prospero/") + uid_clean + "/db/user/savedata.db");
     paths.push_back(std::string("/system_data/savedata_prospero/") + uid_8 + "/db/savedata.db");
     paths.push_back(std::string("/system_data/savedata_prospero/") + uid_clean + "/db/savedata.db");
+    paths.push_back(std::string("/system_data/savedata_prospero/") + uid_8 + "/savedata.db");
+    paths.push_back(std::string("/system_data/savedata_prospero/") + uid_clean + "/savedata.db");
+    paths.push_back(std::string("/system_data/savedata/") + uid_8 + "/db/user/savedata.db");
+    paths.push_back(std::string("/system_data/savedata/") + uid_clean + "/db/user/savedata.db");
+    paths.push_back(std::string("/system_data/savedata/") + uid_8 + "/db/savedata.db");
+    paths.push_back(std::string("/system_data/savedata/") + uid_clean + "/db/savedata.db");
+    paths.push_back(std::string("/system_data/savedata/") + uid_8 + "/savedata.db");
+    paths.push_back(std::string("/system_data/savedata/") + uid_clean + "/savedata.db");
+    paths.push_back("/system_data/savedata_prospero/db/user/savedata.db");
+    paths.push_back("/system_data/savedata/db/user/savedata.db");
+    paths.push_back("/system_data/savedata_prospero/db/savedata.db");
+    paths.push_back("/system_data/savedata/db/savedata.db");
+    paths.push_back("/system_data/priv/mms/savedata.db");
     return paths;
 }
 

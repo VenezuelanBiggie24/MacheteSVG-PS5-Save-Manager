@@ -54,6 +54,14 @@ struct BackupItem
 // Verifica si la consola ya cuenta con un contenedor Save Dummy local (sdimg_*) para este juego
 bool has_local_save_dummy_for_game(const scanner::ScannedGame &game);
 
+// Sintetiza param.json y descriptores de slots de PS5 para partidas que carecen de metadatos
+bool synthesize_ps5_param_json(const std::string &title_id,
+                               const std::string &dst_target,
+                               const std::string &meta_target,
+                               const std::string &game_title,
+                               std::uint32_t target_uid = 0,
+                               std::uint32_t target_gid = 0);
+
 // Respalda la partida de un juego hacia el dispositivo de almacenamiento seleccionado
 // Preserva intacto el archivo keystone, archiva crypto_vault.bin y extrae archivos desencriptados (decrypted/) via PFS
 OperationResult backup_game_save(const scanner::ScannedGame &game,

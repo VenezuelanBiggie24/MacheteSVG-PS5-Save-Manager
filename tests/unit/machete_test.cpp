@@ -19,6 +19,7 @@
 #include "core/account_manager.hpp"
 #include "ui/qr_code.hpp"
 #include "core/build_info.hpp"
+#include "core/sqlite_adapter.hpp"
 
 #include <fcntl.h>
 #include <sys/stat.h>
@@ -1231,6 +1232,97 @@ TEST(MacheteParamJsonSizeTest, UpdateFileSizeAndMtimeInParamJson)
     const std::string content(buf, n);
     EXPECT_NE(content.find("\"fileSize\": 12582912"), std::string::npos);
     EXPECT_EQ(content.find("\"fileSize\": 1024"), std::string::npos);
+}
+
+TEST(MacheteBuildInfoTest, BuildNumberMatchesExpected)
+{
+    EXPECT_STREQ(machete::build::build_number(), "66");
+}
+
+TEST(MachetePs5SavedataDbTest, DbCandidatePathsIncludeAllProsperoAndSystemDataLocations)
+{
+    const auto candidates = machete::db::get_ps5_savedata_db_candidates(0x105f615a);
+    ASSERT_FALSE(candidates.empty());
+
+    bool has_prospero = false;
+    bool has_system_savedata = false;
+    for (const auto &c : candidates)
+    {
+        if (c.find("/system_data/savedata_prospero/105f615a/db/user/savedata.db") != std::string::npos)
+            has_prospero = true;
+        if (c.find("/system_data/savedata/105f615a/db/user/savedata.db") != std::string::npos)
+            has_system_savedata = true;
+    }
+    EXPECT_TRUE(has_prospero);
+    EXPECT_TRUE(has_system_savedata);
+}
+
+TEST(MachetePs5ParamJsonSynthesisTest, SynthesizeParamJsonFromSlots)
+{
+    const std::string dst = "/tmp/machete_test_synth_dst";
+    const std::string meta = "/tmp/machete_test_synth_meta";
+    (void)mkdir(dst.c_str(), 0777);
+    (void)mkdir(meta.c_str(), 0777);
+
+    // Crear slots simulados sdimg_PROFILE y sdimg_AUTOSAVE0
+    const std::string f1 = dst + "/sdimg_PROFILE";
+    const std::string f2 = dst + "/sdimg_AUTOSAVE0";
+    {
+        std::FILE *out1 = std::fopen(f1.c_str(), "wb");
+        ASSERT_NE(out1, nullptr);
+        std::fputs("DUMMY_PROFILE_DATA_12345", out1);
+        std::fclose(out1);
+
+        std::FILE *out2 = std::fopen(f2.c_str(), "wb");
+        ASSERT_NE(out2, nullptr);
+        std::fputs("DUMMY_AUTOSAVE_DATA_1234567890", out2);
+        std::fclose(out2);
+    }
+
+    const bool ok = machete::save::synthesize_ps5_param_json(
+        "PPSA01969", dst, meta, "DEATH STRANDING DIRECTOR'S CUT", 0, 0);
+    EXPECT_TRUE(ok);
+
+    // Verificar que param.json se creo en meta_target, dst/sce_sys y dst
+    const std::string pj_meta = meta + "/param.json";
+    const std::string pj_sce = dst + "/sce_sys/param.json";
+    const std::string pj_dst = dst + "/param.json";
+    const std::string slot_meta = meta + "/PROFILE.json";
+    const std::string slot_auto = meta + "/AUTOSAVE0.json";
+
+    EXPECT_EQ(access(pj_meta.c_str(), F_OK), 0);
+    EXPECT_EQ(access(pj_sce.c_str(), F_OK), 0);
+    EXPECT_EQ(access(pj_dst.c_str(), F_OK), 0);
+    EXPECT_EQ(access(slot_meta.c_str(), F_OK), 0);
+    EXPECT_EQ(access(slot_auto.c_str(), F_OK), 0);
+
+    // Leer pj_meta y validar contenido
+    {
+        std::FILE *f = std::fopen(pj_meta.c_str(), "rb");
+        ASSERT_NE(f, nullptr);
+        char buf[2048] = {0};
+        const std::size_t n = std::fread(buf, 1, sizeof(buf) - 1, f);
+        std::fclose(f);
+        ASSERT_GT(n, 0u);
+        const std::string content(buf, n);
+        EXPECT_NE(content.find("\"titleId\": \"PPSA01969\""), std::string::npos);
+        EXPECT_NE(content.find("\"dirName\": \"PROFILE\""), std::string::npos);
+        EXPECT_NE(content.find("DEATH STRANDING"), std::string::npos);
+    }
+
+    // Limpieza
+    (void)std::remove(f1.c_str());
+    (void)std::remove(f2.c_str());
+    (void)std::remove(pj_meta.c_str());
+    (void)std::remove(pj_sce.c_str());
+    (void)std::remove(pj_dst.c_str());
+    (void)std::remove(slot_meta.c_str());
+    (void)std::remove(slot_auto.c_str());
+    (void)std::remove((dst + "/sce_sys/PROFILE.json").c_str());
+    (void)std::remove((dst + "/sce_sys/AUTOSAVE0.json").c_str());
+    (void)rmdir((dst + "/sce_sys").c_str());
+    (void)rmdir(dst.c_str());
+    (void)rmdir(meta.c_str());
 }
 
 } // namespace hui::testing
