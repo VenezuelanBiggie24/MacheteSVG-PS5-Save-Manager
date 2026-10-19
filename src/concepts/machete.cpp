@@ -116,11 +116,12 @@ static constexpr std::array<const char *const, 4> kTechniques = {
     "Web Save Station: Embedded HTTP server with live ZIP streaming for PC/Mobile browser downloads",
 };
 
-// Renderizado nativo a 60 FPS del personaje Shin-chan (soporte para 12 fotogramas del GIF canonico + fallback vectorial)
+// Renderizado nativo a 60 FPS del personaje Shin-chan (soporte para fotogramas GIF canonicos + fallback vectorial)
 static void draw_shinchan_character(gfx::DrawList &list, ui::Painter &paint,
                                     float cx, float cy, float clock, float opacity,
                                     ShinchanState state,
-                                    const std::array<unsigned int, 12> *dance_textures = nullptr)
+                                    const std::array<unsigned int, 12> *dance_textures = nullptr,
+                                    const std::array<unsigned int, 16> *done_textures = nullptr)
 {
     if (state == ShinchanState::Hidden || opacity <= 0.005f)
         return;
@@ -261,7 +262,39 @@ static void draw_shinchan_character(gfx::DrawList &list, ui::Painter &paint,
     }
     else if (state == ShinchanState::Success)
     {
-        // Celebracion festiva de victoria canonica (estilo imagen 5, alegre con cartel de checkmark)
+        // 1. Si disponemos de las texturas de la animacion de exito (16 fotogramas limpios sin kanji), reproducir a 8.33 FPS
+        const int frame_idx = static_cast<int>(clock * 8.33f) % 16;
+        if (done_textures && (*done_textures)[static_cast<std::size_t>(frame_idx)] != 0)
+        {
+            // Sombra suave en el suelo
+            list.shadow({cx - 40.0f, cy - 2.0f, 80.0f, 12.0f}, 6.0f, 5.0f,
+                        Color::rgb(0x000000).with_alpha(0.30f));
+
+            // Renderizado del fotograma transparente canonico de exito (480x480)
+            const float w = 152.0f;
+            const float h = 152.0f;
+            const Rect dst{cx - w * 0.5f, cy - h - 5.0f, w, h};
+            list.image((*done_textures)[static_cast<std::size_t>(frame_idx)], dst,
+                       gfx::kFullUv, Color::rgb(0xffffff));
+
+            // Cartel verde con DONE en la esquina superior derecha del personaje (sin taparlo)
+            const Rect sign{cx + 28.0f, cy - 165.0f, 110.0f, 42.0f};
+            list.rounded_rect(sign, 9.0f, Color::rgb(0x062817).with_alpha(0.95f));
+            paint.stroke(sign, 9.0f, 1.8f, Color::rgb(0x38ef7d));
+
+            // Circulo con checkmark verde
+            list.circle(sign.x + 20.0f, sign.cy(), 12.0f, Color::rgb(0x114626));
+            list.line(sign.x + 14.0f, sign.cy(), sign.x + 19.0f, sign.cy() + 4.5f, 2.8f, Color::rgb(0x38ef7d));
+            list.line(sign.x + 19.0f, sign.cy() + 4.5f, sign.x + 27.0f, sign.cy() - 5.5f, 2.8f, Color::rgb(0x38ef7d));
+
+            // Texto DONE
+            paint.heading("DONE", sign.x + 38.0f, sign.cy() + 5.5f, 16.0f, Color::rgb(0x38ef7d));
+
+            list.pop_opacity();
+            return;
+        }
+
+        // 2. Fallback vectorial canonico
         const float hop = std::abs(std::sin(clock * 7.0f)) * 10.0f;
 
         list.shadow({cx - 36.0f, cy - 2.0f, 72.0f, 12.0f}, 6.0f, 5.0f,
@@ -281,7 +314,7 @@ static void draw_shinchan_character(gfx::DrawList &list, ui::Painter &paint,
         // Camiseta roja de manga larga
         list.rounded_rect({cx - 24.0f, cy - 70.0f - hop, 48.0f, 32.0f}, 9.0f, red_shirt);
 
-        // Brazos en alto sosteniendo el cartel de victoria
+        // Brazos en alto
         list.line(cx - 18.0f, cy - 60.0f - hop, cx - 26.0f, cy - 90.0f - hop, 6.5f, red_shirt);
         list.circle(cx - 26.0f, cy - 91.0f - hop, 4.5f, skin_color);
         list.line(cx + 18.0f, cy - 60.0f - hop, cx + 26.0f, cy - 90.0f - hop, 6.5f, red_shirt);
@@ -323,18 +356,17 @@ static void draw_shinchan_character(gfx::DrawList &list, ui::Painter &paint,
         list.line(cx + 21.0f, head_y + 4.0f, cx + 23.0f, head_y + 7.0f, 1.5f, blush_color);
         list.line(cx + 24.0f, head_y + 4.0f, cx + 26.0f, head_y + 7.0f, 1.5f, blush_color);
 
-        // Cartel sostenido con checkmark verde
-        const Rect sign{cx - 56.0f, cy - 148.0f - hop, 112.0f, 48.0f};
+        // Cartel verde con DONE en la esquina superior derecha del personaje (sin taparlo)
+        const Rect sign{cx + 28.0f, cy - 165.0f - hop, 110.0f, 42.0f};
         list.rounded_rect(sign, 9.0f, Color::rgb(0x062817).with_alpha(0.95f));
         paint.stroke(sign, 9.0f, 1.8f, Color::rgb(0x38ef7d));
 
         // Circulo con checkmark verde
-        list.circle(sign.x + 22.0f, sign.cy(), 13.0f, Color::rgb(0x114626));
-        list.line(sign.x + 15.0f, sign.cy(), sign.x + 20.0f, sign.cy() + 5.0f, 3.0f, Color::rgb(0x38ef7d));
-        list.line(sign.x + 20.0f, sign.cy() + 5.0f, sign.x + 29.0f, sign.cy() - 6.0f, 3.0f, Color::rgb(0x38ef7d));
+        list.circle(sign.x + 20.0f, sign.cy(), 12.0f, Color::rgb(0x114626));
+        list.line(sign.x + 14.0f, sign.cy(), sign.x + 19.0f, sign.cy() + 4.5f, 2.8f, Color::rgb(0x38ef7d));
+        list.line(sign.x + 19.0f, sign.cy() + 4.5f, sign.x + 27.0f, sign.cy() - 5.5f, 2.8f, Color::rgb(0x38ef7d));
 
-        const bool is_es = (machete::i18n::current_language() == machete::i18n::Language::Spanish);
-        paint.heading(is_es ? "EXITO" : "DONE", sign.x + 42.0f, sign.cy() + 6.5f, 17.0f, Color::rgb(0x38ef7d));
+        paint.heading("DONE", sign.x + 38.0f, sign.cy() + 5.5f, 16.0f, Color::rgb(0x38ef7d));
 
         // Estrellas doradas de celebracion
         list.star(cx - 62.0f, cy - 116.0f - hop, 7.0f, Color::rgb(0xffd700));
@@ -459,6 +491,14 @@ class Machete final : public app::Concept
                 tex = 0;
             }
         }
+        for (auto &tex : shinchan_done_textures_)
+        {
+            if (tex != 0)
+            {
+                machete::scanner::release_texture(tex);
+                tex = 0;
+            }
+        }
     }
 
     void load_app_icon() const
@@ -504,6 +544,24 @@ class Machete final : public app::Concept
             {
                 shinchan_dance_textures_[static_cast<std::size_t>(i)] = machete::scanner::load_texture_from_png(path);
                 if (shinchan_dance_textures_[static_cast<std::size_t>(i)] != 0)
+                    break;
+            }
+        }
+
+        for (int i = 0; i < 16; ++i)
+        {
+            char path1[128];
+            char path2[128];
+            char path3[128];
+            std::snprintf(path1, sizeof(path1), "/app0/assets/ui/shinchan_done_frames/frame_%02d.png", i + 1);
+            std::snprintf(path2, sizeof(path2), "/data/homebrew/PPSA99001/assets/ui/shinchan_done_frames/frame_%02d.png", i + 1);
+            std::snprintf(path3, sizeof(path3), "assets/ui/shinchan_done_frames/frame_%02d.png", i + 1);
+
+            const char *candidates[] = { path1, path2, path3 };
+            for (const char *path : candidates)
+            {
+                shinchan_done_textures_[static_cast<std::size_t>(i)] = machete::scanner::load_texture_from_png(path);
+                if (shinchan_done_textures_[static_cast<std::size_t>(i)] != 0)
                     break;
             }
         }
@@ -2563,7 +2621,8 @@ class Machete final : public app::Concept
         {
             load_shinchan_textures();
             draw_shinchan_character(list, paint, 1710.0f, 905.0f, clock_,
-                                    shinchan_opacity_, shinchan_state_, &shinchan_dance_textures_);
+                                    shinchan_opacity_, shinchan_state_,
+                                    &shinchan_dance_textures_, &shinchan_done_textures_);
         }
 
         // ==========================================
@@ -2669,9 +2728,10 @@ class Machete final : public app::Concept
     mutable bool app_icon_attempted_{false};
     mutable unsigned int app_icon_texture_{0};
 
-    // Texturas de los 12 fotogramas del GIF canonico de Shin-chan
+    // Texturas de los fotogramas de animaciones canonicas de Shin-chan
     mutable bool shinchan_textures_attempted_{false};
     mutable std::array<unsigned int, 12> shinchan_dance_textures_{};
+    mutable std::array<unsigned int, 16> shinchan_done_textures_{};
 
     // Operaciones Asíncronas en Segundo Plano (Worker Thread con 2MB de stack garantizados)
     enum class OperationType { None, Backup, Restore } op_type_ = OperationType::None;
