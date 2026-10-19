@@ -116,10 +116,11 @@ static constexpr std::array<const char *const, 4> kTechniques = {
     "Web Save Station: Embedded HTTP server with live ZIP streaming for PC/Mobile browser downloads",
 };
 
-// Renderizado vectorial nativo a 60 FPS del personaje Shin-chan (fiel a diseno canonico de referencia)
+// Renderizado nativo a 60 FPS del personaje Shin-chan (soporte para 12 fotogramas del GIF canonico + fallback vectorial)
 static void draw_shinchan_character(gfx::DrawList &list, ui::Painter &paint,
                                     float cx, float cy, float clock, float opacity,
-                                    ShinchanState state)
+                                    ShinchanState state,
+                                    const std::array<unsigned int, 12> *dance_textures = nullptr)
 {
     if (state == ShinchanState::Hidden || opacity <= 0.005f)
         return;
@@ -139,7 +140,26 @@ static void draw_shinchan_character(gfx::DrawList &list, ui::Painter &paint,
 
     if (state == ShinchanState::Dancing)
     {
-        // Baile clasico y canonico de vaiven lateral de Shin-chan (imagenes de referencia 2 y 3)
+        // 1. Si disponemos de las texturas de los 12 fotogramas del GIF de Shin-chan, reproducir a 10 FPS
+        const int frame_idx = static_cast<int>(clock * 10.0f) % 12;
+        if (dance_textures && (*dance_textures)[static_cast<std::size_t>(frame_idx)] != 0)
+        {
+            // Sombra suave en el suelo
+            list.shadow({cx - 40.0f, cy - 2.0f, 80.0f, 12.0f}, 6.0f, 5.0f,
+                        Color::rgb(0x000000).with_alpha(0.30f));
+
+            // Renderizado del fotograma transparente canonico (proporcion original 370x300)
+            const float w = 154.0f;
+            const float h = 125.0f;
+            const Rect dst{cx - w * 0.5f, cy - h - 5.0f, w, h};
+            list.image((*dance_textures)[static_cast<std::size_t>(frame_idx)], dst,
+                       gfx::kFullUv, Color::rgb(0xffffff));
+
+            list.pop_opacity();
+            return;
+        }
+
+        // 2. Fallback vectorial canonico
         const float tempo = clock * 7.5f;
         const float sway = std::sin(tempo) * 16.0f;
         const float tilt = std::sin(tempo) * 0.12f;
@@ -431,6 +451,14 @@ class Machete final : public app::Concept
             machete::scanner::release_texture(app_icon_texture_);
             app_icon_texture_ = 0;
         }
+        for (auto &tex : shinchan_dance_textures_)
+        {
+            if (tex != 0)
+            {
+                machete::scanner::release_texture(tex);
+                tex = 0;
+            }
+        }
     }
 
     void load_app_icon() const
@@ -453,6 +481,31 @@ class Machete final : public app::Concept
             app_icon_texture_ = machete::scanner::load_texture_from_png(path);
             if (app_icon_texture_ != 0)
                 break;
+        }
+    }
+
+    void load_shinchan_textures() const
+    {
+        if (shinchan_textures_attempted_)
+            return;
+        shinchan_textures_attempted_ = true;
+
+        for (int i = 0; i < 12; ++i)
+        {
+            char path1[128];
+            char path2[128];
+            char path3[128];
+            std::snprintf(path1, sizeof(path1), "/app0/assets/ui/shinchan_frames/frame_%02d.png", i + 1);
+            std::snprintf(path2, sizeof(path2), "/data/homebrew/PPSA99001/assets/ui/shinchan_frames/frame_%02d.png", i + 1);
+            std::snprintf(path3, sizeof(path3), "assets/ui/shinchan_frames/frame_%02d.png", i + 1);
+
+            const char *candidates[] = { path1, path2, path3 };
+            for (const char *path : candidates)
+            {
+                shinchan_dance_textures_[static_cast<std::size_t>(i)] = machete::scanner::load_texture_from_png(path);
+                if (shinchan_dance_textures_[static_cast<std::size_t>(i)] != 0)
+                    break;
+            }
         }
     }
 
@@ -2508,8 +2561,9 @@ class Machete final : public app::Concept
         // ==========================================
         if (shinchan_opacity_ > 0.005f)
         {
+            load_shinchan_textures();
             draw_shinchan_character(list, paint, 1710.0f, 905.0f, clock_,
-                                    shinchan_opacity_, shinchan_state_);
+                                    shinchan_opacity_, shinchan_state_, &shinchan_dance_textures_);
         }
 
         // ==========================================
@@ -2614,6 +2668,10 @@ class Machete final : public app::Concept
     // Textura del icono oficial de MacheteSVG (/app0/sce_sys/icon0.png)
     mutable bool app_icon_attempted_{false};
     mutable unsigned int app_icon_texture_{0};
+
+    // Texturas de los 12 fotogramas del GIF canonico de Shin-chan
+    mutable bool shinchan_textures_attempted_{false};
+    mutable std::array<unsigned int, 12> shinchan_dance_textures_{};
 
     // Operaciones Asíncronas en Segundo Plano (Worker Thread con 2MB de stack garantizados)
     enum class OperationType { None, Backup, Restore } op_type_ = OperationType::None;
