@@ -1236,7 +1236,32 @@ TEST(MacheteParamJsonSizeTest, UpdateFileSizeAndMtimeInParamJson)
 
 TEST(MacheteBuildInfoTest, BuildNumberMatchesExpected)
 {
-    EXPECT_STREQ(machete::build::build_number(), "66");
+    EXPECT_STREQ(machete::build::build_number(), "67");
+}
+
+TEST(MacheteParamJsonTitleIdTest, UpdateTitleIdInParamJson)
+{
+    const std::string test_json = "/tmp/machete_test_title_id_param.json";
+    {
+        std::FILE *f = std::fopen(test_json.c_str(), "w");
+        ASSERT_NE(f, nullptr);
+        std::fputs("{\n  \"titleId\": \"PPSA01969\",\n  \"dirName\": \"PROFILE\"\n}\n", f);
+        std::fclose(f);
+    }
+
+    machete::pfs::update_ps5_param_json_title_id(test_json, "PPSA01970");
+
+    std::FILE *f = std::fopen(test_json.c_str(), "r");
+    ASSERT_NE(f, nullptr);
+    char buf[512] = {0};
+    const std::size_t n = std::fread(buf, 1, sizeof(buf) - 1, f);
+    std::fclose(f);
+    std::remove(test_json.c_str());
+
+    ASSERT_GT(n, 0u);
+    const std::string content(buf, n);
+    EXPECT_NE(content.find("\"titleId\": \"PPSA01970\""), std::string::npos);
+    EXPECT_EQ(content.find("\"titleId\": \"PPSA01969\""), std::string::npos);
 }
 
 TEST(MachetePs5SavedataDbTest, DbCandidatePathsIncludeAllProsperoAndSystemDataLocations)

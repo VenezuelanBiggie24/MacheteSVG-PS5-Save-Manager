@@ -684,6 +684,61 @@ inline void update_ps5_param_json_size(const std::string &param_json_path, std::
     }
 }
 
+// Actualiza titleId dentro de param.json para coincidir con un SKU emparejado o destino
+inline void update_ps5_param_json_title_id(const std::string &param_json_path, const std::string &new_title_id)
+{
+    if (new_title_id.empty() || access(param_json_path.c_str(), R_OK) != 0)
+        return;
+
+    std::FILE *f = std::fopen(param_json_path.c_str(), "rb");
+    if (!f)
+        return;
+
+    std::fseek(f, 0, SEEK_END);
+    const long fsize = std::ftell(f);
+    std::fseek(f, 0, SEEK_SET);
+    if (fsize <= 0 || fsize > 256 * 1024)
+    {
+        std::fclose(f);
+        return;
+    }
+
+    std::string content(static_cast<std::size_t>(fsize), '\0');
+    const std::size_t r = std::fread(&content[0], 1, content.size(), f);
+    std::fclose(f);
+    if (r != content.size())
+        return;
+
+    const std::string needle = "\"titleId\":";
+    std::size_t pos = content.find(needle);
+    if (pos != std::string::npos)
+    {
+        std::size_t q1 = content.find('"', pos + needle.size());
+        if (q1 != std::string::npos)
+        {
+            std::size_t q2 = content.find('"', q1 + 1);
+            if (q2 != std::string::npos)
+            {
+                content.replace(q1 + 1, q2 - (q1 + 1), new_title_id);
+                const std::string tmp = param_json_path + ".tmp";
+                std::FILE *out = std::fopen(tmp.c_str(), "wb");
+                if (out)
+                {
+                    std::fwrite(content.data(), 1, content.size(), out);
+                    std::fflush(out);
+                    int fd = fileno(out);
+                    if (fd >= 0)
+                        (void)::fsync(fd);
+                    std::fclose(out);
+                    (void)unlink(param_json_path.c_str());
+                    (void)std::rename(tmp.c_str(), param_json_path.c_str());
+                    (void)chmod(param_json_path.c_str(), 0666);
+                }
+            }
+        }
+    }
+}
+
 // Comprueba si el respaldo proviene de otra consola distinta a la actual
 inline bool is_backup_from_different_console(const std::string &backup_folder, bool is_ps5)
 {

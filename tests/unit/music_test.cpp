@@ -88,6 +88,21 @@ TEST(MusicTrack, DuplicatesMonoAndRejectsOtherRates)
     EXPECT_NE(junk.open("not an ogg file"), "");
 }
 
+TEST(MusicTrack, CyberShinobiLoadsCleanlyWithZeroWarnings)
+{
+    const std::string ogg_path = std::string(HUI_SOURCE_DIR) + "/assets/audio/music/cyber-shinobi.ogg";
+    std::string data;
+    ASSERT_TRUE(hui::save::read_file(ogg_path, &data)) << ogg_path;
+    MusicTrack track;
+    const std::string err = track.open(std::move(data));
+    EXPECT_EQ(err, "");
+    EXPECT_EQ(track.loop_start(), 0u);
+    EXPECT_GT(track.loop_end(), 0u);
+    std::vector<float> buffer(48000 * 2, 0.0f);
+    const int decoded = track.decode(buffer.data(), 48000);
+    EXPECT_EQ(decoded, 48000);
+}
+
 TEST(Mixer, StreamsPlayOnTheMusicBusAndRampGain)
 {
     Mixer mixer;

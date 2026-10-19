@@ -5,6 +5,7 @@
 
 #include "concepts/concepts.hpp"
 
+#include "core/build_info.hpp"
 #include "core/game_scanner.hpp"
 #include "core/i18n.hpp"
 #include "core/jailbreak.hpp"
@@ -42,11 +43,33 @@ namespace
 using gfx::Color;
 using gfx::Rect;
 
+// Pestañas de filtrado de plataforma
+enum class GameTab : int
+{
+    PS5 = 0,
+    PS4 = 1,
+    All = 2
+};
+
+// Estados del personaje animado anime Shin-chan
+enum class ShinchanState
+{
+    Hidden,
+    Dancing,
+    Success,
+    Error
+};
+
 // Identificadores de elementos navegables
 enum Item : int
 {
+    // Pestañas superiores del panel izquierdo
+    kTabPS5 = 0,
+    kTabPS4,
+    kTabAll,
+
     // Panel Izquierdo: Lista visible de juegos (hasta 5 en pantalla)
-    kGame0 = 0,
+    kGame0,
     kGame1,
     kGame2,
     kGame3,
@@ -65,6 +88,11 @@ enum Item : int
 
 // Rectángulos de foco base
 constexpr Rect kRects[kItemCount] = {
+    // Pestañas superiores (panel izquierdo)
+    {116, 266, 206, 42}, // PS5
+    {332, 266, 206, 42}, // PS4
+    {548, 266, 208, 42}, // TODOS
+
     // Lista de juegos (panel izquierdo)
     {116, 330, 640, 92},
     {116, 434, 640, 92},
@@ -88,14 +116,271 @@ static constexpr std::array<const char *const, 4> kTechniques = {
     "Web Save Station: Embedded HTTP server with live ZIP streaming for PC/Mobile browser downloads",
 };
 
+// Renderizado vectorial nativo a 60 FPS del personaje animado anime (Shin-chan)
+static void draw_shinchan_character(gfx::DrawList &list, ui::Painter &paint,
+                                    float cx, float cy, float clock, float opacity,
+                                    ShinchanState state)
+{
+    if (state == ShinchanState::Hidden || opacity <= 0.005f)
+        return;
+
+    list.push_opacity(opacity);
+
+    if (state == ShinchanState::Dancing)
+    {
+        // Baile comico de Shin-chan (baile de nalgas/culito - Buri Buri Boogie Dance)
+        const float tempo = clock * 9.0f;
+        const float sway = std::sin(tempo) * 16.0f;
+        const float bounce = std::abs(std::sin(tempo * 2.0f)) * 7.0f;
+        const float head_sway = std::sin(tempo * 0.5f) * 4.0f;
+        const float arm_l = std::sin(tempo) * 14.0f;
+        const float arm_r = -std::sin(tempo) * 14.0f;
+
+        // Sombra suave en el suelo
+        list.shadow({cx - 40.0f + sway * 0.3f, cy - 2.0f, 80.0f, 14.0f}, 7.0f, 6.0f,
+                    Color::rgb(0x000000).with_alpha(0.45f));
+
+        // Piernas infantiles
+        list.line(cx - 16.0f, cy - 26.0f + bounce, cx - 18.0f, cy, 7.0f, Color::rgb(0xffdfc4));
+        list.line(cx + 16.0f, cy - 26.0f + bounce, cx + 18.0f, cy, 7.0f, Color::rgb(0xffdfc4));
+        // Calcetines blancos y zapatillas celestes
+        list.rounded_rect({cx - 24.0f, cy - 5.0f, 12.0f, 6.0f}, 3.0f, Color::rgb(0xffffff));
+        list.rounded_rect({cx - 25.0f, cy - 2.0f, 14.0f, 5.0f}, 2.5f, Color::rgb(0x00b0ff));
+        list.rounded_rect({cx + 12.0f, cy - 5.0f, 12.0f, 6.0f}, 3.0f, Color::rgb(0xffffff));
+        list.rounded_rect({cx + 11.0f, cy - 2.0f, 14.0f, 5.0f}, 2.5f, Color::rgb(0x00b0ff));
+
+        // Cadera y nalgas oscilantes (el icono comico del anime)
+        const float hip_x = cx + sway;
+        const float hip_y = cy - 36.0f + bounce;
+
+        // Pantalones cortos amarillos bajados comicamente
+        list.rounded_rect({hip_x - 22.0f, hip_y - 2.0f, 44.0f, 18.0f}, 7.0f, Color::rgb(0xffd600));
+
+        // Dos nalgas redondeadas estilo melocoton
+        list.circle(hip_x - 11.0f, hip_y + 11.0f, 15.0f, Color::rgb(0xffdfc4));
+        list.circle(hip_x + 11.0f, hip_y + 11.0f, 15.0f, Color::rgb(0xffdfc4));
+        // Pliegue central sombreado
+        list.line(hip_x, hip_y + 1.0f, hip_x, hip_y + 20.0f, 2.0f, Color::rgb(0xe8a892));
+        // Brillo especular comico
+        list.circle(hip_x - 9.0f, hip_y + 7.0f, 3.5f, Color::rgb(0xffffff).with_alpha(0.6f));
+        list.circle(hip_x + 9.0f, hip_y + 7.0f, 3.5f, Color::rgb(0xffffff).with_alpha(0.6f));
+
+        // Lineas de movimiento cinetico del vaiven
+        list.arc(hip_x - 28.0f, hip_y + 10.0f, 9.0f, 2.0f, 2.2f, 1.8f,
+                 Color::rgb(0x76d6ff).with_alpha(0.55f));
+        list.arc(hip_x + 28.0f, hip_y + 10.0f, 9.0f, 2.0f, -0.8f, 1.8f,
+                 Color::rgb(0x76d6ff).with_alpha(0.55f));
+
+        // Torso inclinado - Camiseta roja de Shin-chan
+        const float torso_x = cx + sway * 0.4f;
+        const float torso_y = cy - 64.0f + bounce;
+        list.rounded_rect({torso_x - 21.0f, torso_y, 42.0f, 30.0f}, 9.0f, Color::rgb(0xe53935));
+
+        // Brazos aleteando al ritmo
+        list.line(torso_x - 18.0f, torso_y + 6.0f, torso_x - 32.0f, torso_y + 12.0f + arm_l,
+                  6.0f, Color::rgb(0xe53935));
+        list.circle(torso_x - 34.0f, torso_y + 12.0f + arm_l, 5.0f, Color::rgb(0xffdfc4));
+        list.line(torso_x + 18.0f, torso_y + 6.0f, torso_x + 32.0f, torso_y + 12.0f + arm_r,
+                  6.0f, Color::rgb(0xe53935));
+        list.circle(torso_x + 34.0f, torso_y + 12.0f + arm_r, 5.0f, Color::rgb(0xffdfc4));
+
+        // Cabeza girada mirando hacia atras por encima del hombro
+        const float head_x = cx + sway * 0.25f + head_sway;
+        const float head_y = cy - 86.0f + bounce;
+
+        // Perfil redondeado de la cabeza y mejilla mofletuda
+        list.circle(head_x, head_y, 20.0f, Color::rgb(0xffdfc4));
+        list.circle(head_x + 10.0f, head_y + 4.0f, 13.0f, Color::rgb(0xffdfc4));
+        list.circle(head_x + 12.0f, head_y + 7.0f, 5.5f, Color::rgb(0xff8a80).with_alpha(0.55f));
+
+        // Pelo negro recortado caracteristico
+        list.rounded_rect({head_x - 16.0f, head_y - 22.0f, 32.0f, 14.0f}, 7.0f, Color::rgb(0x1a1a1a));
+        list.arc(head_x - 2.0f, head_y - 6.0f, 21.0f, 7.0f, -1.8f, 2.4f, Color::rgb(0x1a1a1a));
+
+        // Ceja gruesa oruga de Shin-chan
+        list.arc(head_x + 6.0f, head_y - 4.0f, 8.0f, 3.8f, -0.7f, 1.5f, Color::rgb(0x1a1a1a));
+
+        // Ojo picaro mirando al usuario
+        list.circle(head_x + 8.0f, head_y + 2.0f, 4.5f, Color::rgb(0x111111));
+        list.circle(head_x + 10.0f, head_y, 1.8f, Color::rgb(0xffffff));
+
+        // Sonrisa traviesa
+        list.arc(head_x + 12.0f, head_y + 10.0f, 5.0f, 2.0f, 0.5f, 2.0f, Color::rgb(0x8a1515));
+
+        // Bocadillo comico con ritmo: "Buri Buri ~"
+        const Rect bubble{cx - 52.0f, cy - 128.0f + bounce * 0.5f, 104.0f, 26.0f};
+        list.rounded_rect(bubble, 13.0f, Color::rgb(0x0e1c36).with_alpha(0.92f));
+        paint.stroke(bubble, 13.0f, 1.2f, Color::rgb(0x76d6ff).with_alpha(0.6f));
+        list.line(bubble.cx() - 6.0f, bubble.y + bubble.h, bubble.cx() - 14.0f, bubble.y + bubble.h + 8.0f,
+                  2.0f, Color::rgb(0x76d6ff).with_alpha(0.6f));
+        paint.label("Buri Buri ~", bubble.cx(), bubble.cy() + 5.0f, 14.0f,
+                    Color::rgb(0x76d6ff), gfx::Align::center);
+    }
+    else if (state == ShinchanState::Success)
+    {
+        // Celebracion festiva de victoria con cartel y checkmark verde
+        const float hop = std::abs(std::sin(clock * 6.0f)) * 10.0f;
+
+        list.shadow({cx - 36.0f, cy - 2.0f, 72.0f, 14.0f}, 7.0f, 6.0f,
+                    Color::rgb(0x000000).with_alpha(0.45f));
+
+        // Piernas saltando
+        list.line(cx - 14.0f, cy - 22.0f - hop, cx - 18.0f, cy - hop, 7.0f, Color::rgb(0xffdfc4));
+        list.line(cx + 14.0f, cy - 22.0f - hop, cx + 18.0f, cy - hop, 7.0f, Color::rgb(0xffdfc4));
+        list.rounded_rect({cx - 24.0f, cy - 5.0f - hop, 12.0f, 6.0f}, 3.0f, Color::rgb(0xffffff));
+        list.rounded_rect({cx - 25.0f, cy - 2.0f - hop, 14.0f, 5.0f}, 2.5f, Color::rgb(0x00b0ff));
+        list.rounded_rect({cx + 12.0f, cy - 5.0f - hop, 12.0f, 6.0f}, 3.0f, Color::rgb(0xffffff));
+        list.rounded_rect({cx + 11.0f, cy - 2.0f - hop, 14.0f, 5.0f}, 2.5f, Color::rgb(0x00b0ff));
+
+        // Pantalones amarillos
+        list.rounded_rect({cx - 22.0f, cy - 38.0f - hop, 44.0f, 18.0f}, 7.0f, Color::rgb(0xffd600));
+
+        // Camiseta roja
+        list.rounded_rect({cx - 24.0f, cy - 68.0f - hop, 48.0f, 34.0f}, 10.0f, Color::rgb(0xe53935));
+
+        // Brazos en alto sosteniendo el cartel de victoria
+        list.line(cx - 20.0f, cy - 58.0f - hop, cx - 28.0f, cy - 90.0f - hop, 6.0f, Color::rgb(0xe53935));
+        list.circle(cx - 28.0f, cy - 92.0f - hop, 5.0f, Color::rgb(0xffdfc4));
+        list.line(cx + 20.0f, cy - 58.0f - hop, cx + 28.0f, cy - 90.0f - hop, 6.0f, Color::rgb(0xe53935));
+        list.circle(cx + 28.0f, cy - 92.0f - hop, 5.0f, Color::rgb(0xffdfc4));
+
+        // Cabeza frontal feliz
+        const float head_y = cy - 88.0f - hop;
+        list.circle(cx, head_y, 22.0f, Color::rgb(0xffdfc4));
+        list.circle(cx - 15.0f, head_y + 4.0f, 12.0f, Color::rgb(0xffdfc4));
+        list.circle(cx + 15.0f, head_y + 4.0f, 12.0f, Color::rgb(0xffdfc4));
+        list.circle(cx - 14.0f, head_y + 7.0f, 5.5f, Color::rgb(0xff8a80).with_alpha(0.6f));
+        list.circle(cx + 14.0f, head_y + 7.0f, 5.5f, Color::rgb(0xff8a80).with_alpha(0.6f));
+
+        // Pelo
+        list.rounded_rect({cx - 18.0f, head_y - 24.0f, 36.0f, 14.0f}, 7.0f, Color::rgb(0x1a1a1a));
+        list.circle(cx, head_y - 12.0f, 19.0f, Color::rgb(0x1a1a1a));
+
+        // Ojos cerrados de pura felicidad (^ ^)
+        list.arc(cx - 10.0f, head_y - 1.0f, 6.0f, 2.5f, -1.2f, 2.4f, Color::rgb(0x1a1a1a));
+        list.arc(cx + 10.0f, head_y - 1.0f, 6.0f, 2.5f, -1.2f, 2.4f, Color::rgb(0x1a1a1a));
+
+        // Cejas alzadas festivas
+        list.arc(cx - 10.0f, head_y - 9.0f, 8.0f, 3.5f, -1.0f, 2.0f, Color::rgb(0x1a1a1a));
+        list.arc(cx + 10.0f, head_y - 9.0f, 8.0f, 3.5f, -1.0f, 2.0f, Color::rgb(0x1a1a1a));
+
+        // Boca abierta sonriente
+        list.circle(cx, head_y + 9.0f, 8.0f, Color::rgb(0x8a1515));
+        list.circle(cx, head_y + 11.0f, 5.0f, Color::rgb(0xff6f7d));
+
+        // Cartel sostenido con checkmark verde
+        const Rect sign{cx - 56.0f, cy - 148.0f - hop, 112.0f, 48.0f};
+        list.rounded_rect(sign, 10.0f, Color::rgb(0x0a2d1f).with_alpha(0.95f));
+        paint.stroke(sign, 10.0f, 1.8f, Color::rgb(0x38ef7d));
+
+        // Circulo con checkmark verde
+        list.circle(sign.x + 24.0f, sign.cy(), 13.0f, Color::rgb(0x144d2d));
+        list.line(sign.x + 17.0f, sign.cy(), sign.x + 22.0f, sign.cy() + 5.0f, 3.0f, Color::rgb(0x38ef7d));
+        list.line(sign.x + 22.0f, sign.cy() + 5.0f, sign.x + 31.0f, sign.cy() - 6.0f, 3.0f, Color::rgb(0x38ef7d));
+
+        const bool is_es = (machete::i18n::current_language() == machete::i18n::Language::Spanish);
+        paint.heading(is_es ? "EXITO" : "DONE", sign.x + 44.0f, sign.cy() + 7.0f, 18.0f, Color::rgb(0x38ef7d));
+
+        // Estrellas de victoria orbitando
+        list.star(cx - 62.0f, cy - 120.0f - hop, 7.0f, Color::rgb(0xffd700));
+        list.star(cx + 62.0f, cy - 120.0f - hop, 7.0f, Color::rgb(0xffd700));
+        list.star(cx - 40.0f, cy - 165.0f - hop, 5.0f, Color::rgb(0xffeb3b));
+        list.star(cx + 40.0f, cy - 165.0f - hop, 5.0f, Color::rgb(0xffeb3b));
+    }
+    else if (state == ShinchanState::Error)
+    {
+        // Llanto desconsolado con lagrimas azules animadas y cartel con X roja
+        const float shake = std::sin(clock * 22.0f) * 2.5f;
+
+        list.shadow({cx - 36.0f, cy - 2.0f, 72.0f, 14.0f}, 7.0f, 6.0f,
+                    Color::rgb(0x000000).with_alpha(0.45f));
+        // Charco de lagrimas en el suelo
+        list.rounded_rect({cx - 34.0f, cy + 2.0f, 68.0f, 6.0f}, 3.0f,
+                          Color::rgb(0x29b6f6).with_alpha(0.55f));
+
+        // Piernas
+        list.line(cx - 14.0f, cy - 22.0f, cx - 18.0f, cy, 7.0f, Color::rgb(0xffdfc4));
+        list.line(cx + 14.0f, cy - 22.0f, cx + 18.0f, cy, 7.0f, Color::rgb(0xffdfc4));
+        list.rounded_rect({cx - 24.0f, cy - 5.0f, 12.0f, 6.0f}, 3.0f, Color::rgb(0xffffff));
+        list.rounded_rect({cx - 25.0f, cy - 2.0f, 14.0f, 5.0f}, 2.5f, Color::rgb(0x00b0ff));
+        list.rounded_rect({cx + 12.0f, cy - 5.0f, 12.0f, 6.0f}, 3.0f, Color::rgb(0xffffff));
+        list.rounded_rect({cx + 11.0f, cy - 2.0f, 14.0f, 5.0f}, 2.5f, Color::rgb(0x00b0ff));
+
+        // Pantalones amarillos
+        list.rounded_rect({cx - 22.0f + shake, cy - 38.0f, 44.0f, 18.0f}, 7.0f, Color::rgb(0xffd600));
+
+        // Camiseta roja
+        list.rounded_rect({cx - 24.0f + shake, cy - 68.0f, 48.0f, 34.0f}, 10.0f, Color::rgb(0xe53935));
+
+        // Brazos abatidos sosteniendo el cartel
+        list.line(cx - 20.0f + shake, cy - 58.0f, cx - 28.0f, cy - 90.0f, 6.0f, Color::rgb(0xe53935));
+        list.circle(cx - 28.0f, cy - 92.0f, 5.0f, Color::rgb(0xffdfc4));
+        list.line(cx + 20.0f + shake, cy - 58.0f, cx + 28.0f, cy - 90.0f, 6.0f, Color::rgb(0xe53935));
+        list.circle(cx + 28.0f, cy - 92.0f, 5.0f, Color::rgb(0xffdfc4));
+
+        // Cabeza
+        const float head_y = cy - 88.0f;
+        list.circle(cx + shake, head_y, 22.0f, Color::rgb(0xffdfc4));
+        list.circle(cx - 15.0f + shake, head_y + 4.0f, 12.0f, Color::rgb(0xffdfc4));
+        list.circle(cx + 15.0f + shake, head_y + 4.0f, 12.0f, Color::rgb(0xffdfc4));
+
+        // Pelo
+        list.rounded_rect({cx - 18.0f + shake, head_y - 24.0f, 36.0f, 14.0f}, 7.0f, Color::rgb(0x1a1a1a));
+        list.circle(cx + shake, head_y - 12.0f, 19.0f, Color::rgb(0x1a1a1a));
+
+        // Cejas inclinadas temblorosas (\ /)
+        list.line(cx - 18.0f + shake, head_y - 10.0f, cx - 6.0f + shake, head_y - 6.0f,
+                  3.5f, Color::rgb(0x1a1a1a));
+        list.line(cx + 18.0f + shake, head_y - 10.0f, cx + 6.0f + shake, head_y - 6.0f,
+                  3.5f, Color::rgb(0x1a1a1a));
+
+        // Ojos llorosos apretados
+        list.arc(cx - 11.0f + shake, head_y - 1.0f, 6.0f, 2.5f, 0.2f, 2.7f, Color::rgb(0x1a1a1a));
+        list.arc(cx + 11.0f + shake, head_y - 1.0f, 6.0f, 2.5f, 0.2f, 2.7f, Color::rgb(0x1a1a1a));
+
+        // Cascadas de lagrimas azules animadas estilo anime
+        const float tear_flow = std::fmod(clock * 140.0f, 45.0f);
+        // Cascada izquierda
+        list.line(cx - 12.0f, head_y, cx - 28.0f, cy - 10.0f, 4.0f,
+                  Color::rgb(0x29b6f6).with_alpha(0.8f));
+        list.line(cx - 10.0f, head_y + 2.0f, cx - 24.0f, cy - 12.0f, 2.5f, Color::rgb(0x81d4fa));
+        list.circle(cx - 20.0f, head_y + tear_flow, 4.0f, Color::rgb(0x81d4fa));
+        // Cascada derecha
+        list.line(cx + 12.0f, head_y, cx + 28.0f, cy - 10.0f, 4.0f,
+                  Color::rgb(0x29b6f6).with_alpha(0.8f));
+        list.line(cx + 10.0f, head_y + 2.0f, cx + 24.0f, cy - 12.0f, 2.5f, Color::rgb(0x81d4fa));
+        list.circle(cx + 20.0f, head_y + tear_flow, 4.0f, Color::rgb(0x81d4fa));
+
+        // Boca temblorosa en arco invertido
+        list.arc(cx + shake, head_y + 11.0f, 8.0f, 3.0f, 2.4f, 1.8f, Color::rgb(0x3a0d12));
+
+        // Cartel sostenido con X roja
+        const Rect sign{cx - 56.0f, cy - 148.0f, 112.0f, 48.0f};
+        list.rounded_rect(sign, 10.0f, Color::rgb(0x331014).with_alpha(0.95f));
+        paint.stroke(sign, 10.0f, 1.8f, Color::rgb(0xff4455));
+
+        // Circulo con X roja
+        list.circle(sign.x + 24.0f, sign.cy(), 13.0f, Color::rgb(0x5a181e));
+        list.line(sign.x + 18.0f, sign.cy() - 6.0f, sign.x + 30.0f, sign.cy() + 6.0f, 3.0f, Color::rgb(0xff4455));
+        list.line(sign.x + 30.0f, sign.cy() - 6.0f, sign.x + 18.0f, sign.cy() + 6.0f, 3.0f, Color::rgb(0xff4455));
+
+        const bool is_es = (machete::i18n::current_language() == machete::i18n::Language::Spanish);
+        paint.heading(is_es ? "FALLO" : "ERROR", sign.x + 44.0f, sign.cy() + 7.0f, 18.0f, Color::rgb(0xff4455));
+    }
+
+    list.pop_opacity();
+}
+
 class Machete final : public app::Concept
 {
   public:
     explicit Machete(app::Context &context) : context_(context)
     {
         machete::i18n::init();
+        current_tab_ = GameTab::PS5;
         focus_ = kGame0;
         selected_game_ = 0;
+        tab_indicator_.snap(0.0f);
         focus_amount_[kGame0].snap(1.0f);
         op_progress_bar_.snap(0.0f);
         op_overlay_show_.snap(0.0f);
@@ -165,6 +450,11 @@ class Machete final : public app::Concept
         operation_result_ready_.store(false);
         op_type_ = OperationType::Backup;
 
+        // Activar animacion comica de Shin-chan durante la copia
+        shinchan_state_ = ShinchanState::Dancing;
+        shinchan_opacity_ = 1.0f;
+        shinchan_timer_ = 0.0f;
+
         const bool is_es = (machete::i18n::current_language() == machete::i18n::Language::Spanish);
         {
             std::lock_guard<std::mutex> lock(op_mutex_);
@@ -226,6 +516,11 @@ class Machete final : public app::Concept
         operation_result_ready_.store(false);
         op_type_ = OperationType::Restore;
 
+        // Activar animacion comica de Shin-chan durante la restauracion
+        shinchan_state_ = ShinchanState::Dancing;
+        shinchan_opacity_ = 1.0f;
+        shinchan_timer_ = 0.0f;
+
         const bool is_es = (machete::i18n::current_language() == machete::i18n::Language::Spanish);
         {
             std::lock_guard<std::mutex> lock(op_mutex_);
@@ -274,6 +569,70 @@ class Machete final : public app::Concept
             is_operating_.store(false);
             MACHETE_BREADCRUMB("op_thread: restore_backup_item done");
         });
+    }
+
+    std::vector<int> get_filtered_game_indices() const
+    {
+        std::vector<int> indices;
+        indices.reserve(games_.size());
+        for (int i = 0; i < static_cast<int>(games_.size()); ++i)
+        {
+            const auto &g = games_[static_cast<std::size_t>(i)];
+            if (current_tab_ == GameTab::PS5 && g.platform != "PS5")
+                continue;
+            if (current_tab_ == GameTab::PS4 && g.platform != "PS4")
+                continue;
+            indices.push_back(i);
+        }
+        return indices;
+    }
+
+    void get_tab_counts(int &ps5_count, int &ps4_count, int &all_count) const
+    {
+        ps5_count = 0;
+        ps4_count = 0;
+        all_count = static_cast<int>(games_.size());
+        for (const auto &g : games_)
+        {
+            if (g.platform == "PS5")
+                ps5_count++;
+            else if (g.platform == "PS4")
+                ps4_count++;
+        }
+    }
+
+    const machete::scanner::ScannedGame *current_selected_game() const
+    {
+        const auto filtered = get_filtered_game_indices();
+        if (filtered.empty() || selected_game_ < 0 || selected_game_ >= static_cast<int>(filtered.size()))
+            return nullptr;
+        return &games_[static_cast<std::size_t>(filtered[static_cast<std::size_t>(selected_game_)])];
+    }
+
+    void switch_tab(GameTab tab, app::Feedback &feedback)
+    {
+        if (current_tab_ == tab)
+            return;
+        current_tab_ = tab;
+        selected_game_ = 0;
+        scroll_offset_ = 0;
+        tab_indicator_.target = static_cast<float>(current_tab_);
+        feedback.play(audio::Cue::tab, 1.0f, 0.0f);
+
+        const auto filtered = get_filtered_game_indices();
+        if (focus_ >= kGame0 && focus_ <= kGame4)
+        {
+            if (filtered.empty())
+            {
+                const Item target_tab = (tab == GameTab::PS5) ? kTabPS5 :
+                                        ((tab == GameTab::PS4) ? kTabPS4 : kTabAll);
+                move_to(target_tab, feedback);
+            }
+            else
+            {
+                move_to(kGame0, feedback);
+            }
+        }
     }
 
     void start_async_jailbreak()
@@ -365,8 +724,17 @@ class Machete final : public app::Concept
         }
         else
         {
-            selected_game_ = std::clamp(selected_game_, 0, static_cast<int>(games_.size()) - 1);
-            adjust_scroll();
+            const auto filtered = get_filtered_game_indices();
+            if (filtered.empty())
+            {
+                selected_game_ = 0;
+                scroll_offset_ = 0;
+            }
+            else
+            {
+                selected_game_ = std::clamp(selected_game_, 0, static_cast<int>(filtered.size()) - 1);
+                adjust_scroll();
+            }
         }
         MACHETE_LOG("[SCANNER]", "scan completed with %zu games detected", games_.size());
         MACHETE_BREADCRUMB("refresh_games: completed");
@@ -454,6 +822,18 @@ class Machete final : public app::Concept
                 refresh_games();
             }
 
+            // Actualización del estado del personaje animado (Shin-chan festeja o llora)
+            if (res.success)
+            {
+                shinchan_state_ = ShinchanState::Success;
+            }
+            else
+            {
+                shinchan_state_ = ShinchanState::Error;
+            }
+            shinchan_opacity_ = 1.0f;
+            shinchan_timer_ = 6.0f; // 6 segundos de celebracion / aviso comico
+
             const bool is_es = (machete::i18n::current_language() == machete::i18n::Language::Spanish);
             if (!res.success || res.message.size() > 45)
             {
@@ -486,11 +866,50 @@ class Machete final : public app::Concept
                 op_spinner_angle_ -= 360.0f;
         }
 
+        // Actualización continua de Shin-chan y temporizador suave de desvanecimiento (fade-out)
+        if (operating)
+        {
+            shinchan_state_ = ShinchanState::Dancing;
+            shinchan_timer_ = 0.0f;
+            shinchan_opacity_ = std::min(1.0f, shinchan_opacity_ + dt * 4.0f);
+        }
+        else if (shinchan_state_ == ShinchanState::Success || shinchan_state_ == ShinchanState::Error)
+        {
+            if (shinchan_timer_ > 0.0f)
+            {
+                shinchan_timer_ -= dt;
+                if (shinchan_timer_ <= 1.5f)
+                {
+                    shinchan_opacity_ = std::max(0.0f, shinchan_timer_ / 1.5f);
+                }
+                if (shinchan_timer_ <= 0.0f)
+                {
+                    shinchan_state_ = ShinchanState::Hidden;
+                    shinchan_opacity_ = 0.0f;
+                }
+            }
+        }
+
+        // Actualizacion fisica del indicador de pestaña activa
+        tab_indicator_.target = static_cast<float>(current_tab_);
+        tab_indicator_.update(dt, 26.0f);
+
         const ui::Theme &theme = ui::themes()[static_cast<std::size_t>(theme_)];
         const int count = static_cast<int>(ui::themes().size());
 
+        // L1 / R1: Conmutar pestañas de plataforma (PS5 / PS4 / TODOS)
+        if (input.is_pressed(Action::page_prev))
+        {
+            const int next_tab = (static_cast<int>(current_tab_) + 2) % 3;
+            switch_tab(static_cast<GameTab>(next_tab), feedback);
+        }
+        else if (input.is_pressed(Action::page_next))
+        {
+            const int next_tab = (static_cast<int>(current_tab_) + 1) % 3;
+            switch_tab(static_cast<GameTab>(next_tab), feedback);
+        }
         // L2 / R2: Cambio de tema en tiempo real
-        if (input.is_pressed(Action::jump_next) || input.is_pressed(Action::jump_prev))
+        else if (input.is_pressed(Action::jump_next) || input.is_pressed(Action::jump_prev))
         {
             previous_theme_ = theme_;
             theme_ = (theme_ + (input.is_pressed(Action::jump_next) ? 1 : count - 1)) % count;
@@ -619,7 +1038,8 @@ class Machete final : public app::Concept
   private:
     void adjust_scroll()
     {
-        const int total = static_cast<int>(games_.size());
+        const auto filtered = get_filtered_game_indices();
+        const int total = static_cast<int>(filtered.size());
         if (total <= 5)
         {
             scroll_offset_ = 0;
@@ -634,10 +1054,53 @@ class Machete final : public app::Concept
 
     void update_navigation(const InputFrame &input, app::Feedback &feedback)
     {
-        const int total_games = static_cast<int>(games_.size());
+        const auto filtered = get_filtered_game_indices();
+        const int total_games = static_cast<int>(filtered.size());
 
-        // Navegación en el Panel Izquierdo (Lista de Juegos)
-        if (focus_ >= kGame0 && focus_ <= kGame4)
+        // Navegación en las Pestañas Superiores (PS5, PS4, TODOS)
+        if (focus_ >= kTabPS5 && focus_ <= kTabAll)
+        {
+            if (input.nav == Direction::right)
+            {
+                if (focus_ == kTabPS5)
+                    move_to(kTabPS4, feedback);
+                else if (focus_ == kTabPS4)
+                    move_to(kTabAll, feedback);
+                else
+                    move_to(kBtnBackup, feedback);
+            }
+            else if (input.nav == Direction::left)
+            {
+                if (focus_ == kTabAll)
+                    move_to(kTabPS4, feedback);
+                else if (focus_ == kTabPS4)
+                    move_to(kTabPS5, feedback);
+                else
+                    refuse(feedback, input);
+            }
+            else if (input.nav == Direction::down)
+            {
+                if (total_games > 0)
+                {
+                    const int visible_idx = std::clamp(selected_game_ - scroll_offset_, 0, std::min(4, total_games - 1));
+                    move_to(kGame0 + visible_idx, feedback);
+                }
+                else
+                {
+                    move_to(kBtnBackup, feedback);
+                }
+            }
+            else if (input.nav == Direction::up)
+            {
+                move_to(kBtnWebServerHeader, feedback);
+            }
+            else
+            {
+                refuse(feedback, input);
+            }
+        }
+        // Navegación en la Lista de Juegos
+        else if (focus_ >= kGame0 && focus_ <= kGame4)
         {
             if (input.nav == Direction::down)
             {
@@ -664,8 +1127,10 @@ class Machete final : public app::Concept
                 }
                 else
                 {
-                    // Subir a la cabecera (Servidor Web)
-                    move_to(kBtnWebServerHeader, feedback);
+                    // Subir a la pestaña actualmente seleccionada
+                    const Item target_tab = (current_tab_ == GameTab::PS5) ? kTabPS5 :
+                                            ((current_tab_ == GameTab::PS4) ? kTabPS4 : kTabAll);
+                    move_to(target_tab, feedback);
                 }
             }
             else if (input.nav == Direction::right)
@@ -686,8 +1151,9 @@ class Machete final : public app::Concept
             }
             else if (input.nav == Direction::left)
             {
-                const int visible_idx = std::clamp(selected_game_ - scroll_offset_, 0, 4);
-                move_to(kGame0 + visible_idx, feedback);
+                const Item target_tab = (current_tab_ == GameTab::PS5) ? kTabPS5 :
+                                        ((current_tab_ == GameTab::PS4) ? kTabPS4 : kTabAll);
+                move_to(target_tab, feedback);
             }
             else
             {
@@ -699,8 +1165,17 @@ class Machete final : public app::Concept
         {
             if (input.nav == Direction::left)
             {
-                const int visible_idx = std::clamp(selected_game_ - scroll_offset_, 0, 4);
-                move_to(kGame0 + visible_idx, feedback);
+                if (total_games == 0)
+                {
+                    const Item target_tab = (current_tab_ == GameTab::PS5) ? kTabPS5 :
+                                            ((current_tab_ == GameTab::PS4) ? kTabPS4 : kTabAll);
+                    move_to(target_tab, feedback);
+                }
+                else
+                {
+                    const int visible_idx = std::clamp(selected_game_ - scroll_offset_, 0, std::min(4, total_games - 1));
+                    move_to(kGame0 + visible_idx, feedback);
+                }
             }
             else if (focus_ == kBtnBackup)
             {
@@ -761,13 +1236,26 @@ class Machete final : public app::Concept
 
         press_[focus_].trigger();
 
-        if (focus_ >= kGame0 && focus_ <= kGame4)
+        if (focus_ == kTabPS5)
+        {
+            switch_tab(GameTab::PS5, feedback);
+        }
+        else if (focus_ == kTabPS4)
+        {
+            switch_tab(GameTab::PS4, feedback);
+        }
+        else if (focus_ == kTabAll)
+        {
+            switch_tab(GameTab::All, feedback);
+        }
+        else if (focus_ >= kGame0 && focus_ <= kGame4)
         {
             feedback.play(audio::Cue::select, 1.0f, ui::pan_for_x(kRects[focus_].cx()));
         }
         else if (focus_ == kBtnBackup)
         {
-            if (games_.empty())
+            const auto *game = current_selected_game();
+            if (!game)
                 return;
             machete::storage::ensure_internal_storage();
             active_devices_ = machete::storage::scan_storage_devices();
@@ -778,13 +1266,13 @@ class Machete final : public app::Concept
         }
         else if (focus_ == kBtnRestore)
         {
-            if (games_.empty())
+            const auto *game = current_selected_game();
+            if (!game)
                 return;
             machete::storage::ensure_internal_storage();
             active_devices_ = machete::storage::scan_storage_devices();
-            const auto &game = games_[static_cast<std::size_t>(selected_game_)];
             MACHETE_BREADCRUMB("machete: find_available_backups");
-            available_backups_ = machete::save::find_available_backups(game, active_devices_);
+            available_backups_ = machete::save::find_available_backups(*game, active_devices_);
             dialog_is_backup_ = false;
             dialog_ = true;
             dialog_focus_ = 0;
@@ -980,9 +1468,12 @@ class Machete final : public app::Concept
                 dialog_ = false;
                 feedback.play(audio::Cue::modal_close, 1.0f, 0.0f);
             }
-            else if (dialog_focus_ >= 0 && dialog_focus_ < opt_count && !games_.empty())
+            else if (dialog_focus_ >= 0 && dialog_focus_ < opt_count)
             {
-                const auto &game = games_[static_cast<std::size_t>(selected_game_)];
+                const auto *game_ptr = current_selected_game();
+                if (!game_ptr)
+                    return;
+                const auto &game = *game_ptr;
                 auto &dev = active_devices_[static_cast<std::size_t>(dialog_focus_)];
 
                 if (is_operating_.load())
@@ -1049,7 +1540,7 @@ class Machete final : public app::Concept
                     dialog_ = false;
                     feedback.play(audio::Cue::modal_close, 1.0f, 0.0f);
                 }
-                else if (dialog_focus_ >= 0 && dialog_focus_ < opt_count && !games_.empty())
+                else if (dialog_focus_ >= 0 && dialog_focus_ < opt_count)
                 {
                     if (is_operating_.load())
                     {
@@ -1057,7 +1548,10 @@ class Machete final : public app::Concept
                         return;
                     }
 
-                    const auto &game = games_[static_cast<std::size_t>(selected_game_)];
+                    const auto *game_ptr = current_selected_game();
+                    if (!game_ptr)
+                        return;
+                    const auto &game = *game_ptr;
                     const auto &backup = available_backups_[static_cast<std::size_t>(dialog_focus_)];
 
                     dialog_ = false;
@@ -1115,6 +1609,16 @@ class Machete final : public app::Concept
         paint.heading(machete::i18n::tr(machete::i18n::StringId::AppTitle), 172, 138, 44, paint.page_text());
         paint.label(machete::i18n::tr(machete::i18n::StringId::AppSubtitle), 174, 166, 17, paint.page_text_muted());
 
+        // Badge de Versión y Build (Estilo Cyber-Pill Liquid Glass)
+        char ver_str[64];
+        std::snprintf(ver_str, sizeof(ver_str), "v%s (Build #%s)",
+                      machete::build::kAppVersion, machete::build::kBuildNumber);
+        const Rect ver_chip{940, 108, 226, 44};
+        list.rounded_rect(ver_chip, 22.0f, Color::rgb(0x132242).with_alpha(0.8f));
+        paint.stroke(ver_chip, 22.0f, 1.5f, Color::rgb(0x76d6ff).with_alpha(0.35f));
+        list.circle(ver_chip.x + 22, ver_chip.cy(), 5.0f, Color::rgb(0x76d6ff));
+        paint.body(ver_str, ver_chip.x + 36, ver_chip.cy() + 7, 17, Color::rgb(0x76d6ff));
+
         // Badge de Estado del Jailbreak / Daemon
         const Rect jb_chip{1190, 108, 330, 44};
         const bool is_root = root_active_.load();
@@ -1167,27 +1671,93 @@ class Machete final : public app::Concept
         const Rect left_panel{96, 210, 680, 750};
         paint.panel(left_panel);
 
-        paint.label((machete::i18n::current_language() == machete::i18n::Language::Spanish)
-                        ? "PARTIDAS Y JUEGOS DETECTADOS"
-                        : "DETECTED GAMES & SAVE DATA",
-                    126, 256, 18, theme.text_muted);
-        char count_str[32];
-        std::snprintf(count_str, sizeof(count_str),
-                      machete::i18n::tr(machete::i18n::StringId::GamesCount), games_.size());
-        paint.label(count_str, 736, 256, 18, theme.primary, gfx::Align::right);
+        const bool is_es = (machete::i18n::current_language() == machete::i18n::Language::Spanish);
+        paint.label(is_es ? "PARTIDAS Y JUEGOS DETECTADOS" : "DETECTED GAMES & SAVE DATA",
+                    126, 246, 17, theme.text_muted);
+        paint.label("[L1 / R1]", 736, 246, 15, theme.primary.with_alpha(0.85f), gfx::Align::right);
 
-        const int total_games = static_cast<int>(games_.size());
+        int ps5_count = 0, ps4_count = 0, all_count = 0;
+        get_tab_counts(ps5_count, ps4_count, all_count);
+
+        // Barra / Dock de pestañas con fondo translúcido Liquid Glass
+        const Rect tabs_dock{112, 262, 648, 50};
+        list.rounded_rect(tabs_dock, 12.0f, Color::rgb(0x0c162c).with_alpha(0.7f));
+        paint.stroke(tabs_dock, 12.0f, 1.0f, Color::rgb(0xffffff).with_alpha(0.08f));
+
+        // Indicador deslizante animado (Spring physics) de la pestaña activa
+        const float ind_x = 116.0f + tab_indicator_.value * 216.0f;
+        const Rect slider_rect{ind_x, 266.0f, 206.0f, 42.0f};
+        list.shadow(slider_rect, 10.0f, 8.0f, theme.primary.with_alpha(0.25f));
+        list.rounded_rect(slider_rect, 10.0f, theme.primary.with_alpha(0.22f));
+        paint.stroke(slider_rect, 10.0f, 1.5f, theme.primary.with_alpha(0.75f));
+
+        // Pestaña PS5
+        {
+            const Rect r_ps5 = kRects[kTabPS5];
+            const bool f_ps5 = (focus_ == kTabPS5);
+            const bool act_ps5 = (current_tab_ == GameTab::PS5);
+            if (f_ps5)
+                paint.focus_ring(r_ps5, 10.0f, focus_amount_[kTabPS5].value);
+            paint.body("PS5", r_ps5.x + 24.0f, r_ps5.cy() + 7.0f, 18,
+                       act_ps5 ? theme.text : theme.text_muted);
+            const Rect badge{r_ps5.x + r_ps5.w - 52.0f, r_ps5.cy() - 11.0f, 40.0f, 22.0f};
+            list.rounded_rect(badge, 11.0f, act_ps5 ? theme.primary.with_alpha(0.35f) : Color::rgb(0xffffff).with_alpha(0.08f));
+            char b_str[16];
+            std::snprintf(b_str, sizeof(b_str), "%d", ps5_count);
+            paint.label(b_str, badge.cx(), badge.cy() + 5.0f, 14,
+                        act_ps5 ? theme.primary : theme.text_muted, gfx::Align::center);
+        }
+
+        // Pestaña PS4
+        {
+            const Rect r_ps4 = kRects[kTabPS4];
+            const bool f_ps4 = (focus_ == kTabPS4);
+            const bool act_ps4 = (current_tab_ == GameTab::PS4);
+            if (f_ps4)
+                paint.focus_ring(r_ps4, 10.0f, focus_amount_[kTabPS4].value);
+            paint.body("PS4", r_ps4.x + 24.0f, r_ps4.cy() + 7.0f, 18,
+                       act_ps4 ? theme.text : theme.text_muted);
+            const Rect badge{r_ps4.x + r_ps4.w - 52.0f, r_ps4.cy() - 11.0f, 40.0f, 22.0f};
+            list.rounded_rect(badge, 11.0f, act_ps4 ? theme.primary.with_alpha(0.35f) : Color::rgb(0xffffff).with_alpha(0.08f));
+            char b_str[16];
+            std::snprintf(b_str, sizeof(b_str), "%d", ps4_count);
+            paint.label(b_str, badge.cx(), badge.cy() + 5.0f, 14,
+                        act_ps4 ? theme.primary : theme.text_muted, gfx::Align::center);
+        }
+
+        // Pestaña TODOS
+        {
+            const Rect r_all = kRects[kTabAll];
+            const bool f_all = (focus_ == kTabAll);
+            const bool act_all = (current_tab_ == GameTab::All);
+            if (f_all)
+                paint.focus_ring(r_all, 10.0f, focus_amount_[kTabAll].value);
+            paint.body(is_es ? "TODOS" : "ALL", r_all.x + 20.0f, r_all.cy() + 7.0f, 18,
+                       act_all ? theme.text : theme.text_muted);
+            const Rect badge{r_all.x + r_all.w - 54.0f, r_all.cy() - 11.0f, 42.0f, 22.0f};
+            list.rounded_rect(badge, 11.0f, act_all ? theme.primary.with_alpha(0.35f) : Color::rgb(0xffffff).with_alpha(0.08f));
+            char b_str[16];
+            std::snprintf(b_str, sizeof(b_str), "%d", all_count);
+            paint.label(b_str, badge.cx(), badge.cy() + 5.0f, 14,
+                        act_all ? theme.primary : theme.text_muted, gfx::Align::center);
+        }
+
+        // Lista de juegos filtrados por pestaña activa
+        const auto filtered = get_filtered_game_indices();
+        const int total_games = static_cast<int>(filtered.size());
         if (total_games == 0)
         {
-            const Rect empty_box{126, 320, 620, 160};
+            const Rect empty_box{126, 340, 620, 160};
             list.rounded_rect(empty_box, theme.radius, Color::rgb(0xffffff).with_alpha(0.04f));
             paint.stroke(empty_box, theme.radius, 1.0f, theme.outline);
-            const bool is_es = (machete::i18n::current_language() == machete::i18n::Language::Spanish);
-            paint.heading(is_es ? "No se detectaron juegos instalados"
-                                : "No installed games detected",
-                          empty_box.cx(), empty_box.cy() - 14, 24, theme.text, gfx::Align::center);
-            paint.body(is_es ? "Verifica permisos o presiona Cuadrado para reescanear"
-                             : "Verify permissions or press Square to re-scan",
+            const char *empty_title = (current_tab_ == GameTab::PS5)
+                ? (is_es ? "No se detectaron juegos de PS5" : "No PS5 games detected")
+                : ((current_tab_ == GameTab::PS4)
+                       ? (is_es ? "No se detectaron juegos de PS4" : "No PS4 games detected")
+                       : (is_es ? "No se detectaron juegos instalados" : "No installed games detected"));
+            paint.heading(empty_title, empty_box.cx(), empty_box.cy() - 14, 24, theme.text, gfx::Align::center);
+            paint.body(is_es ? "Usa L1/R1 para cambiar o presiona Cuadrado para reescanear"
+                             : "Use L1/R1 to change tabs or press Square to re-scan",
                        empty_box.cx(), empty_box.cy() + 18, 18, theme.text_muted, gfx::Align::center);
         }
 
@@ -1195,14 +1765,15 @@ class Machete final : public app::Concept
 
         for (int i = 0; i < visible_count; ++i)
         {
-            const int game_idx = scroll_offset_ + i;
-            if (game_idx >= total_games)
+            const int filtered_idx = scroll_offset_ + i;
+            if (filtered_idx >= total_games)
                 break;
 
-            const auto &game = games_[static_cast<std::size_t>(game_idx)];
+            const int real_game_idx = filtered[static_cast<std::size_t>(filtered_idx)];
+            const auto &game = games_[static_cast<std::size_t>(real_game_idx)];
             const Rect r = kRects[kGame0 + i];
             const bool is_focused = (focus_ == kGame0 + i);
-            const bool is_selected = (selected_game_ == game_idx);
+            const bool is_selected = (selected_game_ == filtered_idx);
 
             // Fondo de la fila
             if (is_focused)
@@ -1261,11 +1832,10 @@ class Machete final : public app::Concept
         const Rect right_panel{806, 210, 1018, 750};
         paint.panel(right_panel);
 
-        if (!games_.empty())
+        const auto *current_game_ptr = current_selected_game();
+        if (current_game_ptr != nullptr)
         {
-            const std::size_t safe_idx = static_cast<std::size_t>(
-                std::clamp(selected_game_, 0, static_cast<int>(games_.size()) - 1));
-            const auto &current_game = games_[safe_idx];
+            const auto &current_game = *current_game_ptr;
 
             // Carátula / Icono grande (196x196)
             const Rect big_cover{836, 256, 196, 196};
@@ -1590,10 +2160,11 @@ class Machete final : public app::Concept
             const Rect dlg{460, 190, 1000, 700};
             paint.panel(dlg);
 
-            const std::string curr_title = !games_.empty()
-                ? (!games_[static_cast<std::size_t>(selected_game_)].title.empty()
-                       ? games_[static_cast<std::size_t>(selected_game_)].title
-                       : games_[static_cast<std::size_t>(selected_game_)].title_id)
+            const auto *curr_game_ptr = current_selected_game();
+            const std::string curr_title = (curr_game_ptr != nullptr)
+                ? (!curr_game_ptr->title.empty()
+                       ? curr_game_ptr->title
+                       : curr_game_ptr->title_id)
                 : "";
 
             if (dialog_is_backup_)
@@ -1651,7 +2222,7 @@ class Machete final : public app::Concept
             else
             {
                 // CABECERA MODAL RESTAURACION
-                const bool is_ps4_curr = !games_.empty() && (games_[static_cast<std::size_t>(selected_game_)].platform == "PS4");
+                const bool is_ps4_curr = (curr_game_ptr != nullptr) && (curr_game_ptr->platform == "PS4");
                 paint.heading(is_ps4_curr
                                   ? (is_es ? "RESTAURAR Y RESIGNAR (MODO APOLLO PS4)" : "RESTORE & RESIGN (APOLLO PS4 MODE)")
                                   : (is_es ? "RESTAURAR COPIA DE SEGURIDAD" : "RESTORE SAVE BACKUP"),
@@ -1690,11 +2261,11 @@ class Machete final : public app::Concept
                 else
                 {
                     // LISTA DE COPIAS DISPONIBLES
-                    const bool has_curr = !games_.empty();
-                    const bool is_ps4_restore = has_curr && (games_[static_cast<std::size_t>(selected_game_)].platform == "PS4");
+                    const bool has_curr = (curr_game_ptr != nullptr);
+                    const bool is_ps4_restore = has_curr && (curr_game_ptr->platform == "PS4");
                     const bool has_dummy_restore = is_ps4_restore ||
-                        (has_curr && (games_[static_cast<std::size_t>(selected_game_)].has_save_dummy ||
-                                      !games_[static_cast<std::size_t>(selected_game_)].save_path.empty()));
+                        (has_curr && (curr_game_ptr->has_save_dummy ||
+                                      !curr_game_ptr->save_path.empty()));
                     const char *guide_line = is_ps4_restore
                         ? (is_es ? "Modo Apollo PS4: Resigna Account ID, PSID y Keystone automaticamente al restaurar."
                                  : "Apollo PS4 Mode: Automatically resigns Account ID, PSID and Keystone on restore.")
@@ -1902,10 +2473,20 @@ class Machete final : public app::Concept
         }
 
         // ==========================================
-        // 6. TECLAS Y CONTROLES DUALSENSE
+        // 5.9. PERSONAJE ANIMADO CHIBI ESTILO ANIME (SHIN-CHAN)
+        // ==========================================
+        if (shinchan_opacity_ > 0.005f)
+        {
+            draw_shinchan_character(list, paint, 1710.0f, 905.0f, clock_,
+                                    shinchan_opacity_, shinchan_state_);
+        }
+
+        // ==========================================
+        // 6. TECLAS Y CONTROLES DUALSENSE Y PIE DE PAGINA
         // ==========================================
         const ui::GlyphStyle glyphs = theme.dark ? ui::GlyphStyle::dark() : ui::GlyphStyle::light();
         const ui::Hint hints[] = {
+            {ui::Button::l1, is_es ? "Pestañas" : "Tabs", ui::Button::r1},
             {ui::Button::l2, machete::i18n::tr(machete::i18n::StringId::HintTheme), ui::Button::r2},
             {ui::Button::dpad, machete::i18n::tr(machete::i18n::StringId::HintNavigate)},
             {ui::Button::cross, machete::i18n::tr(machete::i18n::StringId::LegendSelect)},
@@ -1916,7 +2497,13 @@ class Machete final : public app::Concept
         };
         ui::HintLayout layout;
         layout.cy = 1018.0f;
-        ui::draw_hints(list, fonts, glyphs, hints, 7, 96, false, layout);
+        ui::draw_hints(list, fonts, glyphs, hints, 8, 96, false, layout);
+
+        // Marca de agua de Versión y Build en el pie de página
+        char footer_build[64];
+        std::snprintf(footer_build, sizeof(footer_build), "MacheteSVG v%s (Build #%s)",
+                      machete::build::kAppVersion, machete::build::kBuildNumber);
+        paint.label(footer_build, 1824.0f, 1018.0f, 15, theme.text_muted.with_alpha(0.6f), gfx::Align::right);
 
         list.pop_transform();
         list.pop_opacity();
@@ -1938,6 +2525,12 @@ class Machete final : public app::Concept
     int focus_ = 0;
     int selected_game_ = 0;
     int scroll_offset_ = 0;
+
+    GameTab current_tab_ = GameTab::PS5;
+    tween::Spring tab_indicator_;
+    ShinchanState shinchan_state_{ShinchanState::Hidden};
+    float shinchan_opacity_{0.0f};
+    float shinchan_timer_{0.0f};
 
     std::array<tween::Spring, kItemCount> focus_amount_;
     std::array<ui::Pulse, kItemCount> press_;

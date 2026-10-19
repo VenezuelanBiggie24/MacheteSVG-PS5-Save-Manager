@@ -710,20 +710,59 @@ void reconstruct_prospero_metadata(const std::string &title_id,
             copy_file_with_fsync(found_param_json, dst_target + "/param.json", b, 0, fc, nullptr, target_uid, target_gid);
         }
 
-        // Actualizar tamano de slot en param.json segun los contenedores reales
-        ScopedDir dir_j(dst_target);
-        if (dir_j.is_valid())
+        // 1. Identificar el slot primario para param.json (preferir PROFILE, luego AUTOSAVE0, o la primera ranura valida)
+        std::string primary_slot_file = dst_target + "/sdimg_PROFILE";
+        struct stat st_sd{};
+        if (stat(primary_slot_file.c_str(), &st_sd) != 0 || st_sd.st_size <= 0)
         {
-            while (const dirent *ent = readdir(dir_j.get()))
+            primary_slot_file = dst_target + "/sdimg_AUTOSAVE0";
+            if (stat(primary_slot_file.c_str(), &st_sd) != 0 || st_sd.st_size <= 0)
+            {
+                ScopedDir dir_j(dst_target);
+                if (dir_j.is_valid())
+                {
+                    while (const dirent *ent = readdir(dir_j.get()))
+                    {
+                        if (std::strncmp(ent->d_name, "sdimg_", 6) == 0 && std::strncmp(ent->d_name, "sdimg_sce_bu_", 13) != 0)
+                        {
+                            if (stat((dst_target + "/" + ent->d_name).c_str(), &st_sd) == 0 && st_sd.st_size > 0)
+                            {
+                                primary_slot_file = dst_target + "/" + ent->d_name;
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        if (st_sd.st_size > 0)
+        {
+            machete::pfs::update_ps5_param_json_size(meta_target + "/param.json", static_cast<std::uint64_t>(st_sd.st_size));
+            machete::pfs::update_ps5_param_json_size(dst_target + "/sce_sys/param.json", static_cast<std::uint64_t>(st_sd.st_size));
+            machete::pfs::update_ps5_param_json_size(dst_target + "/param.json", static_cast<std::uint64_t>(st_sd.st_size));
+        }
+
+        // 2. Actualizar titleId dentro de param.json para coincidir exactamente con este SKU (fundamental en SKUs emparejados)
+        machete::pfs::update_ps5_param_json_title_id(meta_target + "/param.json", title_id);
+        machete::pfs::update_ps5_param_json_title_id(dst_target + "/sce_sys/param.json", title_id);
+        machete::pfs::update_ps5_param_json_title_id(dst_target + "/param.json", title_id);
+
+        // 3. Actualizar descriptores individuales <slot>.json para cada slot en meta_target y dst_target/sce_sys
+        ScopedDir dir_slots(dst_target);
+        if (dir_slots.is_valid())
+        {
+            while (const dirent *ent = readdir(dir_slots.get()))
             {
                 if (std::strncmp(ent->d_name, "sdimg_", 6) == 0 && std::strncmp(ent->d_name, "sdimg_sce_bu_", 13) != 0)
                 {
-                    struct stat st_sd{};
-                    if (stat((dst_target + "/" + ent->d_name).c_str(), &st_sd) == 0 && st_sd.st_size > 0)
+                    const std::string slot_name = ent->d_name + 6;
+                    struct stat st_slot{};
+                    if (stat((dst_target + "/" + ent->d_name).c_str(), &st_slot) == 0 && st_slot.st_size > 0)
                     {
-                        machete::pfs::update_ps5_param_json_size(meta_target + "/param.json", static_cast<std::uint64_t>(st_sd.st_size));
-                        machete::pfs::update_ps5_param_json_size(dst_target + "/sce_sys/param.json", static_cast<std::uint64_t>(st_sd.st_size));
-                        machete::pfs::update_ps5_param_json_size(dst_target + "/param.json", static_cast<std::uint64_t>(st_sd.st_size));
+                        machete::pfs::update_ps5_param_json_size(meta_target + "/" + slot_name + ".json", static_cast<std::uint64_t>(st_slot.st_size));
+                        machete::pfs::update_ps5_param_json_size(dst_target + "/sce_sys/" + slot_name + ".json", static_cast<std::uint64_t>(st_slot.st_size));
+                        machete::pfs::update_ps5_param_json_title_id(meta_target + "/" + slot_name + ".json", title_id);
+                        machete::pfs::update_ps5_param_json_title_id(dst_target + "/sce_sys/" + slot_name + ".json", title_id);
                     }
                 }
             }

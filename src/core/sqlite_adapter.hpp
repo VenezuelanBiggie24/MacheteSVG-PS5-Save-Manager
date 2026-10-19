@@ -513,49 +513,105 @@ inline bool update_or_register_ps5_savedata_db(std::uint32_t user_id,
                       safe_tid.c_str(), safe_slot.c_str());
         (void)adapter.exec(db, sql_check, count_cb, &existing_count, nullptr);
 
+        bool has_ps5_cols = (dbp.find("savedata_prospero") != std::string::npos);
+        if (!has_ps5_cols)
+        {
+            auto col_cb = [](void *arg, int argc, char **argv, char **) -> int {
+                if (argc > 1 && argv && argv[1])
+                {
+                    if (std::strcmp(argv[1], "system_blocks") == 0)
+                        *reinterpret_cast<bool *>(arg) = true;
+                }
+                return 0;
+            };
+            (void)adapter.exec(db, "PRAGMA table_info(savedata);", col_cb, &has_ps5_cols, nullptr);
+        }
+
         char *errmsg = nullptr;
         int rc = 0;
         if (existing_count > 0)
         {
             char sql_update[1024];
-            std::snprintf(sql_update, sizeof(sql_update),
-                          "UPDATE savedata SET is_broken = 0, fake_broken = 0, faked_owner = 0, "
-                          "account_id = CASE WHEN %llu != 0 THEN %llu ELSE account_id END, "
-                          "user_id = CASE WHEN %u != 0 THEN %u ELSE user_id END, "
-                          "blocks = CASE WHEN blocks <= 0 THEN %u ELSE blocks END, "
-                          "system_blocks = CASE WHEN (system_blocks IS NULL OR system_blocks <= 0) THEN %u ELSE system_blocks END, "
-                          "free_blocks = CASE WHEN (free_blocks IS NULL OR free_blocks <= 0) THEN %u ELSE free_blocks END, "
-                          "size_kib = CASE WHEN size_kib <= 0 THEN %u ELSE size_kib END, "
-                          "game_title_id = '%s', "
-                          "convert_performance = 0, account_id_in_usb_path = '0000000000000000', "
-                          "mtime = strftime('%%Y-%%m-%%dT%%H:%%M:%%S.00Z', CURRENT_TIMESTAMP) "
-                          "WHERE title_id = '%s' AND dir_name = '%s';",
-                          static_cast<unsigned long long>(account_id), static_cast<unsigned long long>(account_id),
-                          user_id, user_id,
-                          blocks, system_blocks, free_blocks, size_kib, safe_gtid.c_str(),
-                          safe_tid.c_str(), safe_slot.c_str());
+            if (has_ps5_cols)
+            {
+                std::snprintf(sql_update, sizeof(sql_update),
+                              "UPDATE savedata SET is_broken = 0, fake_broken = 0, faked_owner = 0, "
+                              "account_id = CASE WHEN %llu != 0 THEN %llu ELSE account_id END, "
+                              "user_id = CASE WHEN %u != 0 THEN %u ELSE user_id END, "
+                              "blocks = CASE WHEN blocks <= 0 THEN %u ELSE blocks END, "
+                              "system_blocks = CASE WHEN (system_blocks IS NULL OR system_blocks <= 0) THEN %u ELSE system_blocks END, "
+                              "free_blocks = CASE WHEN (free_blocks IS NULL OR free_blocks <= 0) THEN %u ELSE free_blocks END, "
+                              "size_kib = CASE WHEN size_kib <= 0 THEN %u ELSE size_kib END, "
+                              "game_title_id = '%s', "
+                              "convert_performance = 0, account_id_in_usb_path = '0000000000000000', "
+                              "mtime = strftime('%%Y-%%m-%%dT%%H:%%M:%%S.00Z', CURRENT_TIMESTAMP) "
+                              "WHERE title_id = '%s' AND dir_name = '%s';",
+                              static_cast<unsigned long long>(account_id), static_cast<unsigned long long>(account_id),
+                              user_id, user_id,
+                              blocks, system_blocks, free_blocks, size_kib, safe_gtid.c_str(),
+                              safe_tid.c_str(), safe_slot.c_str());
+            }
+            else
+            {
+                std::snprintf(sql_update, sizeof(sql_update),
+                              "UPDATE savedata SET is_broken = 0, fake_broken = 0, faked_owner = 0, "
+                              "account_id = CASE WHEN %llu != 0 THEN %llu ELSE account_id END, "
+                              "user_id = CASE WHEN %u != 0 THEN %u ELSE user_id END, "
+                              "blocks = CASE WHEN blocks <= 0 THEN %u ELSE blocks END, "
+                              "free_blocks = CASE WHEN (free_blocks IS NULL OR free_blocks <= 0) THEN %u ELSE free_blocks END, "
+                              "size_kib = CASE WHEN size_kib <= 0 THEN %u ELSE size_kib END, "
+                              "game_title_id = '%s', "
+                              "mtime = strftime('%%Y-%%m-%%dT%%H:%%M:%%S.00Z', CURRENT_TIMESTAMP) "
+                              "WHERE title_id = '%s' AND dir_name = '%s';",
+                              static_cast<unsigned long long>(account_id), static_cast<unsigned long long>(account_id),
+                              user_id, user_id,
+                              blocks, free_blocks, size_kib, safe_gtid.c_str(),
+                              safe_tid.c_str(), safe_slot.c_str());
+            }
             rc = adapter.exec(db, sql_update, nullptr, nullptr, &errmsg);
         }
         else
         {
             char sql_insert[2048];
-            std::snprintf(sql_insert, sizeof(sql_insert),
-                          "INSERT INTO savedata ("
-                          "title_id, dir_name, main_title, sub_title, detail, tmp_dir_name, "
-                          "is_broken, user_param, blocks, free_blocks, size_kib, mtime, "
-                          "fake_broken, account_id, user_id, faked_owner, cloud_icon_url, "
-                          "cloud_revision, game_title_id, system_blocks, convert_performance, "
-                          "account_id_in_usb_path"
-                          ") VALUES ("
-                          "'%s', '%s', '%s', '%s', '', '', "
-                          "0, 0, %u, %u, %u, strftime('%%Y-%%m-%%dT%%H:%%M:%%S.00Z', CURRENT_TIMESTAMP), "
-                          "0, %llu, %u, 0, '', "
-                          "0, '%s', %u, 0, '0000000000000000');",
-                          safe_tid.c_str(), safe_slot.c_str(),
-                          safe_main.c_str(), "",
-                          blocks, free_blocks, size_kib,
-                          static_cast<unsigned long long>(account_id), user_id,
-                          safe_gtid.c_str(), system_blocks);
+            if (has_ps5_cols)
+            {
+                std::snprintf(sql_insert, sizeof(sql_insert),
+                              "INSERT INTO savedata ("
+                              "title_id, dir_name, main_title, sub_title, detail, tmp_dir_name, "
+                              "is_broken, user_param, blocks, free_blocks, size_kib, mtime, "
+                              "fake_broken, account_id, user_id, faked_owner, cloud_icon_url, "
+                              "cloud_revision, game_title_id, system_blocks, convert_performance, "
+                              "account_id_in_usb_path"
+                              ") VALUES ("
+                              "'%s', '%s', '%s', '%s', '', '', "
+                              "0, 0, %u, %u, %u, strftime('%%Y-%%m-%%dT%%H:%%M:%%S.00Z', CURRENT_TIMESTAMP), "
+                              "0, %llu, %u, 0, '', "
+                              "0, '%s', %u, 0, '0000000000000000');",
+                              safe_tid.c_str(), safe_slot.c_str(),
+                              safe_main.c_str(), "",
+                              blocks, free_blocks, size_kib,
+                              static_cast<unsigned long long>(account_id), user_id,
+                              safe_gtid.c_str(), system_blocks);
+            }
+            else
+            {
+                std::snprintf(sql_insert, sizeof(sql_insert),
+                              "INSERT INTO savedata ("
+                              "title_id, dir_name, main_title, sub_title, detail, tmp_dir_name, "
+                              "is_broken, user_param, blocks, free_blocks, size_kib, mtime, "
+                              "fake_broken, account_id, user_id, faked_owner, cloud_icon_url, "
+                              "cloud_revision, game_title_id"
+                              ") VALUES ("
+                              "'%s', '%s', '%s', '%s', '', '', "
+                              "0, 0, %u, %u, %u, strftime('%%Y-%%m-%%dT%%H:%%M:%%S.00Z', CURRENT_TIMESTAMP), "
+                              "0, %llu, %u, 0, '', "
+                              "0, '%s');",
+                              safe_tid.c_str(), safe_slot.c_str(),
+                              safe_main.c_str(), "",
+                              blocks, free_blocks, size_kib,
+                              static_cast<unsigned long long>(account_id), user_id,
+                              safe_gtid.c_str());
+            }
             rc = adapter.exec(db, sql_insert, nullptr, nullptr, &errmsg);
         }
 
