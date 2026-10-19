@@ -1236,7 +1236,7 @@ TEST(MacheteParamJsonSizeTest, UpdateFileSizeAndMtimeInParamJson)
 
 TEST(MacheteBuildInfoTest, BuildNumberMatchesExpected)
 {
-    EXPECT_STREQ(machete::build::build_number(), "67");
+    EXPECT_STREQ(machete::build::build_number(), "68");
 }
 
 TEST(MacheteParamJsonTitleIdTest, UpdateTitleIdInParamJson)
@@ -1348,6 +1348,22 @@ TEST(MachetePs5ParamJsonSynthesisTest, SynthesizeParamJsonFromSlots)
     (void)rmdir((dst + "/sce_sys").c_str());
     (void)rmdir(dst.c_str());
     (void)rmdir(meta.c_str());
+}
+
+TEST(MachetePfsTest, PfsMountSymbolsResolutionSafety)
+{
+    int (*init_m)(machete::pfs::SaveMountOpt *) = nullptr;
+    int (*m_fn)(machete::pfs::SaveMountOpt *, const char *, const char *, const void *) = nullptr;
+    int (*init_u)(machete::pfs::SaveMountOpt *) = nullptr;
+    int (*u_fn)(machete::pfs::SaveMountOpt *, const char *, void *, int) = nullptr;
+
+    const bool resolved = machete::pfs::ScopedPfsMount::ensure_pfs_symbols_resolved(
+        &init_m, &m_fn, &init_u, &u_fn);
+
+    // On macOS local unit tests, libSceFsInternalForVsh is not present
+    EXPECT_FALSE(resolved);
+    EXPECT_EQ(m_fn, nullptr);
+    EXPECT_EQ(u_fn, nullptr);
 }
 
 } // namespace hui::testing

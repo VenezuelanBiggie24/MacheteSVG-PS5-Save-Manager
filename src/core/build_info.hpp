@@ -14,7 +14,7 @@ namespace machete::build
 #endif
 
 #ifndef MACHETE_BUILD_NUMBER
-#define MACHETE_BUILD_NUMBER "67"
+#define MACHETE_BUILD_NUMBER "68"
 #endif
 
 #ifndef MACHETE_GIT_COMMIT

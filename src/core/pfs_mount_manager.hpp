@@ -11,11 +11,13 @@
 #include "core/sfo_resigner.hpp"
 #include "core/sqlite_adapter.hpp"
 
+#include <csignal>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <ctime>
+#include <signal.h>
 #include <dirent.h>
 #include <dlfcn.h>
 #include <fcntl.h>
@@ -387,10 +389,133 @@ public:
         int (**out_init_umount)(SaveMountOpt *),
         int (**out_umount)(SaveMountOpt *, const char *, void *, int))
     {
-        (void)out_init_mount;
-        (void)out_mount;
-        (void)out_init_umount;
-        (void)out_umount;
+        static int (*s_init_mount)(SaveMountOpt *) = nullptr;
+        static int (*s_mount_fn)(SaveMountOpt *, const char *, const char *, const void *) = nullptr;
+        static int (*s_init_umount)(SaveMountOpt *) = nullptr;
+        static int (*s_umount_fn)(SaveMountOpt *, const char *, void *, int) = nullptr;
+        static bool s_already_resolved = false;
+
+        if (s_already_resolved && s_mount_fn && s_umount_fn)
+        {
+            if (out_init_mount) *out_init_mount = s_init_mount;
+            if (out_mount) *out_mount = s_mount_fn;
+            if (out_init_umount) *out_init_umount = s_init_umount;
+            if (out_umount) *out_umount = s_umount_fn;
+            return true;
+        }
+
+        static const char *candidate_paths[] = {
+            "/system/vsh/libSceFsInternalForVsh.sprx",
+            "/system/common/lib/libSceFsInternalForVsh.sprx",
+            "/system/priv/lib/libSceFsInternalForVsh.sprx",
+            "/preinst2/vsh/libSceFsInternalForVsh.sprx",
+            "/preinst2/common/lib/libSceFsInternalForVsh.sprx",
+            "/preinst2/priv/lib/libSceFsInternalForVsh.sprx",
+            "/system/vsh/module/libSceFsInternalForVsh.sprx",
+            "/system/priv/lib/libSceFsInternal.sprx",
+            "/system/common/lib/libSceFsInternal.sprx",
+            "libSceFsInternalForVsh.sprx",
+            "libSceFsInternal.sprx",
+            nullptr
+        };
+
+        static const char *kInitMountSyms[] = {
+            "sceFsInitMountSaveDataOpt",
+            "q8Tr7sDsY/o",
+            "q8Tr7sDsY/o=",
+            nullptr
+        };
+        static const char *kMountSyms[] = {
+            "sceFsMountSaveData",
+            "/sOxdS4jtnM",
+            "/sOxdS4jtnM=",
+            nullptr
+        };
+        static const char *kInitUmountSyms[] = {
+            "sceFsInitUmountSaveDataOpt",
+            "+HB5Vn2W1bk",
+            "+HB5Vn2W1bk=",
+            nullptr
+        };
+        static const char *kUmountSyms[] = {
+            "sceFsUmountSaveData",
+            "joyMnRrqTgo",
+            "joyMnRrqTgo=",
+            nullptr
+        };
+
+        auto probe_handle = [&](void *h, const char *source_tag) -> bool {
+            if (!h)
+                return false;
+            int (*found_init_m)(SaveMountOpt *) = nullptr;
+            int (*found_m)(SaveMountOpt *, const char *, const char *, const void *) = nullptr;
+            int (*found_init_u)(SaveMountOpt *) = nullptr;
+            int (*found_u)(SaveMountOpt *, const char *, void *, int) = nullptr;
+
+            for (int k = 0; kInitMountSyms[k]; ++k)
+            {
+                void *s = dlsym(h, kInitMountSyms[k]);
+                if (s) { found_init_m = reinterpret_cast<int (*)(SaveMountOpt *)>(s); break; }
+            }
+            for (int k = 0; kMountSyms[k]; ++k)
+            {
+                void *s = dlsym(h, kMountSyms[k]);
+                if (s) { found_m = reinterpret_cast<int (*)(SaveMountOpt *, const char *, const char *, const void *)>(s); break; }
+            }
+            for (int k = 0; kInitUmountSyms[k]; ++k)
+            {
+                void *s = dlsym(h, kInitUmountSyms[k]);
+                if (s) { found_init_u = reinterpret_cast<int (*)(SaveMountOpt *)>(s); break; }
+            }
+            for (int k = 0; kUmountSyms[k]; ++k)
+            {
+                void *s = dlsym(h, kUmountSyms[k]);
+                if (s) { found_u = reinterpret_cast<int (*)(SaveMountOpt *, const char *, void *, int)>(s); break; }
+            }
+
+            if (found_m && found_u)
+            {
+                s_init_mount = found_init_m;
+                s_mount_fn = found_m;
+                s_init_umount = found_init_u;
+                s_umount_fn = found_u;
+                s_already_resolved = true;
+                if (out_init_mount) *out_init_mount = s_init_mount;
+                if (out_mount) *out_mount = s_mount_fn;
+                if (out_init_umount) *out_init_umount = s_init_umount;
+                if (out_umount) *out_umount = s_umount_fn;
+                MACHETE_LOG("[PFS]", "Resolved PFS mount symbols via %s (mount=%p, umount=%p, init_m=%p, init_u=%p)",
+                            source_tag, reinterpret_cast<void *>(s_mount_fn), reinterpret_cast<void *>(s_umount_fn),
+                            reinterpret_cast<void *>(s_init_mount), reinterpret_cast<void *>(s_init_umount));
+                return true;
+            }
+            return false;
+        };
+
+        // 1. Probar en los simbolos ya cargados en el proceso
+        #ifdef RTLD_DEFAULT
+        if (probe_handle(RTLD_DEFAULT, "RTLD_DEFAULT"))
+            return true;
+        #endif
+
+        // 2. Probar cargando con dlopen las rutas candidatas del sistema
+        for (int i = 0; candidate_paths[i]; ++i)
+        {
+            const char *cand = candidate_paths[i];
+            if (cand[0] == '/' && access(cand, R_OK) != 0)
+                continue;
+
+            (void)dlerror();
+            void *h = dlopen(cand, RTLD_NOW | RTLD_GLOBAL);
+            if (!h)
+                h = dlopen(cand, RTLD_LAZY | RTLD_GLOBAL);
+            if (h && probe_handle(h, cand))
+                return true;
+        }
+
+        const char *err = dlerror();
+        MACHETE_LOG("[PFS]", "libSceFsInternalForVsh.sprx symbols unavailable (%s)",
+                    err ? err : "no matching module");
         return false;
     }
 
@@ -455,9 +580,11 @@ public:
         }
 
         SaveMountOpt mopt{};
-        init_mount(&mopt);
+        if (init_mount)
+            init_mount(&mopt);
         mopt.budgetid = "system";
 
+        (void)signal(SIGPIPE, SIG_IGN);
         const int rc = mount_fn_(&mopt, staged_img.c_str(), SAVE_MNT_PATH, key);
         bool dev_mounted = (rc >= 0);
         if (dev_mounted)
@@ -767,22 +894,19 @@ inline bool is_backup_from_different_console(const std::string &backup_folder, b
         }
     }
 
-    // 3. Verificacion de clave sellada para PS4:
-    //    Probar si el SAMU de ESTA consola puede descifrar la clave sellada (.bin).
-    //    Si la consola fue reinstalada/formateada o proviene de otra consola, el SAMU la rechazara.
-    //    IMPORTANTE: Esta verificacion aplica exclusivamente a PS4, ya que /dev/pfsmgr descifra
-    //    claves selladas de PS4 (0xc0845302). Los contenedores sdimg_* de PS5 son particiones PFS
-    //    completas gestionadas por SAMU al arrancar el juego en la misma consola.
-    if (!is_ps5 && access("/dev/pfsmgr", F_OK) == 0 && getuid() == 0)
+    // 3. Verificacion criptografica en hardware con SAMU (/dev/pfsmgr):
+    //    Probar si el SAMU de ESTA consola puede descifrar la clave sellada (.bin en PS4 o sdimg_* en PS5).
+    //    Si la consola fue reinstalada/formateada o proviene de otra consola, el SAMU la rechazara (status_0x80 != 0, ej. -53).
+    if (access("/dev/pfsmgr", F_OK) == 0 && getuid() == 0)
     {
         std::vector<std::string> bslots;
-        if (has_local_save_dummy(backup_folder, false, &bslots) && !bslots.empty())
+        if (has_local_save_dummy(backup_folder, is_ps5, &bslots) && !bslots.empty())
         {
             std::uint8_t test_key[32] = {0};
-            if (!decrypt_pfs_key_for_slot(backup_folder, bslots[0], false, test_key))
+            if (!decrypt_pfs_key_for_slot(backup_folder, bslots[0], is_ps5, test_key))
             {
-                MACHETE_LOG("[PFS]", "Backup PS4 sealed key rejected by local SAMU (fresh OS reinstall or foreign console): %s",
-                            bslots[0].c_str());
+                MACHETE_LOG("[PFS]", "Backup %s sealed key rejected by local SAMU (fresh OS reinstall or foreign console): %s",
+                            is_ps5 ? "PS5" : "PS4", bslots[0].c_str());
                 return true;
             }
         }
