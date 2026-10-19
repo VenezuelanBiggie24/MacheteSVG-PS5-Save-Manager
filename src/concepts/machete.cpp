@@ -116,7 +116,7 @@ static constexpr std::array<const char *const, 4> kTechniques = {
     "Web Save Station: Embedded HTTP server with live ZIP streaming for PC/Mobile browser downloads",
 };
 
-// Renderizado vectorial nativo a 60 FPS del personaje animado anime (Shin-chan)
+// Renderizado vectorial nativo a 60 FPS del personaje Shin-chan (fiel a diseno canonico de referencia)
 static void draw_shinchan_character(gfx::DrawList &list, ui::Painter &paint,
                                     float cx, float cy, float clock, float opacity,
                                     ShinchanState state)
@@ -126,252 +126,277 @@ static void draw_shinchan_character(gfx::DrawList &list, ui::Painter &paint,
 
     list.push_opacity(opacity);
 
+    // Paleta oficial canonica de Shin-chan
+    const Color skin_color = Color::rgb(0xffdfbe);
+    const Color skin_shadow = Color::rgb(0xf2bc96);
+    const Color hair_color = Color::rgb(0x1a1a1a);
+    const Color eyebrow_color = Color::rgb(0x111111);
+    const Color red_shirt = Color::rgb(0xe52521);
+    const Color yellow_shorts = Color::rgb(0xffdf00);
+    const Color white_socks = Color::rgb(0xffffff);
+    const Color yellow_shoes = Color::rgb(0xffca00);
+    const Color blush_color = Color::rgb(0xff7582);
+
     if (state == ShinchanState::Dancing)
     {
-        // Baile comico de Shin-chan (baile de nalgas/culito - Buri Buri Boogie Dance)
-        const float tempo = clock * 10.0f;
-        const float sway = std::sin(tempo) * 18.0f;
-        const float bounce = std::abs(std::sin(tempo * 2.0f)) * 8.0f;
-        const float head_bob = std::sin(tempo * 0.5f) * 3.0f;
-        const float arm_l = std::sin(tempo) * 16.0f;
-        const float arm_r = -std::sin(tempo) * 16.0f;
+        // Baile clasico y canonico de vaiven lateral de Shin-chan (imagenes de referencia 2 y 3)
+        const float tempo = clock * 7.5f;
+        const float sway = std::sin(tempo) * 16.0f;
+        const float tilt = std::sin(tempo) * 0.12f;
+        const float bounce = std::abs(std::sin(tempo * 2.0f)) * 5.0f;
+        const float arm_swing = std::sin(tempo) * 22.0f;
 
-        // Sombra suave en el suelo
-        list.shadow({cx - 42.0f + sway * 0.25f, cy - 2.0f, 84.0f, 14.0f}, 7.0f, 6.0f,
-                    Color::rgb(0x000000).with_alpha(0.40f));
+        // Sombra suave proyectada en el suelo
+        list.shadow({cx - 36.0f + sway * 0.3f, cy - 2.0f, 72.0f, 12.0f}, 6.0f, 5.0f,
+                    Color::rgb(0x000000).with_alpha(0.35f));
 
-        // Piernas infantiles
-        list.line(cx - 16.0f, cy - 24.0f + bounce, cx - 18.0f, cy, 7.0f, Color::rgb(0xffdfc4));
-        list.line(cx + 16.0f, cy - 24.0f + bounce, cx + 18.0f, cy, 7.0f, Color::rgb(0xffdfc4));
+        // Piernas infantiles con paso ritmico
+        const float leg_l_y = cy - 20.0f + (sway > 0 ? bounce : 0.0f);
+        const float leg_r_y = cy - 20.0f + (sway < 0 ? bounce : 0.0f);
+
+        list.line(cx - 14.0f + sway * 0.4f, cy - 30.0f + bounce,
+                  cx - 16.0f + sway * 0.2f, leg_l_y, 7.0f, skin_color);
+        list.line(cx + 14.0f + sway * 0.4f, cy - 30.0f + bounce,
+                  cx + 16.0f + sway * 0.2f, leg_r_y, 7.0f, skin_color);
+
         // Calcetines blancos
-        list.rounded_rect({cx - 24.0f, cy - 6.0f, 12.0f, 6.0f}, 3.0f, Color::rgb(0xffffff));
-        list.rounded_rect({cx + 12.0f, cy - 6.0f, 12.0f, 6.0f}, 3.0f, Color::rgb(0xffffff));
-        // Zapatillas deportivas celestes de Shin-chan
-        list.rounded_rect({cx - 25.0f, cy - 2.5f, 14.0f, 5.5f}, 2.5f, Color::rgb(0x00b0ff));
-        list.rounded_rect({cx + 11.0f, cy - 2.5f, 14.0f, 5.5f}, 2.5f, Color::rgb(0x00b0ff));
+        list.rounded_rect({cx - 21.0f + sway * 0.2f, leg_l_y - 4.0f, 10.0f, 5.0f}, 2.0f, white_socks);
+        list.rounded_rect({cx + 11.0f + sway * 0.2f, leg_r_y - 4.0f, 10.0f, 5.0f}, 2.0f, white_socks);
 
-        // Cadera oscilante y pantalones cortos amarillos bajados comicamente
-        const float hip_x = cx + sway;
-        const float hip_y = cy - 36.0f + bounce;
+        // Zapatillas amarillas clasicas de Shin-chan con puntera levantada
+        list.rounded_rect({cx - 24.0f + sway * 0.2f, leg_l_y - 1.0f, 15.0f, 6.0f}, 3.0f, yellow_shoes);
+        list.rounded_rect({cx + 9.0f + sway * 0.2f, leg_r_y - 1.0f, 15.0f, 6.0f}, 3.0f, yellow_shoes);
+        // Suela fina
+        list.line(cx - 24.0f + sway * 0.2f, leg_l_y + 5.0f, cx - 10.0f + sway * 0.2f, leg_l_y + 5.0f, 1.2f, Color::rgb(0x333333));
+        list.line(cx + 9.0f + sway * 0.2f, leg_r_y + 5.0f, cx + 23.0f + sway * 0.2f, leg_r_y + 5.0f, 1.2f, Color::rgb(0x333333));
 
-        // Pantalones cortos amarillos caidos alrededor de los muslos
-        list.rounded_rect({hip_x - 24.0f, hip_y + 4.0f, 48.0f, 16.0f}, 7.0f, Color::rgb(0xffd600));
+        // Pantalones cortos amarillos canonicos
+        const float hip_x = cx + sway * 0.6f;
+        const float hip_y = cy - 42.0f + bounce;
+        list.rounded_rect({hip_x - 22.0f, hip_y, 44.0f, 18.0f}, 7.0f, yellow_shorts);
+        // Pliegue central del pantalon
+        list.line(hip_x, hip_y + 6.0f, hip_x, hip_y + 17.0f, 1.8f, skin_shadow);
 
-        // Dos nalgas redondeadas estilo melocoton (icono comico del baile Buri-Buri)
-        list.circle(hip_x - 12.0f, hip_y + 8.0f, 16.0f, Color::rgb(0xffdfc4));
-        list.circle(hip_x + 12.0f, hip_y + 8.0f, 16.0f, Color::rgb(0xffdfc4));
-        // Pliegue central sombreado
-        list.line(hip_x, hip_y - 2.0f, hip_x, hip_y + 18.0f, 2.2f, Color::rgb(0xe8a48c));
-        // Brillos especulares comicos en ambas nalgas
-        list.circle(hip_x - 10.0f, hip_y + 4.0f, 4.0f, Color::rgb(0xffffff).with_alpha(0.65f));
-        list.circle(hip_x + 10.0f, hip_y + 4.0f, 4.0f, Color::rgb(0xffffff).with_alpha(0.65f));
+        // Camiseta roja de manga larga de Shin-chan
+        const float torso_x = cx + sway * 0.75f;
+        const float torso_y = cy - 70.0f + bounce;
+        list.rounded_rect({torso_x - 24.0f, torso_y, 48.0f, 32.0f}, 9.0f, red_shirt);
+        // Cuello redondo de la camiseta
+        list.arc(torso_x, torso_y + 3.0f, 7.0f, 2.0f, 0.2f, 2.7f, Color::rgb(0xb51210));
 
-        // Ondas cineticas de movimiento de vaiven (azul cielo)
-        list.arc(hip_x - 30.0f, hip_y + 8.0f, 10.0f, 2.2f, 2.1f, 2.0f,
-                 Color::rgb(0x76d6ff).with_alpha(0.6f));
-        list.arc(hip_x + 30.0f, hip_y + 8.0f, 10.0f, 2.2f, -0.9f, 2.0f,
-                 Color::rgb(0x76d6ff).with_alpha(0.6f));
+        // Brazos oscilantes en el baile (un brazo al frente, otro lateral como en imagen 2 y 3)
+        // Brazo izquierdo (cruzado hacia la derecha o balanceandose)
+        list.line(torso_x - 18.0f, torso_y + 8.0f,
+                  torso_x + arm_swing * 0.5f - 4.0f, torso_y + 14.0f + bounce * 0.5f, 6.5f, red_shirt);
+        list.circle(torso_x + arm_swing * 0.5f - 4.0f, torso_y + 14.0f + bounce * 0.5f, 4.5f, skin_color);
 
-        // Torso inclinado hacia adelante - Camiseta roja de Shin-chan
-        const float torso_x = cx + sway * 0.35f;
-        const float torso_y = cy - 64.0f + bounce;
-        list.rounded_rect({torso_x - 22.0f, torso_y, 44.0f, 28.0f}, 9.0f, Color::rgb(0xe53935));
+        // Brazo derecho (extendido lateralmente en direccion contraria)
+        list.line(torso_x + 18.0f, torso_y + 8.0f,
+                  torso_x + 36.0f - arm_swing * 0.6f, torso_y + 10.0f - bounce * 0.5f, 6.5f, red_shirt);
+        list.circle(torso_x + 36.0f - arm_swing * 0.6f, torso_y + 10.0f - bounce * 0.5f, 4.5f, skin_color);
 
-        // Brazos aleteando ritmicamente
-        list.line(torso_x - 18.0f, torso_y + 6.0f, torso_x - 34.0f, torso_y + 12.0f + arm_l,
-                  6.0f, Color::rgb(0xe53935));
-        list.circle(torso_x - 36.0f, torso_y + 12.0f + arm_l, 5.0f, Color::rgb(0xffdfc4));
-        list.line(torso_x + 18.0f, torso_y + 6.0f, torso_x + 34.0f, torso_y + 12.0f + arm_r,
-                  6.0f, Color::rgb(0xe53935));
-        list.circle(torso_x + 36.0f, torso_y + 12.0f + arm_r, 5.0f, Color::rgb(0xffdfc4));
+        // Cabeza canonica con silueta de patata y moflete rollizo prominente
+        const float head_x = cx + sway * 0.9f;
+        const float head_y = cy - 95.0f + bounce;
 
-        // Cabeza girada mirando hacia atras por encima del hombro derecho
-        const float head_x = cx + sway * 0.2f + head_bob;
-        const float head_y = cy - 88.0f + bounce;
+        // Base craneal y gran moflete lateral (silueta tipica de Shin-chan)
+        list.circle(head_x - 4.0f, head_y, 22.0f, skin_color);
+        list.circle(head_x + 15.0f, head_y + 5.0f, 16.0f, skin_color);
+        list.circle(head_x + 8.0f, head_y - 2.0f, 18.0f, skin_color);
 
-        // Cabeza con silueta de Shin-chan: craneo redondeado y moflete rollizo prominente a la derecha
-        list.circle(head_x, head_y, 20.0f, Color::rgb(0xffdfc4));
-        list.circle(head_x + 12.0f, head_y + 4.0f, 14.0f, Color::rgb(0xffdfc4));
-        // Mejilla rosada
-        list.circle(head_x + 15.0f, head_y + 8.0f, 6.0f, Color::rgb(0xff8a80).with_alpha(0.60f));
+        // Oreja redonda grande con pliegue interno (lado izquierdo/trasero)
+        list.circle(head_x - 22.0f, head_y + 3.0f, 7.5f, skin_color);
+        list.arc(head_x - 22.0f, head_y + 3.0f, 4.5f, 1.6f, 0.5f, 3.8f, skin_shadow);
 
-        // Pelo negro rapado clasico de Shin-chan (cubriendo la coronilla y nuca)
-        list.rounded_rect({head_x - 18.0f, head_y - 23.0f, 34.0f, 14.0f}, 6.0f, Color::rgb(0x1a1a1a));
-        list.circle(head_x - 2.0f, head_y - 12.0f, 18.0f, Color::rgb(0x1a1a1a));
-        // Re-relleno de piel frontal para dejar el corte de pelo exacto
-        list.circle(head_x + 6.0f, head_y + 2.0f, 15.0f, Color::rgb(0xffdfc4));
+        // Pelo negro canonico con corte ondulado caracteristico
+        list.rounded_rect({head_x - 24.0f, head_y - 26.0f, 38.0f, 16.0f}, 6.0f, hair_color);
+        list.circle(head_x - 12.0f, head_y - 14.0f, 16.0f, hair_color);
+        list.circle(head_x + 4.0f, head_y - 16.0f, 14.0f, hair_color);
+        // Perfilado del corte de pelo sobre la frente
+        list.circle(head_x + 6.0f, head_y - 4.0f, 14.0f, skin_color);
 
-        // Ceja negra gruesa oruga inconfundible de Shin-chan
-        list.rounded_rect({head_x + 4.0f, head_y - 7.0f, 16.0f, 5.0f}, 2.5f, Color::rgb(0x111111));
+        // Cejas gruesas oruga inconfundibles de Shin-chan (muy pobladas y arqueadas)
+        list.rounded_rect({head_x - 12.0f, head_y - 12.0f + tilt * 10.0f, 13.0f, 5.0f}, 2.5f, eyebrow_color);
+        list.rounded_rect({head_x + 4.0f, head_y - 11.0f - tilt * 10.0f, 15.0f, 5.2f}, 2.5f, eyebrow_color);
 
-        // Ojo picaro y vivaz mirando al usuario
-        list.circle(head_x + 11.0f, head_y + 2.0f, 5.0f, Color::rgb(0x111111));
-        list.circle(head_x + 13.0f, head_y, 2.0f, Color::rgb(0xffffff));
+        // Ojos relajados en lineas curvas de felicidad y concentracion en el baile (como imagen 2 y 3)
+        list.line(head_x - 8.0f, head_y - 1.0f, head_x - 1.0f, head_y - 1.0f, 2.2f, eyebrow_color);
+        list.line(head_x + 7.0f, head_y, head_x + 16.0f, head_y, 2.2f, eyebrow_color);
 
-        // Sonrisa traviesa con colmillo comico
-        list.arc(head_x + 14.0f, head_y + 11.0f, 5.0f, 2.2f, 0.4f, 2.2f, Color::rgb(0x8a1515));
+        // Boca pequena ovalada cantando / silbando alegremente ("O")
+        list.circle(head_x + 15.0f, head_y + 10.0f, 4.5f, Color::rgb(0x7a0c0a));
+        list.circle(head_x + 15.0f, head_y + 11.0f, 2.5f, Color::rgb(0xff6e79));
 
-        // Bocadillo flotante con texto comico "Buri Buri ~"
-        const Rect bubble{cx - 54.0f, cy - 132.0f + bounce * 0.5f, 108.0f, 26.0f};
-        list.rounded_rect(bubble, 13.0f, Color::rgb(0x0a192f).with_alpha(0.94f));
-        paint.stroke(bubble, 13.0f, 1.4f, Color::rgb(0x76d6ff).with_alpha(0.70f));
-        list.line(bubble.cx() - 6.0f, bubble.y + bubble.h, bubble.cx() - 14.0f, bubble.y + bubble.h + 8.0f,
-                  2.2f, Color::rgb(0x76d6ff).with_alpha(0.70f));
-        paint.label("Buri Buri ~", bubble.cx(), bubble.cy() + 5.0f, 14.0f,
-                    Color::rgb(0x76d6ff), gfx::Align::center);
+        // Lineas de rubor rosado en el moflete (///)
+        list.line(head_x + 17.0f, head_y + 4.0f, head_x + 19.0f, head_y + 7.0f, 1.5f, blush_color);
+        list.line(head_x + 20.0f, head_y + 4.0f, head_x + 22.0f, head_y + 7.0f, 1.5f, blush_color);
+        list.line(head_x + 23.0f, head_y + 4.0f, head_x + 25.0f, head_y + 7.0f, 1.5f, blush_color);
+
+        // Notas musicales flotantes estilizadas
+        const float note_phase = std::fmod(clock * 2.0f, 1.0f);
+        const float note_y = head_y - 20.0f - note_phase * 22.0f;
+        const float note_alpha = 1.0f - note_phase;
+        list.circle(head_x + 30.0f, note_y, 3.0f, Color::rgb(0xffd54f).with_alpha(note_alpha));
+        list.line(head_x + 33.0f, note_y, head_x + 33.0f, note_y - 10.0f, 1.5f, Color::rgb(0xffd54f).with_alpha(note_alpha));
     }
     else if (state == ShinchanState::Success)
     {
-        // Celebracion festiva de victoria con cartel y checkmark verde
-        const float hop = std::abs(std::sin(clock * 7.0f)) * 12.0f;
+        // Celebracion festiva de victoria canonica (estilo imagen 5, alegre con cartel de checkmark)
+        const float hop = std::abs(std::sin(clock * 7.0f)) * 10.0f;
 
-        list.shadow({cx - 38.0f, cy - 2.0f, 76.0f, 14.0f}, 7.0f, 6.0f,
-                    Color::rgb(0x000000).with_alpha(0.40f));
+        list.shadow({cx - 36.0f, cy - 2.0f, 72.0f, 12.0f}, 6.0f, 5.0f,
+                    Color::rgb(0x000000).with_alpha(0.35f));
 
-        // Piernas saltando alegremente
-        list.line(cx - 15.0f, cy - 22.0f - hop, cx - 20.0f, cy - hop, 7.0f, Color::rgb(0xffdfc4));
-        list.line(cx + 15.0f, cy - 22.0f - hop, cx + 20.0f, cy - hop, 7.0f, Color::rgb(0xffdfc4));
-        list.rounded_rect({cx - 26.0f, cy - 6.0f - hop, 12.0f, 6.0f}, 3.0f, Color::rgb(0xffffff));
-        list.rounded_rect({cx + 14.0f, cy - 6.0f - hop, 12.0f, 6.0f}, 3.0f, Color::rgb(0xffffff));
-        list.rounded_rect({cx - 27.0f, cy - 2.5f - hop, 14.0f, 5.5f}, 2.5f, Color::rgb(0x00b0ff));
-        list.rounded_rect({cx + 13.0f, cy - 2.5f - hop, 14.0f, 5.5f}, 2.5f, Color::rgb(0x00b0ff));
+        // Piernas infantiles saltando alegremente
+        list.line(cx - 13.0f, cy - 24.0f - hop, cx - 18.0f, cy - hop, 7.0f, skin_color);
+        list.line(cx + 13.0f, cy - 24.0f - hop, cx + 18.0f, cy - hop, 7.0f, skin_color);
+        list.rounded_rect({cx - 23.0f, cy - 6.0f - hop, 10.0f, 5.0f}, 2.0f, white_socks);
+        list.rounded_rect({cx + 13.0f, cy - 6.0f - hop, 10.0f, 5.0f}, 2.0f, white_socks);
+        list.rounded_rect({cx - 26.0f, cy - 2.0f - hop, 15.0f, 6.0f}, 3.0f, yellow_shoes);
+        list.rounded_rect({cx + 11.0f, cy - 2.0f - hop, 15.0f, 6.0f}, 3.0f, yellow_shoes);
 
         // Pantalones cortos amarillos
-        list.rounded_rect({cx - 22.0f, cy - 38.0f - hop, 44.0f, 18.0f}, 7.0f, Color::rgb(0xffd600));
+        list.rounded_rect({cx - 22.0f, cy - 42.0f - hop, 44.0f, 18.0f}, 7.0f, yellow_shorts);
 
-        // Camiseta roja de Shin-chan
-        list.rounded_rect({cx - 24.0f, cy - 68.0f - hop, 48.0f, 34.0f}, 10.0f, Color::rgb(0xe53935));
+        // Camiseta roja de manga larga
+        list.rounded_rect({cx - 24.0f, cy - 70.0f - hop, 48.0f, 32.0f}, 9.0f, red_shirt);
 
-        // Brazos en alto sosteniendo con orgullo el cartel de victoria
-        list.line(cx - 20.0f, cy - 58.0f - hop, cx - 28.0f, cy - 90.0f - hop, 6.0f, Color::rgb(0xe53935));
-        list.circle(cx - 28.0f, cy - 92.0f - hop, 5.0f, Color::rgb(0xffdfc4));
-        list.line(cx + 20.0f, cy - 58.0f - hop, cx + 28.0f, cy - 90.0f - hop, 6.0f, Color::rgb(0xe53935));
-        list.circle(cx + 28.0f, cy - 92.0f - hop, 5.0f, Color::rgb(0xffdfc4));
+        // Brazos en alto sosteniendo el cartel de victoria
+        list.line(cx - 18.0f, cy - 60.0f - hop, cx - 26.0f, cy - 90.0f - hop, 6.5f, red_shirt);
+        list.circle(cx - 26.0f, cy - 91.0f - hop, 4.5f, skin_color);
+        list.line(cx + 18.0f, cy - 60.0f - hop, cx + 26.0f, cy - 90.0f - hop, 6.5f, red_shirt);
+        list.circle(cx + 26.0f, cy - 91.0f - hop, 4.5f, skin_color);
 
-        // Cabeza frontal alegre de Shin-chan
-        const float head_y = cy - 88.0f - hop;
-        list.circle(cx, head_y, 22.0f, Color::rgb(0xffdfc4));
-        list.circle(cx - 15.0f, head_y + 4.0f, 13.0f, Color::rgb(0xffdfc4));
-        list.circle(cx + 15.0f, head_y + 4.0f, 13.0f, Color::rgb(0xffdfc4));
-        // Mejillas rosadas alegres
-        list.circle(cx - 15.0f, head_y + 7.0f, 6.0f, Color::rgb(0xff8a80).with_alpha(0.65f));
-        list.circle(cx + 15.0f, head_y + 7.0f, 6.0f, Color::rgb(0xff8a80).with_alpha(0.65f));
+        // Cabeza alegre con silueta de patata y gran moflete
+        const float head_y = cy - 92.0f - hop;
+        list.circle(cx - 4.0f, head_y, 22.0f, skin_color);
+        list.circle(cx + 15.0f, head_y + 4.0f, 15.0f, skin_color);
+        list.circle(cx + 8.0f, head_y - 2.0f, 18.0f, skin_color);
 
-        // Pelo negro rapado
-        list.rounded_rect({cx - 19.0f, head_y - 25.0f, 38.0f, 15.0f}, 7.0f, Color::rgb(0x1a1a1a));
-        list.circle(cx, head_y - 12.0f, 19.0f, Color::rgb(0x1a1a1a));
-        list.circle(cx, head_y + 2.0f, 18.0f, Color::rgb(0xffdfc4));
+        // Oreja
+        list.circle(cx - 22.0f, head_y + 3.0f, 7.5f, skin_color);
+        list.arc(cx - 22.0f, head_y + 3.0f, 4.5f, 1.6f, 0.5f, 3.8f, skin_shadow);
 
-        // Cejas gruesas oruga festivas arqueadas
-        list.rounded_rect({cx - 18.0f, head_y - 10.0f, 12.0f, 4.5f}, 2.2f, Color::rgb(0x111111));
-        list.rounded_rect({cx + 6.0f, head_y - 10.0f, 12.0f, 4.5f}, 2.2f, Color::rgb(0x111111));
+        // Pelo negro
+        list.rounded_rect({cx - 24.0f, head_y - 26.0f, 38.0f, 16.0f}, 6.0f, hair_color);
+        list.circle(cx - 12.0f, head_y - 14.0f, 16.0f, hair_color);
+        list.circle(cx + 4.0f, head_y - 16.0f, 14.0f, hair_color);
+        list.circle(cx + 6.0f, head_y - 4.0f, 14.0f, skin_color);
 
-        // Ojos cerrados de pura felicidad en arco (^ ^)
-        list.arc(cx - 10.0f, head_y - 1.0f, 6.5f, 2.5f, -1.2f, 2.4f, Color::rgb(0x111111));
-        list.arc(cx + 10.0f, head_y - 1.0f, 6.5f, 2.5f, -1.2f, 2.4f, Color::rgb(0x111111));
+        // Cejas gruesas oruga arqueadas alegres
+        list.rounded_rect({cx - 12.0f, head_y - 14.0f, 13.0f, 5.0f}, 2.5f, eyebrow_color);
+        list.rounded_rect({cx + 4.0f, head_y - 13.0f, 15.0f, 5.2f}, 2.5f, eyebrow_color);
+
+        // Ojo grande brillante expresivo (estilo imagen 5)
+        list.circle(cx + 9.0f, head_y + 1.0f, 6.5f, eyebrow_color);
+        list.circle(cx + 11.0f, head_y - 1.0f, 2.5f, Color::rgb(0xffffff));
+
+        // Guiño o ojo arqueado izquierdo
+        list.arc(cx - 4.0f, head_y + 1.0f, 5.5f, 2.2f, -1.2f, 2.4f, eyebrow_color);
 
         // Boca abierta sonriente con lengua rosada
-        list.circle(cx, head_y + 9.0f, 8.5f, Color::rgb(0x8a1515));
-        list.circle(cx, head_y + 11.5f, 5.5f, Color::rgb(0xff6f7d));
+        list.circle(cx + 14.0f, head_y + 10.0f, 7.0f, Color::rgb(0x7a0c0a));
+        list.circle(cx + 14.0f, head_y + 12.0f, 4.5f, Color::rgb(0xff6e79));
+
+        // Lineas de rubor rosado en las mejillas (///)
+        list.line(cx + 18.0f, head_y + 4.0f, cx + 20.0f, head_y + 7.0f, 1.5f, blush_color);
+        list.line(cx + 21.0f, head_y + 4.0f, cx + 23.0f, head_y + 7.0f, 1.5f, blush_color);
+        list.line(cx + 24.0f, head_y + 4.0f, cx + 26.0f, head_y + 7.0f, 1.5f, blush_color);
 
         // Cartel sostenido con checkmark verde
-        const Rect sign{cx - 58.0f, cy - 150.0f - hop, 116.0f, 50.0f};
-        list.rounded_rect(sign, 10.0f, Color::rgb(0x072818).with_alpha(0.96f));
-        paint.stroke(sign, 10.0f, 1.8f, Color::rgb(0x38ef7d));
+        const Rect sign{cx - 56.0f, cy - 148.0f - hop, 112.0f, 48.0f};
+        list.rounded_rect(sign, 9.0f, Color::rgb(0x062817).with_alpha(0.95f));
+        paint.stroke(sign, 9.0f, 1.8f, Color::rgb(0x38ef7d));
 
         // Circulo con checkmark verde
-        list.circle(sign.x + 24.0f, sign.cy(), 14.0f, Color::rgb(0x124727));
-        list.line(sign.x + 16.0f, sign.cy(), sign.x + 22.0f, sign.cy() + 5.5f, 3.2f, Color::rgb(0x38ef7d));
-        list.line(sign.x + 22.0f, sign.cy() + 5.5f, sign.x + 32.0f, sign.cy() - 6.5f, 3.2f, Color::rgb(0x38ef7d));
+        list.circle(sign.x + 22.0f, sign.cy(), 13.0f, Color::rgb(0x114626));
+        list.line(sign.x + 15.0f, sign.cy(), sign.x + 20.0f, sign.cy() + 5.0f, 3.0f, Color::rgb(0x38ef7d));
+        list.line(sign.x + 20.0f, sign.cy() + 5.0f, sign.x + 29.0f, sign.cy() - 6.0f, 3.0f, Color::rgb(0x38ef7d));
 
         const bool is_es = (machete::i18n::current_language() == machete::i18n::Language::Spanish);
-        paint.heading(is_es ? "EXITO" : "DONE", sign.x + 44.0f, sign.cy() + 7.0f, 18.0f, Color::rgb(0x38ef7d));
+        paint.heading(is_es ? "EXITO" : "DONE", sign.x + 42.0f, sign.cy() + 6.5f, 17.0f, Color::rgb(0x38ef7d));
 
-        // Estrellas doradas de celebracion orbitando
-        list.star(cx - 64.0f, cy - 120.0f - hop, 7.5f, Color::rgb(0xffd700));
-        list.star(cx + 64.0f, cy - 120.0f - hop, 7.5f, Color::rgb(0xffd700));
-        list.star(cx - 42.0f, cy - 168.0f - hop, 5.5f, Color::rgb(0xffeb3b));
-        list.star(cx + 42.0f, cy - 168.0f - hop, 5.5f, Color::rgb(0xffeb3b));
+        // Estrellas doradas de celebracion
+        list.star(cx - 62.0f, cy - 116.0f - hop, 7.0f, Color::rgb(0xffd700));
+        list.star(cx + 62.0f, cy - 116.0f - hop, 7.0f, Color::rgb(0xffd700));
     }
     else if (state == ShinchanState::Error)
     {
-        // Llanto desconsolado con lagrimas azules animadas y cartel con X roja
-        const float shake = std::sin(clock * 24.0f) * 2.5f;
+        // Estado de fallo/error con lagrimas animadas y cartel con X roja
+        const float shake = std::sin(clock * 24.0f) * 2.2f;
 
-        list.shadow({cx - 38.0f, cy - 2.0f, 76.0f, 14.0f}, 7.0f, 6.0f,
-                    Color::rgb(0x000000).with_alpha(0.40f));
-        // Charco de lagrimas en el suelo
-        list.rounded_rect({cx - 36.0f, cy + 2.0f, 72.0f, 6.0f}, 3.0f,
+        list.shadow({cx - 36.0f, cy - 2.0f, 72.0f, 12.0f}, 6.0f, 5.0f,
+                    Color::rgb(0x000000).with_alpha(0.35f));
+
+        // Charco de lagrimas azul
+        list.rounded_rect({cx - 34.0f, cy + 2.0f, 68.0f, 5.0f}, 2.5f,
                           Color::rgb(0x29b6f6).with_alpha(0.60f));
 
         // Piernas
-        list.line(cx - 14.0f, cy - 22.0f, cx - 18.0f, cy, 7.0f, Color::rgb(0xffdfc4));
-        list.line(cx + 14.0f, cy - 22.0f, cx + 18.0f, cy, 7.0f, Color::rgb(0xffdfc4));
-        list.rounded_rect({cx - 24.0f, cy - 6.0f, 12.0f, 6.0f}, 3.0f, Color::rgb(0xffffff));
-        list.rounded_rect({cx + 12.0f, cy - 6.0f, 12.0f, 6.0f}, 3.0f, Color::rgb(0xffffff));
-        list.rounded_rect({cx - 25.0f, cy - 2.5f, 14.0f, 5.5f}, 2.5f, Color::rgb(0x00b0ff));
-        list.rounded_rect({cx + 11.0f, cy - 2.5f, 14.0f, 5.5f}, 2.5f, Color::rgb(0x00b0ff));
+        list.line(cx - 13.0f, cy - 22.0f, cx - 17.0f, cy, 7.0f, skin_color);
+        list.line(cx + 13.0f, cy - 22.0f, cx + 17.0f, cy, 7.0f, skin_color);
+        list.rounded_rect({cx - 23.0f, cy - 5.0f, 10.0f, 5.0f}, 2.0f, white_socks);
+        list.rounded_rect({cx + 11.0f, cy - 5.0f, 10.0f, 5.0f}, 2.0f, white_socks);
+        list.rounded_rect({cx - 25.0f, cy - 2.0f, 15.0f, 6.0f}, 3.0f, yellow_shoes);
+        list.rounded_rect({cx + 10.0f, cy - 2.0f, 15.0f, 6.0f}, 3.0f, yellow_shoes);
 
-        // Pantalones amarillos temblorosos
-        list.rounded_rect({cx - 22.0f + shake, cy - 38.0f, 44.0f, 18.0f}, 7.0f, Color::rgb(0xffd600));
+        // Pantalones cortos amarillos temblorosos
+        list.rounded_rect({cx - 22.0f + shake, cy - 40.0f, 44.0f, 18.0f}, 7.0f, yellow_shorts);
 
         // Camiseta roja
-        list.rounded_rect({cx - 24.0f + shake, cy - 68.0f, 48.0f, 34.0f}, 10.0f, Color::rgb(0xe53935));
+        list.rounded_rect({cx - 24.0f + shake, cy - 68.0f, 48.0f, 32.0f}, 9.0f, red_shirt);
 
         // Brazos abatidos sosteniendo el cartel
-        list.line(cx - 20.0f + shake, cy - 58.0f, cx - 28.0f, cy - 90.0f, 6.0f, Color::rgb(0xe53935));
-        list.circle(cx - 28.0f, cy - 92.0f, 5.0f, Color::rgb(0xffdfc4));
-        list.line(cx + 20.0f + shake, cy - 58.0f, cx + 28.0f, cy - 90.0f, 6.0f, Color::rgb(0xe53935));
-        list.circle(cx + 28.0f, cy - 92.0f, 5.0f, Color::rgb(0xffdfc4));
+        list.line(cx - 18.0f + shake, cy - 58.0f, cx - 26.0f, cy - 88.0f, 6.5f, red_shirt);
+        list.circle(cx - 26.0f, cy - 89.0f, 4.5f, skin_color);
+        list.line(cx + 18.0f + shake, cy - 58.0f, cx + 26.0f, cy - 88.0f, 6.5f, red_shirt);
+        list.circle(cx + 26.0f, cy - 89.0f, 4.5f, skin_color);
 
-        // Cabeza
+        // Cabeza abatida con silueta de patata
         const float head_y = cy - 88.0f;
-        list.circle(cx + shake, head_y, 22.0f, Color::rgb(0xffdfc4));
-        list.circle(cx - 15.0f + shake, head_y + 4.0f, 13.0f, Color::rgb(0xffdfc4));
-        list.circle(cx + 15.0f + shake, head_y + 4.0f, 13.0f, Color::rgb(0xffdfc4));
+        list.circle(cx - 4.0f + shake, head_y, 22.0f, skin_color);
+        list.circle(cx + 15.0f + shake, head_y + 4.0f, 15.0f, skin_color);
+        list.circle(cx + 8.0f + shake, head_y - 2.0f, 18.0f, skin_color);
 
         // Pelo
-        list.rounded_rect({cx - 19.0f + shake, head_y - 25.0f, 38.0f, 15.0f}, 7.0f, Color::rgb(0x1a1a1a));
-        list.circle(cx + shake, head_y - 12.0f, 19.0f, Color::rgb(0x1a1a1a));
-        list.circle(cx + shake, head_y + 2.0f, 18.0f, Color::rgb(0xffdfc4));
+        list.rounded_rect({cx - 24.0f + shake, head_y - 26.0f, 38.0f, 16.0f}, 6.0f, hair_color);
+        list.circle(cx - 12.0f + shake, head_y - 14.0f, 16.0f, hair_color);
+        list.circle(cx + 4.0f + shake, head_y - 16.0f, 14.0f, hair_color);
+        list.circle(cx + 6.0f + shake, head_y - 4.0f, 14.0f, skin_color);
 
         // Cejas gruesas caidas temblorosas (\ /)
-        list.line(cx - 18.0f + shake, head_y - 10.0f, cx - 6.0f + shake, head_y - 6.0f,
-                  4.0f, Color::rgb(0x111111));
-        list.line(cx + 18.0f + shake, head_y - 10.0f, cx + 6.0f + shake, head_y - 6.0f,
-                  4.0f, Color::rgb(0x111111));
+        list.line(cx - 12.0f + shake, head_y - 9.0f, cx - 1.0f + shake, head_y - 5.0f, 4.5f, eyebrow_color);
+        list.line(cx + 16.0f + shake, head_y - 9.0f, cx + 5.0f + shake, head_y - 5.0f, 4.5f, eyebrow_color);
 
         // Ojos llorosos apretados
-        list.arc(cx - 11.0f + shake, head_y - 1.0f, 6.5f, 2.5f, 0.2f, 2.7f, Color::rgb(0x111111));
-        list.arc(cx + 11.0f + shake, head_y - 1.0f, 6.5f, 2.5f, 0.2f, 2.7f, Color::rgb(0x111111));
+        list.arc(cx - 5.0f + shake, head_y + 1.0f, 6.0f, 2.5f, 0.2f, 2.7f, eyebrow_color);
+        list.arc(cx + 11.0f + shake, head_y + 1.0f, 6.0f, 2.5f, 0.2f, 2.7f, eyebrow_color);
 
         // Cascadas de lagrimas animadas estilo anime
-        const float tear_flow = std::fmod(clock * 140.0f, 48.0f);
-        list.line(cx - 12.0f + shake, head_y, cx - 28.0f + shake, cy - 10.0f, 4.5f,
+        const float tear_flow = std::fmod(clock * 130.0f, 44.0f);
+        list.line(cx - 6.0f + shake, head_y + 2.0f, cx - 18.0f + shake, cy - 10.0f, 4.0f,
                   Color::rgb(0x29b6f6).with_alpha(0.85f));
-        list.line(cx - 10.0f + shake, head_y + 2.0f, cx - 24.0f + shake, cy - 12.0f, 2.8f, Color::rgb(0x81d4fa));
-        list.circle(cx - 20.0f + shake, head_y + tear_flow, 4.5f, Color::rgb(0x81d4fa));
+        list.circle(cx - 14.0f + shake, head_y + 6.0f + tear_flow, 4.0f, Color::rgb(0x81d4fa));
 
-        list.line(cx + 12.0f + shake, head_y, cx + 28.0f + shake, cy - 10.0f, 4.5f,
+        list.line(cx + 14.0f + shake, head_y + 2.0f, cx + 24.0f + shake, cy - 10.0f, 4.0f,
                   Color::rgb(0x29b6f6).with_alpha(0.85f));
-        list.line(cx + 10.0f + shake, head_y + 2.0f, cx + 24.0f + shake, cy - 12.0f, 2.8f, Color::rgb(0x81d4fa));
-        list.circle(cx + 20.0f + shake, head_y + tear_flow, 4.5f, Color::rgb(0x81d4fa));
+        list.circle(cx + 20.0f + shake, head_y + 6.0f + tear_flow, 4.0f, Color::rgb(0x81d4fa));
 
         // Boca temblorosa en arco invertido
-        list.arc(cx + shake, head_y + 11.0f, 8.5f, 3.0f, 2.4f, 1.8f, Color::rgb(0x3a0d12));
+        list.arc(cx + 8.0f + shake, head_y + 12.0f, 7.5f, 2.8f, 2.4f, 1.8f, Color::rgb(0x3a0d12));
 
         // Cartel sostenido con X roja
-        const Rect sign{cx - 58.0f, cy - 150.0f, 116.0f, 50.0f};
-        list.rounded_rect(sign, 10.0f, Color::rgb(0x28070b).with_alpha(0.96f));
-        paint.stroke(sign, 10.0f, 1.8f, Color::rgb(0xff4455));
+        const Rect sign{cx - 56.0f, cy - 148.0f, 112.0f, 48.0f};
+        list.rounded_rect(sign, 9.0f, Color::rgb(0x27070a).with_alpha(0.95f));
+        paint.stroke(sign, 9.0f, 1.8f, Color::rgb(0xff4455));
 
         // Circulo con X roja
-        list.circle(sign.x + 24.0f, sign.cy(), 14.0f, Color::rgb(0x4a0e14));
-        list.line(sign.x + 18.0f, sign.cy() - 6.0f, sign.x + 30.0f, sign.cy() + 6.0f, 3.2f, Color::rgb(0xff4455));
-        list.line(sign.x + 30.0f, sign.cy() - 6.0f, sign.x + 18.0f, sign.cy() + 6.0f, 3.2f, Color::rgb(0xff4455));
+        list.circle(sign.x + 22.0f, sign.cy(), 13.0f, Color::rgb(0x480e14));
+        list.line(sign.x + 17.0f, sign.cy() - 5.5f, sign.x + 27.0f, sign.cy() + 5.5f, 3.0f, Color::rgb(0xff4455));
+        list.line(sign.x + 27.0f, sign.cy() - 5.5f, sign.x + 17.0f, sign.cy() + 5.5f, 3.0f, Color::rgb(0xff4455));
 
         const bool is_es = (machete::i18n::current_language() == machete::i18n::Language::Spanish);
-        paint.heading(is_es ? "FALLO" : "ERROR", sign.x + 44.0f, sign.cy() + 7.0f, 18.0f, Color::rgb(0xff4455));
+        paint.heading(is_es ? "FALLO" : "ERROR", sign.x + 42.0f, sign.cy() + 6.5f, 17.0f, Color::rgb(0xff4455));
     }
 
     list.pop_opacity();
