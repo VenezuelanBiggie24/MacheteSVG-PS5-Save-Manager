@@ -1236,7 +1236,32 @@ TEST(MacheteParamJsonSizeTest, UpdateFileSizeAndMtimeInParamJson)
 
 TEST(MacheteBuildInfoTest, BuildNumberMatchesExpected)
 {
-    EXPECT_STREQ(machete::build::build_number(), "69");
+    EXPECT_STREQ(machete::build::build_number(), "70");
+}
+
+TEST(MacheteParamJsonDirNameTest, UpdateDirNameInParamJson)
+{
+    const std::string test_json = "/tmp/machete_test_dirname_param.json";
+    {
+        std::FILE *f = std::fopen(test_json.c_str(), "w");
+        ASSERT_NE(f, nullptr);
+        std::fputs("{\n  \"titleId\": \"PPSA01969\",\n  \"dirName\": \"PROFILE\"\n}\n", f);
+        std::fclose(f);
+    }
+
+    machete::pfs::update_ps5_param_json_dir_name(test_json, "AUTOSAVE0");
+
+    std::FILE *f = std::fopen(test_json.c_str(), "r");
+    ASSERT_NE(f, nullptr);
+    char buf[512] = {0};
+    const std::size_t n = std::fread(buf, 1, sizeof(buf) - 1, f);
+    std::fclose(f);
+    std::remove(test_json.c_str());
+
+    ASSERT_GT(n, 0u);
+    const std::string content(buf, n);
+    EXPECT_NE(content.find("\"dirName\": \"AUTOSAVE0\""), std::string::npos);
+    EXPECT_EQ(content.find("\"dirName\": \"PROFILE\""), std::string::npos);
 }
 
 TEST(MacheteParamJsonTitleIdTest, UpdateTitleIdInParamJson)
@@ -1270,16 +1295,17 @@ TEST(MachetePs5SavedataDbTest, DbCandidatePathsIncludeAllProsperoAndSystemDataLo
     ASSERT_FALSE(candidates.empty());
 
     bool has_prospero = false;
-    bool has_system_savedata = false;
+    bool has_ps4_savedata_contamination = false;
     for (const auto &c : candidates)
     {
         if (c.find("/system_data/savedata_prospero/105f615a/db/user/savedata.db") != std::string::npos)
             has_prospero = true;
-        if (c.find("/system_data/savedata/105f615a/db/user/savedata.db") != std::string::npos)
-            has_system_savedata = true;
+        if (c.find("/system_data/savedata/105f615a/") != std::string::npos)
+            has_ps4_savedata_contamination = true;
     }
     EXPECT_TRUE(has_prospero);
-    EXPECT_TRUE(has_system_savedata);
+    // Absolute isolation: PS5 candidate paths must NEVER contaminate PS4 databases
+    EXPECT_FALSE(has_ps4_savedata_contamination);
 }
 
 TEST(MachetePs5ParamJsonSynthesisTest, SynthesizeParamJsonFromSlots)
@@ -1308,7 +1334,7 @@ TEST(MachetePs5ParamJsonSynthesisTest, SynthesizeParamJsonFromSlots)
         "PPSA01969", dst, meta, "DEATH STRANDING DIRECTOR'S CUT", 0, 0);
     EXPECT_TRUE(ok);
 
-    // Verificar que param.json se creo en meta_target, dst/sce_sys y dst
+    // Verificar que param.json se creo en meta_target y NO contamina dst (savedata_prospero)
     const std::string pj_meta = meta + "/param.json";
     const std::string pj_sce = dst + "/sce_sys/param.json";
     const std::string pj_dst = dst + "/param.json";
@@ -1318,8 +1344,8 @@ TEST(MachetePs5ParamJsonSynthesisTest, SynthesizeParamJsonFromSlots)
     const std::string slot_auto_param = meta + "/AUTOSAVE0_param.json";
 
     EXPECT_EQ(access(pj_meta.c_str(), F_OK), 0);
-    EXPECT_EQ(access(pj_sce.c_str(), F_OK), 0);
-    EXPECT_EQ(access(pj_dst.c_str(), F_OK), 0);
+    EXPECT_NE(access(pj_sce.c_str(), F_OK), 0);
+    EXPECT_NE(access(pj_dst.c_str(), F_OK), 0);
     EXPECT_EQ(access(slot_meta.c_str(), F_OK), 0);
     EXPECT_EQ(access(slot_auto.c_str(), F_OK), 0);
     EXPECT_EQ(access(slot_meta_param.c_str(), F_OK), 0);

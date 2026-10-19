@@ -123,7 +123,7 @@ void Shell::update(const InputFrame &input, float dt)
     }
 
     const int count = static_cast<int>(concepts_.size());
-    if (input.is_pressed(Action::page_next) || input.is_pressed(Action::page_prev))
+    if (count > 1 && (input.is_pressed(Action::page_next) || input.is_pressed(Action::page_prev)))
     {
         direction_ = input.is_pressed(Action::page_next) ? 1 : -1;
         show(static_cast<std::size_t>((static_cast<int>(current_) + direction_ + count) % count),
@@ -144,9 +144,12 @@ void Shell::update(const InputFrame &input, float dt)
     // The active design sees everything the shell does not use; nothing at
     // all while the info panel covers it.
     InputFrame forwarded = input;
-    forwarded.pressed &= ~kShellActions;
-    forwarded.released &= ~kShellActions;
-    forwarded.held &= ~kShellActions;
+    const std::uint32_t active_shell_actions = (concepts_.size() > 1)
+        ? kShellActions
+        : action_bit(Action::touch);
+    forwarded.pressed &= ~active_shell_actions;
+    forwarded.released &= ~active_shell_actions;
+    forwarded.held &= ~active_shell_actions;
     if (info_open_)
     {
         forwarded = InputFrame{};

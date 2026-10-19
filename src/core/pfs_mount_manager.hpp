@@ -866,6 +866,61 @@ inline void update_ps5_param_json_title_id(const std::string &param_json_path, c
     }
 }
 
+// Actualiza dirName dentro de param.json para apuntar al slot principal de partida (ej. AUTOSAVE0)
+inline void update_ps5_param_json_dir_name(const std::string &param_json_path, const std::string &new_dir_name)
+{
+    if (new_dir_name.empty() || access(param_json_path.c_str(), R_OK) != 0)
+        return;
+
+    std::FILE *f = std::fopen(param_json_path.c_str(), "rb");
+    if (!f)
+        return;
+
+    std::fseek(f, 0, SEEK_END);
+    const long fsize = std::ftell(f);
+    std::fseek(f, 0, SEEK_SET);
+    if (fsize <= 0 || fsize > 256 * 1024)
+    {
+        std::fclose(f);
+        return;
+    }
+
+    std::string content(static_cast<std::size_t>(fsize), '\0');
+    const std::size_t r = std::fread(&content[0], 1, content.size(), f);
+    std::fclose(f);
+    if (r != content.size())
+        return;
+
+    const std::string needle = "\"dirName\":";
+    std::size_t pos = content.find(needle);
+    if (pos != std::string::npos)
+    {
+        std::size_t q1 = content.find('"', pos + needle.size());
+        if (q1 != std::string::npos)
+        {
+            std::size_t q2 = content.find('"', q1 + 1);
+            if (q2 != std::string::npos)
+            {
+                content.replace(q1 + 1, q2 - (q1 + 1), new_dir_name);
+                const std::string tmp = param_json_path + ".tmp";
+                std::FILE *out = std::fopen(tmp.c_str(), "wb");
+                if (out)
+                {
+                    std::fwrite(content.data(), 1, content.size(), out);
+                    std::fflush(out);
+                    int fd = fileno(out);
+                    if (fd >= 0)
+                        (void)::fsync(fd);
+                    std::fclose(out);
+                    (void)unlink(param_json_path.c_str());
+                    (void)std::rename(tmp.c_str(), param_json_path.c_str());
+                    (void)chmod(param_json_path.c_str(), 0666);
+                }
+            }
+        }
+    }
+}
+
 // Comprueba si el respaldo proviene de otra consola distinta a la actual
 inline bool is_backup_from_different_console(const std::string &backup_folder, bool is_ps5)
 {
@@ -1307,18 +1362,21 @@ inline PfsRestoreReport inject_and_resign_save(const std::string &title_id,
                         needs_ps5_modify = true;
                 }
 
-                // Exportar param.json e icon0.png internos hacia dst_target/sce_sys si el backup no tenia .meta
+                // Exportar param.json e icon0.png internos hacia savedata_prospero_meta si el backup no tenia .meta
+                char uid_hex[32];
+                std::snprintf(uid_hex, sizeof(uid_hex), "%x", user_id);
+                const std::string meta_target_user = std::string("/user/home/") + uid_hex + "/savedata_prospero_meta/user/" + title_id;
+                ensure_dir_tree(meta_target_user, owner_uid, owner_gid);
+
                 const std::string inner_json = mnt.mount_point() + "/sce_sys/param.json";
                 if (access(inner_json.c_str(), R_OK) == 0)
                 {
-                    ensure_dir_tree(dst_target + "/sce_sys", owner_uid, owner_gid);
-                    (void)copy_file_atomic(inner_json, dst_target + "/sce_sys/param.json", owner_uid, owner_gid);
+                    (void)copy_file_atomic(inner_json, meta_target_user + "/param.json", owner_uid, owner_gid);
                 }
                 const std::string inner_icon = mnt.mount_point() + "/sce_sys/icon0.png";
-                if (access(inner_icon.c_str(), R_OK) == 0 && access((dst_target + "/sce_sys/icon0.png").c_str(), R_OK) != 0)
+                if (access(inner_icon.c_str(), R_OK) == 0 && access((meta_target_user + "/icon0.png").c_str(), R_OK) != 0)
                 {
-                    ensure_dir_tree(dst_target + "/sce_sys", owner_uid, owner_gid);
-                    (void)copy_file_atomic(inner_icon, dst_target + "/sce_sys/icon0.png", owner_uid, owner_gid);
+                    (void)copy_file_atomic(inner_icon, meta_target_user + "/icon0.png", owner_uid, owner_gid);
                 }
 
                 if (!needs_ps5_modify)
@@ -1342,7 +1400,7 @@ inline PfsRestoreReport inject_and_resign_save(const std::string &title_id,
                     const int copied = copy_tree_simple(slot_dec_dir, mnt.mount_point(), true);
                     report.injected_files += copied;
                     MACHETE_LOG("[PFS]", "Injected %d decrypted files from %s into mounted PS5 slot %s",
-                                copied, slot_dec_dir.c_str(), slot_name.c_str());
+                                 copied, slot_dec_dir.c_str(), slot_name.c_str());
                 }
 
                 // Inyectar keystone autentico cosechado del Save Dummy o del juego
@@ -1376,9 +1434,7 @@ inline PfsRestoreReport inject_and_resign_save(const std::string &title_id,
                         (void)copy_file_atomic(image_path, bu_img, owner_uid, owner_gid);
                     }
 
-                    update_ps5_param_json_size(dst_target + "/sce_sys/param.json",
-                                               static_cast<std::uint64_t>(st_sd.st_size));
-                    update_ps5_param_json_size(dst_target + "/param.json",
+                    update_ps5_param_json_size(meta_target_user + "/param.json",
                                                static_cast<std::uint64_t>(st_sd.st_size));
                     db::update_or_register_ps5_savedata_db(
                         user_id, active_account_id, title_id, slot_name,

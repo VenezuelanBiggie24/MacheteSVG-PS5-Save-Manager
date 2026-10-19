@@ -161,17 +161,8 @@ inline std::vector<std::string> get_ps5_savedata_db_candidates(std::uint32_t use
     paths.push_back(std::string("/system_data/savedata_prospero/") + uid_clean + "/db/savedata.db");
     paths.push_back(std::string("/system_data/savedata_prospero/") + uid_8 + "/savedata.db");
     paths.push_back(std::string("/system_data/savedata_prospero/") + uid_clean + "/savedata.db");
-    paths.push_back(std::string("/system_data/savedata/") + uid_8 + "/db/user/savedata.db");
-    paths.push_back(std::string("/system_data/savedata/") + uid_clean + "/db/user/savedata.db");
-    paths.push_back(std::string("/system_data/savedata/") + uid_8 + "/db/savedata.db");
-    paths.push_back(std::string("/system_data/savedata/") + uid_clean + "/db/savedata.db");
-    paths.push_back(std::string("/system_data/savedata/") + uid_8 + "/savedata.db");
-    paths.push_back(std::string("/system_data/savedata/") + uid_clean + "/savedata.db");
     paths.push_back("/system_data/savedata_prospero/db/user/savedata.db");
-    paths.push_back("/system_data/savedata/db/user/savedata.db");
     paths.push_back("/system_data/savedata_prospero/db/savedata.db");
-    paths.push_back("/system_data/savedata/db/savedata.db");
-    paths.push_back("/system_data/priv/mms/savedata.db");
     return paths;
 }
 
@@ -644,6 +635,40 @@ inline bool update_or_register_ps5_savedata_db(std::uint32_t user_id,
     return any_updated;
 }
 
+// Purga registros ajenos en bases de datos (elimina PPSA de DBs de PS4 y CUSA de DBs de PS5)
+inline void sanitize_database_architecture_isolation(std::uint32_t user_id)
+{
+    SqliteAdapter &adapter = SqliteAdapter::instance();
+    if (!adapter.is_available() || user_id == 0)
+        return;
+
+    // 1. Limpiar entradas de PS5 (PPSA/PPCX) que se hayan filtrado en la base de datos de PS4
+    const auto ps4_dbs = filter_existing_unique_dbs(get_ps4_savedata_db_candidates(user_id));
+    for (const auto &dbp : ps4_dbs)
+    {
+        void *db = nullptr;
+        if (adapter.open(dbp.c_str(), &db) != 0 || !db)
+            continue;
+        (void)adapter.exec(db, "DELETE FROM savedata WHERE title_id LIKE 'PPSA%' OR title_id LIKE 'PPCX%';", nullptr, nullptr, nullptr);
+        (void)adapter.exec(db, "PRAGMA wal_checkpoint(FULL);", nullptr, nullptr, nullptr);
+        adapter.close(db);
+        (void)chmod(dbp.c_str(), 0666);
+    }
+
+    // 2. Limpiar entradas de PS4 (CUSA) que se hayan filtrado en la base de datos de PS5
+    const auto ps5_dbs = filter_existing_unique_dbs(get_ps5_savedata_db_candidates(user_id));
+    for (const auto &dbp : ps5_dbs)
+    {
+        void *db = nullptr;
+        if (adapter.open(dbp.c_str(), &db) != 0 || !db)
+            continue;
+        (void)adapter.exec(db, "DELETE FROM savedata WHERE title_id LIKE 'CUSA%';", nullptr, nullptr, nullptr);
+        (void)adapter.exec(db, "PRAGMA wal_checkpoint(FULL);", nullptr, nullptr, nullptr);
+        adapter.close(db);
+        (void)chmod(dbp.c_str(), 0666);
+    }
+}
+
 // Limpia las banderas de corrupcion (is_broken, fake_broken), deduplica filas y sincroniza account_id/user_id
 inline bool repair_title_corruption_flags(std::uint32_t user_id,
                                           const std::string &title_id,
@@ -659,6 +684,25 @@ inline bool repair_title_corruption_flags(std::uint32_t user_id,
                : get_ps4_savedata_db_candidates(user_id));
 
     const std::string safe_tid = escape_sql_string(title_id);
+
+    // Purgar esta title_id de las bases de datos de la arquitectura contraria para prevenir contaminacion
+    const auto opposite_dbs = filter_existing_unique_dbs(
+        is_ps5 ? get_ps4_savedata_db_candidates(user_id)
+               : get_ps5_savedata_db_candidates(user_id));
+    for (const auto &odbp : opposite_dbs)
+    {
+        void *odb = nullptr;
+        if (adapter.open(odbp.c_str(), &odb) == 0 && odb)
+        {
+            char sql_del[256];
+            std::snprintf(sql_del, sizeof(sql_del), "DELETE FROM savedata WHERE title_id = '%s';", safe_tid.c_str());
+            (void)adapter.exec(odb, sql_del, nullptr, nullptr, nullptr);
+            (void)adapter.exec(odb, "PRAGMA wal_checkpoint(FULL);", nullptr, nullptr, nullptr);
+            adapter.close(odb);
+            (void)chmod(odbp.c_str(), 0666);
+        }
+    }
+
     bool any_cleared = false;
 
     for (const auto &dbp : unique_dbs)
