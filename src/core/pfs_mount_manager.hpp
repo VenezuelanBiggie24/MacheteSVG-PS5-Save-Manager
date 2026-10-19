@@ -895,9 +895,11 @@ inline bool is_backup_from_different_console(const std::string &backup_folder, b
     }
 
     // 3. Verificacion criptografica en hardware con SAMU (/dev/pfsmgr):
-    //    Probar si el SAMU de ESTA consola puede descifrar la clave sellada (.bin en PS4 o sdimg_* en PS5).
-    //    Si la consola fue reinstalada/formateada o proviene de otra consola, el SAMU la rechazara (status_0x80 != 0, ej. -53).
-    if (access("/dev/pfsmgr", F_OK) == 0 && getuid() == 0)
+    //    Probar si el SAMU de ESTA consola puede descifrar la clave sellada (.bin en PS4).
+    //    NOTA CRITICA: ioctl 0xc0845302 solo soporta claves selladas de PS4 (formato pfsSKKey v10 / 0x0A).
+    //    En PS5 (formato pfsSKKey v1 / 0x01) el kernel devuelve EINVAL / status_0x80 = -53, por lo que
+    //    esta prueba de hardware NUNCA debe ejecutarse para PS5 (solo para PS4 / !is_ps5).
+    if (!is_ps5 && access("/dev/pfsmgr", F_OK) == 0 && getuid() == 0)
     {
         std::vector<std::string> bslots;
         if (has_local_save_dummy(backup_folder, is_ps5, &bslots) && !bslots.empty())
@@ -905,8 +907,8 @@ inline bool is_backup_from_different_console(const std::string &backup_folder, b
             std::uint8_t test_key[32] = {0};
             if (!decrypt_pfs_key_for_slot(backup_folder, bslots[0], is_ps5, test_key))
             {
-                MACHETE_LOG("[PFS]", "Backup %s sealed key rejected by local SAMU (fresh OS reinstall or foreign console): %s",
-                            is_ps5 ? "PS5" : "PS4", bslots[0].c_str());
+                MACHETE_LOG("[PFS]", "Backup PS4 sealed key rejected by local SAMU (fresh OS reinstall or foreign console): %s",
+                            bslots[0].c_str());
                 return true;
             }
         }

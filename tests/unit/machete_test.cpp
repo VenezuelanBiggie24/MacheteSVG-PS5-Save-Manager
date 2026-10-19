@@ -1236,7 +1236,7 @@ TEST(MacheteParamJsonSizeTest, UpdateFileSizeAndMtimeInParamJson)
 
 TEST(MacheteBuildInfoTest, BuildNumberMatchesExpected)
 {
-    EXPECT_STREQ(machete::build::build_number(), "68");
+    EXPECT_STREQ(machete::build::build_number(), "69");
 }
 
 TEST(MacheteParamJsonTitleIdTest, UpdateTitleIdInParamJson)
@@ -1314,14 +1314,18 @@ TEST(MachetePs5ParamJsonSynthesisTest, SynthesizeParamJsonFromSlots)
     const std::string pj_dst = dst + "/param.json";
     const std::string slot_meta = meta + "/PROFILE.json";
     const std::string slot_auto = meta + "/AUTOSAVE0.json";
+    const std::string slot_meta_param = meta + "/PROFILE_param.json";
+    const std::string slot_auto_param = meta + "/AUTOSAVE0_param.json";
 
     EXPECT_EQ(access(pj_meta.c_str(), F_OK), 0);
     EXPECT_EQ(access(pj_sce.c_str(), F_OK), 0);
     EXPECT_EQ(access(pj_dst.c_str(), F_OK), 0);
     EXPECT_EQ(access(slot_meta.c_str(), F_OK), 0);
     EXPECT_EQ(access(slot_auto.c_str(), F_OK), 0);
+    EXPECT_EQ(access(slot_meta_param.c_str(), F_OK), 0);
+    EXPECT_EQ(access(slot_auto_param.c_str(), F_OK), 0);
 
-    // Leer pj_meta y validar contenido
+    // Leer pj_meta y validar contenido (AUTOSAVE0 debe ser el slot primario de campana)
     {
         std::FILE *f = std::fopen(pj_meta.c_str(), "rb");
         ASSERT_NE(f, nullptr);
@@ -1331,7 +1335,7 @@ TEST(MachetePs5ParamJsonSynthesisTest, SynthesizeParamJsonFromSlots)
         ASSERT_GT(n, 0u);
         const std::string content(buf, n);
         EXPECT_NE(content.find("\"titleId\": \"PPSA01969\""), std::string::npos);
-        EXPECT_NE(content.find("\"dirName\": \"PROFILE\""), std::string::npos);
+        EXPECT_NE(content.find("\"dirName\": \"AUTOSAVE0\""), std::string::npos);
         EXPECT_NE(content.find("DEATH STRANDING"), std::string::npos);
     }
 
@@ -1343,8 +1347,12 @@ TEST(MachetePs5ParamJsonSynthesisTest, SynthesizeParamJsonFromSlots)
     (void)std::remove(pj_dst.c_str());
     (void)std::remove(slot_meta.c_str());
     (void)std::remove(slot_auto.c_str());
+    (void)std::remove(slot_meta_param.c_str());
+    (void)std::remove(slot_auto_param.c_str());
     (void)std::remove((dst + "/sce_sys/PROFILE.json").c_str());
     (void)std::remove((dst + "/sce_sys/AUTOSAVE0.json").c_str());
+    (void)std::remove((dst + "/sce_sys/PROFILE_param.json").c_str());
+    (void)std::remove((dst + "/sce_sys/AUTOSAVE0_param.json").c_str());
     (void)rmdir((dst + "/sce_sys").c_str());
     (void)rmdir(dst.c_str());
     (void)rmdir(meta.c_str());

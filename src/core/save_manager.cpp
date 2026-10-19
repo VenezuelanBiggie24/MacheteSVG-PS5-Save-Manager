@@ -553,17 +553,44 @@ bool synthesize_ps5_param_json(const std::string &title_id,
         slots.push_back({"PROFILE", 3145728ULL});
     }
 
-    // Identificar slot primario: preferir PROFILE, luego AUTOSAVE0, o el primer slot
-    std::string primary_slot = slots[0].first;
-    std::uint64_t primary_size = slots[0].second;
-    for (const auto &sl : slots)
+    // Identificar slot primario:
+    // En juegos de PS5, "PROFILE" suele ser unicamente configuracion/opciones y NO contiene el progreso de campana.
+    // El slot primario debe ser la ranura de juego real (ej. AUTOSAVE0, SAVEDATA0, o la ranura que no sea PROFILE con mayor tamano).
+    std::string primary_slot;
+    std::uint64_t primary_size = 0;
+
+    const char *kGameplayPrefixes[] = {
+        "AUTOSAVE", "SAVEDATA", "QUICKSAVE", "MANUAL", "SAVE", "GAME", "SLOT", nullptr
+    };
+    for (int p = 0; kGameplayPrefixes[p] && primary_slot.empty(); ++p)
     {
-        if (sl.first == "PROFILE")
+        for (const auto &sl : slots)
         {
-            primary_slot = sl.first;
-            primary_size = sl.second;
-            break;
+            if (sl.first.rfind(kGameplayPrefixes[p], 0) == 0)
+            {
+                primary_slot = sl.first;
+                primary_size = sl.second;
+                break;
+            }
         }
+    }
+
+    if (primary_slot.empty())
+    {
+        for (const auto &sl : slots)
+        {
+            if (sl.first != "PROFILE" && sl.second > primary_size)
+            {
+                primary_slot = sl.first;
+                primary_size = sl.second;
+            }
+        }
+    }
+
+    if (primary_slot.empty() && !slots.empty())
+    {
+        primary_slot = slots[0].first;
+        primary_size = slots[0].second;
     }
 
     std::string safe_title = game_title.empty() ? "Save Data" : game_title;
@@ -615,7 +642,7 @@ bool synthesize_ps5_param_json(const std::string &title_id,
     write_string_atomic(dst_target + "/sce_sys/param.json", primary_json, target_uid, target_gid);
     write_string_atomic(dst_target + "/param.json", primary_json, target_uid, target_gid);
 
-    // Escribir descriptor individual <slot>.json para cada slot en meta_target y dst_target/sce_sys
+    // Escribir descriptores individuales <slot>_param.json y <slot>.json para cada slot en meta_target y dst_target/sce_sys
     for (const auto &sl : slots)
     {
         char slot_json[1024];
@@ -635,7 +662,9 @@ bool synthesize_ps5_param_json(const std::string &title_id,
                       static_cast<unsigned long long>(now_ms),
                       esc_title.c_str(), sl.first.c_str());
 
+        write_string_atomic(meta_target + "/" + sl.first + "_param.json", slot_json, target_uid, target_gid);
         write_string_atomic(meta_target + "/" + sl.first + ".json", slot_json, target_uid, target_gid);
+        write_string_atomic(dst_target + "/sce_sys/" + sl.first + "_param.json", slot_json, target_uid, target_gid);
         write_string_atomic(dst_target + "/sce_sys/" + sl.first + ".json", slot_json, target_uid, target_gid);
     }
 
@@ -710,30 +739,54 @@ void reconstruct_prospero_metadata(const std::string &title_id,
             copy_file_with_fsync(found_param_json, dst_target + "/param.json", b, 0, fc, nullptr, target_uid, target_gid);
         }
 
-        // 1. Identificar el slot primario para param.json (preferir PROFILE, luego AUTOSAVE0, o la primera ranura valida)
-        std::string primary_slot_file = dst_target + "/sdimg_PROFILE";
+        // 1. Identificar el slot primario para param.json:
+        // En juegos de PS5, preferir la ranura de campana (ej. AUTOSAVE0, SAVEDATA0, o la de mayor tamano), NO PROFILE
+        std::string primary_slot_file;
         struct stat st_sd{};
-        if (stat(primary_slot_file.c_str(), &st_sd) != 0 || st_sd.st_size <= 0)
+        const char *kGameplayCandidates[] = {
+            "AUTOSAVE0", "SAVEDATA0", "SAVEDATA00", "QUICKSAVE0", "MANUAL0", nullptr
+        };
+        for (int p = 0; kGameplayCandidates[p] && primary_slot_file.empty(); ++p)
         {
-            primary_slot_file = dst_target + "/sdimg_AUTOSAVE0";
-            if (stat(primary_slot_file.c_str(), &st_sd) != 0 || st_sd.st_size <= 0)
+            const std::string cand_path = dst_target + "/sdimg_" + kGameplayCandidates[p];
+            if (stat(cand_path.c_str(), &st_sd) == 0 && st_sd.st_size > 0)
             {
-                ScopedDir dir_j(dst_target);
-                if (dir_j.is_valid())
+                primary_slot_file = cand_path;
+                break;
+            }
+        }
+        if (primary_slot_file.empty())
+        {
+            std::uint64_t max_non_profile_sz = 0;
+            ScopedDir dir_j(dst_target);
+            if (dir_j.is_valid())
+            {
+                while (const dirent *ent = readdir(dir_j.get()))
                 {
-                    while (const dirent *ent = readdir(dir_j.get()))
+                    if (std::strncmp(ent->d_name, "sdimg_", 6) == 0 && std::strncmp(ent->d_name, "sdimg_sce_bu_", 13) != 0)
                     {
-                        if (std::strncmp(ent->d_name, "sdimg_", 6) == 0 && std::strncmp(ent->d_name, "sdimg_sce_bu_", 13) != 0)
+                        const std::string sname = ent->d_name + 6;
+                        if (sname != "PROFILE")
                         {
-                            if (stat((dst_target + "/" + ent->d_name).c_str(), &st_sd) == 0 && st_sd.st_size > 0)
+                            struct stat st_ent{};
+                            if (stat((dst_target + "/" + ent->d_name).c_str(), &st_ent) == 0 && st_ent.st_size > 0)
                             {
-                                primary_slot_file = dst_target + "/" + ent->d_name;
-                                break;
+                                if (static_cast<std::uint64_t>(st_ent.st_size) > max_non_profile_sz)
+                                {
+                                    max_non_profile_sz = static_cast<std::uint64_t>(st_ent.st_size);
+                                    primary_slot_file = dst_target + "/" + ent->d_name;
+                                    st_sd = st_ent;
+                                }
                             }
                         }
                     }
                 }
             }
+        }
+        if (primary_slot_file.empty())
+        {
+            primary_slot_file = dst_target + "/sdimg_PROFILE";
+            (void)stat(primary_slot_file.c_str(), &st_sd);
         }
         if (st_sd.st_size > 0)
         {
@@ -747,7 +800,7 @@ void reconstruct_prospero_metadata(const std::string &title_id,
         machete::pfs::update_ps5_param_json_title_id(dst_target + "/sce_sys/param.json", title_id);
         machete::pfs::update_ps5_param_json_title_id(dst_target + "/param.json", title_id);
 
-        // 3. Actualizar descriptores individuales <slot>.json para cada slot en meta_target y dst_target/sce_sys
+        // 3. Actualizar o crear descriptores individuales <slot>_param.json y <slot>.json para cada slot en meta_target y dst_target/sce_sys
         ScopedDir dir_slots(dst_target);
         if (dir_slots.is_valid())
         {
@@ -759,10 +812,41 @@ void reconstruct_prospero_metadata(const std::string &title_id,
                     struct stat st_slot{};
                     if (stat((dst_target + "/" + ent->d_name).c_str(), &st_slot) == 0 && st_slot.st_size > 0)
                     {
-                        machete::pfs::update_ps5_param_json_size(meta_target + "/" + slot_name + ".json", static_cast<std::uint64_t>(st_slot.st_size));
-                        machete::pfs::update_ps5_param_json_size(dst_target + "/sce_sys/" + slot_name + ".json", static_cast<std::uint64_t>(st_slot.st_size));
-                        machete::pfs::update_ps5_param_json_title_id(meta_target + "/" + slot_name + ".json", title_id);
-                        machete::pfs::update_ps5_param_json_title_id(dst_target + "/sce_sys/" + slot_name + ".json", title_id);
+                        const std::vector<std::string> slot_json_paths = {
+                            meta_target + "/" + slot_name + "_param.json",
+                            meta_target + "/" + slot_name + ".json",
+                            dst_target + "/sce_sys/" + slot_name + "_param.json",
+                            dst_target + "/sce_sys/" + slot_name + ".json"
+                        };
+                        for (const auto &sjp : slot_json_paths)
+                        {
+                            if (access(sjp.c_str(), R_OK) == 0)
+                            {
+                                machete::pfs::update_ps5_param_json_size(sjp, static_cast<std::uint64_t>(st_slot.st_size));
+                                machete::pfs::update_ps5_param_json_title_id(sjp, title_id);
+                            }
+                            else
+                            {
+                                char s_json[1024];
+                                const std::uint64_t n_ms = static_cast<std::uint64_t>(std::time(nullptr)) * 1000ULL;
+                                std::snprintf(s_json, sizeof(s_json),
+                                              "{\n"
+                                              "  \"titleId\": \"%s\",\n"
+                                              "  \"dirName\": \"%s\",\n"
+                                              "  \"fileSize\": %llu,\n"
+                                              "  \"mtime\": %llu,\n"
+                                              "  \"titleName\": \"%s\",\n"
+                                              "  \"subTitle\": \"%s\",\n"
+                                              "  \"detail\": \"\",\n"
+                                              "  \"userParam\": 0\n"
+                                              "}\n",
+                                              title_id.c_str(), slot_name.c_str(),
+                                              static_cast<unsigned long long>(st_slot.st_size),
+                                              static_cast<unsigned long long>(n_ms),
+                                              game_title.c_str(), slot_name.c_str());
+                                write_string_atomic(sjp, s_json, target_uid, target_gid);
+                            }
+                        }
                     }
                 }
             }
