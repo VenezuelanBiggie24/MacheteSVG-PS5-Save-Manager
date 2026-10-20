@@ -140,19 +140,37 @@ static void draw_shinchan_character(gfx::DrawList &list, ui::Painter &paint,
     const Color yellow_shoes = Color::rgb(0xffca00);
     const Color blush_color = Color::rgb(0xff7582);
 
+    // Pedestal sutil estilo Liquid Glass para unificar esteticamente los tres estados
+    const Rect pedestal{cx - 86.0f, cy - 176.0f, 172.0f, 186.0f};
+    if (state == ShinchanState::Success)
+    {
+        list.rounded_rect(pedestal, 22.0f, Color::rgb(0x062817).with_alpha(0.50f));
+        paint.stroke(pedestal, 22.0f, 1.2f, Color::rgb(0x38ef7d).with_alpha(0.30f));
+    }
+    else if (state == ShinchanState::Error)
+    {
+        list.rounded_rect(pedestal, 22.0f, Color::rgb(0x27070a).with_alpha(0.50f));
+        paint.stroke(pedestal, 22.0f, 1.2f, Color::rgb(0xff4455).with_alpha(0.30f));
+    }
+    else
+    {
+        list.rounded_rect(pedestal, 22.0f, Color::rgb(0x0c1b30).with_alpha(0.45f));
+        paint.stroke(pedestal, 22.0f, 1.2f, Color::rgb(0x38bdf8).with_alpha(0.20f));
+    }
+
+    // Sombra suave en el suelo compartida para todos los estados
+    list.shadow({cx - 40.0f, cy - 2.0f, 80.0f, 12.0f}, 6.0f, 5.0f,
+                Color::rgb(0x000000).with_alpha(0.30f));
+
     if (state == ShinchanState::Dancing)
     {
         // 1. Si disponemos de las texturas de los 12 fotogramas del GIF de Shin-chan, reproducir a 10 FPS
         const int frame_idx = static_cast<int>(clock * 10.0f) % 12;
         if (dance_textures && (*dance_textures)[static_cast<std::size_t>(frame_idx)] != 0)
         {
-            // Sombra suave en el suelo
-            list.shadow({cx - 40.0f, cy - 2.0f, 80.0f, 12.0f}, 6.0f, 5.0f,
-                        Color::rgb(0x000000).with_alpha(0.30f));
-
-            // Renderizado del fotograma transparente canonico (proporcion original 370x300)
-            const float w = 154.0f;
-            const float h = 125.0f;
+            // Renderizado del fotograma transparente canonico estandarizado (480x480 a 152x152)
+            const float w = 152.0f;
+            const float h = 152.0f;
             const Rect dst{cx - w * 0.5f, cy - h - 5.0f, w, h};
             list.image((*dance_textures)[static_cast<std::size_t>(frame_idx)], dst,
                        gfx::kFullUv, Color::rgb(0xffffff));
@@ -267,10 +285,6 @@ static void draw_shinchan_character(gfx::DrawList &list, ui::Painter &paint,
         const int frame_idx = static_cast<int>(clock * 8.33f) % 16;
         if (done_textures && (*done_textures)[static_cast<std::size_t>(frame_idx)] != 0)
         {
-            // Sombra suave en el suelo
-            list.shadow({cx - 40.0f, cy - 2.0f, 80.0f, 12.0f}, 6.0f, 5.0f,
-                        Color::rgb(0x000000).with_alpha(0.30f));
-
             // Renderizado del fotograma transparente canonico de exito (480x480)
             const float w = 152.0f;
             const float h = 152.0f;
@@ -379,10 +393,6 @@ static void draw_shinchan_character(gfx::DrawList &list, ui::Painter &paint,
         const int frame_idx = static_cast<int>(clock * 12.0f) % 16;
         if (crying_textures && (*crying_textures)[static_cast<std::size_t>(frame_idx)] != 0)
         {
-            // Sombra suave en el suelo
-            list.shadow({cx - 40.0f, cy - 2.0f, 80.0f, 12.0f}, 6.0f, 5.0f,
-                        Color::rgb(0x000000).with_alpha(0.30f));
-
             // Renderizado del fotograma transparente canonico de llanto (480x480)
             const float w = 152.0f;
             const float h = 152.0f;
@@ -2213,7 +2223,7 @@ class Machete final : public app::Concept
         if (ws_show > 0.01f)
         {
             list.rounded_rect({0, 0, gfx::kVirtualWidth, gfx::kVirtualHeight}, 0,
-                              Color::rgb(0x000000).with_alpha(0.7f * ws_show));
+                              Color::rgb(0x060b16).with_alpha(0.58f * ws_show));
             list.push_opacity(tween::clamp01(ws_show));
             list.push_transform(0.94f + 0.06f * tween::clamp01(ws_show), 960, 540, 0, 0);
 
@@ -2354,7 +2364,7 @@ class Machete final : public app::Concept
         if (show > 0.01f)
         {
             list.rounded_rect({0, 0, gfx::kVirtualWidth, gfx::kVirtualHeight}, 0,
-                              Color::rgb(0x000000).with_alpha(0.68f * show));
+                              Color::rgb(0x060b16).with_alpha(0.58f * show));
             list.push_opacity(tween::clamp01(show));
             list.push_transform(0.94f + 0.06f * tween::clamp01(show), 960, 540, 0, 0);
 
@@ -2550,7 +2560,7 @@ class Machete final : public app::Concept
         if (op_show > 0.005f)
         {
             list.rounded_rect({0, 0, gfx::kVirtualWidth, gfx::kVirtualHeight}, 0,
-                              Color::rgb(0x000000).with_alpha(0.72f * op_show));
+                              Color::rgb(0x060b16).with_alpha(0.58f * op_show));
             list.push_opacity(tween::clamp01(op_show));
             list.push_transform(0.92f + 0.08f * tween::clamp01(op_show), 960, 540, 0, 0);
 
@@ -2621,7 +2631,7 @@ class Machete final : public app::Concept
         if (alert_show > 0.005f)
         {
             list.rounded_rect({0, 0, gfx::kVirtualWidth, gfx::kVirtualHeight}, 0,
-                              Color::rgb(0x000000).with_alpha(0.74f * alert_show));
+                              Color::rgb(0x060b16).with_alpha(0.60f * alert_show));
             list.push_opacity(tween::clamp01(alert_show));
             list.push_transform(0.93f + 0.07f * tween::clamp01(alert_show), 960, 540, 0, 0);
 
