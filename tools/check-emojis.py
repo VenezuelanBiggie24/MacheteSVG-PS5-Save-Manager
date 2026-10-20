@@ -13,7 +13,7 @@ BINARY_EXTENSIONS = {
     ".png", ".jpg", ".jpeg", ".ico", ".bin", ".ogg", ".wav",
     ".elf", ".a", ".so", ".dylib", ".o", ".zip", ".tar", ".gz",
     ".bmp", ".webp", ".ttf", ".otf", ".dds", ".at9", ".sfo",
-    ".keystone", ".sealedkey"
+    ".keystone", ".sealedkey", ".gif"
 }
 
 IGNORED_DIRS = {".git", ".deps", "build", "dist"}

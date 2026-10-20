@@ -970,6 +970,68 @@ void WebServer::handle_client(int client_fd)
         return;
     }
 
+    // Ruta: Animaciones de Shin-chan para el Actualizador Web (GIFs)
+    if (path.rfind("/api/shinchan", 0) == 0)
+    {
+        std::string anim_type = "dance";
+        if (decoded_path.find("done") != std::string::npos || decoded_path.find("success") != std::string::npos)
+        {
+            anim_type = "done";
+        }
+        else if (decoded_path.find("error") != std::string::npos || decoded_path.find("crying") != std::string::npos ||
+                 decoded_path.find("fail") != std::string::npos || decoded_path.find("fallo") != std::string::npos)
+        {
+            anim_type = "error";
+        }
+
+        const std::string filename = "shinchan_" + anim_type + ".gif";
+        const std::string anim_candidates[] = {
+            "assets/ui/" + filename,
+            "/app0/assets/ui/" + filename,
+            "/data/homebrew/PPSA99001/assets/ui/" + filename,
+            "/user/app/PPSA99001/assets/ui/" + filename,
+#ifdef HUI_SOURCE_DIR
+            std::string(HUI_SOURCE_DIR) + "/assets/ui/" + filename,
+#endif
+            "/tmp/machete_test_homebrew/PPSA99001/assets/ui/" + filename
+        };
+
+        for (const auto &cand : anim_candidates)
+        {
+            ScopedFd fd(open(cand.c_str(), O_RDONLY));
+            if (fd.is_valid())
+            {
+                struct stat st{};
+                if (fstat(fd.get(), &st) == 0 && S_ISREG(st.st_mode) && st.st_size > 0 && st.st_size <= 16 * 1024 * 1024)
+                {
+                    std::vector<std::uint8_t> anim_data(static_cast<std::size_t>(st.st_size));
+                    std::size_t total_read = 0;
+                    bool read_ok = true;
+                    while (total_read < anim_data.size())
+                    {
+                        ssize_t r = read(fd.get(), anim_data.data() + total_read, anim_data.size() - total_read);
+                        if (r < 0)
+                        {
+                            if (errno == EINTR) continue;
+                            read_ok = false;
+                            break;
+                        }
+                        if (r == 0) break;
+                        total_read += static_cast<std::size_t>(r);
+                    }
+                    if (read_ok && total_read == anim_data.size())
+                    {
+                        send_response(client_fd, 200, "OK", "image/gif", anim_data.data(), anim_data.size(),
+                                      "Cache-Control: public, max-age=86400\r\n");
+                        return;
+                    }
+                }
+            }
+        }
+        send_string_response(client_fd, 404, "Not Found", "text/plain", "Shinchan animation not found");
+        return;
+    }
+
     // Ruta 3: API de Lista de Juegos y Partidas
     if (path == "/api/games")
     {

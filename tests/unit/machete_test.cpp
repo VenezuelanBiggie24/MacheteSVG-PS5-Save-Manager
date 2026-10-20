@@ -715,6 +715,19 @@ TEST(MacheteServerTest, HttpApiEndpointsAndSecurity)
         EXPECT_TRUE(server.is_update_module_enabled());
     }
 
+    // 9. Shin-chan animation endpoints for Web Updater
+    std::string shin_dance = test_http_request(test_port, "GET /api/shinchan/dance.gif HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n");
+    EXPECT_NE(shin_dance.find("HTTP/1.1 200 OK"), std::string::npos);
+    EXPECT_NE(shin_dance.find("Content-Type: image/gif"), std::string::npos);
+
+    std::string shin_done = test_http_request(test_port, "GET /api/shinchan/done.gif HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n");
+    EXPECT_NE(shin_done.find("HTTP/1.1 200 OK"), std::string::npos);
+    EXPECT_NE(shin_done.find("Content-Type: image/gif"), std::string::npos);
+
+    std::string shin_error = test_http_request(test_port, "GET /api/shinchan?state=error HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n");
+    EXPECT_NE(shin_error.find("HTTP/1.1 200 OK"), std::string::npos);
+    EXPECT_NE(shin_error.find("Content-Type: image/gif"), std::string::npos);
+
     server.stop();
     EXPECT_FALSE(server.is_running());
 }

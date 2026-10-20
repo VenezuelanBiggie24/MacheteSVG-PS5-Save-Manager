@@ -9,6 +9,11 @@
 namespace machete::server
 {
 
+#if defined(__clang__)
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Woverlength-strings"
+#endif
+
 constexpr std::string_view kWebUiHtml = R"rawhtml(<!DOCTYPE html>
 <html lang="es">
 <head>
@@ -671,6 +676,66 @@ constexpr std::string_view kWebUiHtml = R"rawhtml(<!DOCTYPE html>
       from { transform: translateY(20px); opacity: 0; }
       to { transform: translateY(0); opacity: 1; }
     }
+    .shinchan-stage {
+      position: relative;
+      width: 100%;
+      height: 240px;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      background: radial-gradient(circle at 50% 50%, rgba(30, 41, 59, 0.45) 0%, rgba(15, 23, 42, 0.75) 100%);
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      border-radius: var(--radius-md);
+      overflow: hidden;
+      box-shadow: inset 0 0 24px rgba(0, 0, 0, 0.4);
+    }
+    .shinchan-grid-pattern {
+      position: absolute;
+      inset: 0;
+      background-image: radial-gradient(#334155 1px, transparent 1px);
+      background-size: 18px 18px;
+      opacity: 0.18;
+      pointer-events: none;
+    }
+    .shinchan-shadow {
+      position: absolute;
+      bottom: 18px;
+      width: 130px;
+      height: 12px;
+      background: rgba(0, 0, 0, 0.45);
+      border-radius: 9999px;
+      filter: blur(3px);
+      pointer-events: none;
+    }
+    .shinchan-badge {
+      position: absolute;
+      top: 12px;
+      right: 12px;
+      display: flex;
+      align-items: center;
+      gap: 0.4rem;
+      padding: 0.35rem 0.8rem;
+      border-radius: 9999px;
+      font-size: 0.72rem;
+      font-weight: 700;
+      letter-spacing: 0.05em;
+      backdrop-filter: blur(8px);
+      -webkit-backdrop-filter: blur(8px);
+      transition: all 0.25s ease;
+      z-index: 3;
+    }
+    .shinchan-caption {
+      position: absolute;
+      bottom: 10px;
+      left: 14px;
+      font-size: 0.72rem;
+      color: #94a3b8;
+      font-weight: 500;
+      z-index: 3;
+      display: flex;
+      align-items: center;
+      gap: 0.35rem;
+    }
     footer {
       border-top: 1px solid var(--border);
       padding: 1.5rem 2rem;
@@ -910,6 +975,48 @@ constexpr std::string_view kWebUiHtml = R"rawhtml(<!DOCTYPE html>
         <div style="background: rgba(99, 102, 241, 0.08); border: 1px solid rgba(99, 102, 241, 0.25); border-radius: var(--radius-sm); padding: 1rem; font-size: 0.84rem; line-height: 1.5; color: #cbd5e1;">
           <strong style="color: #ffffff; display: block; margin-bottom: 0.35rem;">Actualizacion 100% Limpia (Depuracion de archivos viejos y reinicio de log):</strong>
           Sube el archivo <code>.zip</code> de la nueva version (ejemplo: <code>MacheteSVG_v1.3.0_PS5.zip</code>). La consola descomprimira los archivos en <code>/data/homebrew/PPSA99001/</code>, eliminara automaticamente cualquier archivo o carpeta obsoleta que ya no pertenezca a la nueva version, reiniciara el archivo <code>machete.log</code> para una sesion completamente fresca, aplicara permisos <code>0777</code> y limpiara temporales, exactamente igual a un borrado y subida limpia via FTP.
+        </div>
+
+        <!-- Escenario de Animaciones Shin-chan (Consistencia Visual & Alta Fidelidad) -->
+        <div class="shinchan-stage">
+          <div class="shinchan-grid-pattern"></div>
+          <div class="shinchan-shadow"></div>
+
+          <!-- Contenedor del Personaje Animado -->
+          <div style="position: relative; width: 190px; height: 190px; display: flex; align-items: center; justify-content: center; z-index: 2;">
+            <!-- 1. Animacion de Baile Buri Buri (En espera / Subiendo / Instalando) -->
+            <img id="shinchan-anim-dance" src="/api/shinchan/dance.gif" alt="Shin-chan Baile Buri Buri" style="width: 180px; height: 180px; object-fit: contain; display: block; filter: drop-shadow(0 4px 10px rgba(0,0,0,0.4));">
+
+            <!-- 2. Animacion de Exito DONE (Celebracion) -->
+            <img id="shinchan-anim-done" src="/api/shinchan/done.gif" alt="Shin-chan Exito DONE" style="width: 180px; height: 180px; object-fit: contain; display: none; filter: drop-shadow(0 4px 10px rgba(0,0,0,0.4));">
+
+            <!-- 3. Animacion de Fallo (Llanto) -->
+            <img id="shinchan-anim-error" src="/api/shinchan/error.gif" alt="Shin-chan Fallo" style="width: 180px; height: 180px; object-fit: contain; display: none; filter: drop-shadow(0 4px 10px rgba(0,0,0,0.4));">
+
+            <!-- Cartel flotante en la esquina del personaje (DONE / FALLO) -->
+            <div id="shinchan-corner-badge" style="display: none; position: absolute; top: 0; right: 0; align-items: center; gap: 0.35rem; padding: 0.25rem 0.65rem; border-radius: 0.5rem; font-size: 0.72rem; font-weight: 800; letter-spacing: 0.05em; box-shadow: 0 4px 12px rgba(0,0,0,0.45); z-index: 4;">
+              <span id="shinchan-corner-icon" style="display: flex; align-items: center;"></span>
+              <span id="shinchan-corner-text">DONE</span>
+            </div>
+          </div>
+
+          <!-- Insignia de Estado de Shin-chan (Esquina Superior Derecha) -->
+          <div id="shinchan-badge" class="shinchan-badge" style="background: rgba(6, 182, 212, 0.12); color: var(--cyan); border: 1px solid rgba(6, 182, 212, 0.35);">
+            <span id="shinchan-badge-dot" style="width: 7px; height: 7px; border-radius: 50%; background: var(--cyan);"></span>
+            <span id="shinchan-badge-text">EN ESPERA</span>
+          </div>
+
+          <!-- Indicador de Estado en la Esquina Inferior Izquierda -->
+          <div id="shinchan-caption" class="shinchan-caption">
+            <span>Shin-chan listo para actualizar</span>
+          </div>
+        </div>
+
+        <!-- Selector rapido de previsualizacion de animaciones -->
+        <div style="display: flex; gap: 0.5rem; justify-content: center; margin-top: -0.5rem; margin-bottom: -0.25rem;">
+          <button type="button" class="btn btn-secondary btn-sm" onclick="setShinchanState('dance')" style="font-size: 0.72rem; padding: 0.2rem 0.65rem;" title="Ver animacion de baile buri-buri">Baile Buri-Buri</button>
+          <button type="button" class="btn btn-secondary btn-sm" onclick="setShinchanState('success')" style="font-size: 0.72rem; padding: 0.2rem 0.65rem;" title="Ver animacion de victoria con cartel DONE">Exito (DONE)</button>
+          <button type="button" class="btn btn-secondary btn-sm" onclick="setShinchanState('error')" style="font-size: 0.72rem; padding: 0.2rem 0.65rem;" title="Ver animacion de llanto con cartel FALLO">Fallo (Error)</button>
         </div>
 
         <div id="dropzone" style="border: 2px dashed rgba(99, 102, 241, 0.4); border-radius: var(--radius-md); padding: 2.2rem 1.5rem; text-align: center; background: rgba(14, 18, 30, 0.5); cursor: pointer; transition: all 0.2s ease;">
@@ -1427,6 +1534,81 @@ constexpr std::string_view kWebUiHtml = R"rawhtml(<!DOCTYPE html>
     let selectedZipFile = null;
     let isUpdating = false;
 
+    function setShinchanState(state, captionText) {
+      const animDance = document.getElementById('shinchan-anim-dance');
+      const animDone = document.getElementById('shinchan-anim-done');
+      const animError = document.getElementById('shinchan-anim-error');
+      const badge = document.getElementById('shinchan-badge');
+      const badgeDot = document.getElementById('shinchan-badge-dot');
+      const badgeText = document.getElementById('shinchan-badge-text');
+      const cornerBadge = document.getElementById('shinchan-corner-badge');
+      const cornerIcon = document.getElementById('shinchan-corner-icon');
+      const cornerText = document.getElementById('shinchan-corner-text');
+      const caption = document.getElementById('shinchan-caption');
+
+      if (!animDance || !animDone || !animError) return;
+
+      if (state === 'success' || state === 'done') {
+        animDance.style.display = 'none';
+        animDone.style.display = 'block';
+        animError.style.display = 'none';
+        badge.style.background = 'rgba(16, 185, 129, 0.15)';
+        badge.style.borderColor = 'rgba(16, 185, 129, 0.45)';
+        badge.style.color = '#34d399';
+        badgeDot.style.background = '#10b981';
+        badgeText.textContent = 'EXITO (DONE)';
+        if (cornerBadge) {
+          cornerBadge.style.display = 'flex';
+          cornerBadge.style.background = 'rgba(6, 78, 59, 0.95)';
+          cornerBadge.style.border = '1px solid rgba(16, 185, 129, 0.8)';
+          cornerBadge.style.color = '#34d399';
+          cornerIcon.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" width="13" height="13" stroke-width="3"><polyline points="20 6 9 17 4 12"></polyline></svg>';
+          cornerText.textContent = 'DONE';
+        }
+        if (caption) caption.innerHTML = `<span>${captionText || 'Actualizacion completada con exito'}</span>`;
+      } else if (state === 'error' || state === 'fail') {
+        animDance.style.display = 'none';
+        animDone.style.display = 'none';
+        animError.style.display = 'block';
+        badge.style.background = 'rgba(244, 63, 94, 0.15)';
+        badge.style.borderColor = 'rgba(244, 63, 94, 0.45)';
+        badge.style.color = '#fb7185';
+        badgeDot.style.background = '#f43f5e';
+        badgeText.textContent = 'FALLO (ERROR)';
+        if (cornerBadge) {
+          cornerBadge.style.display = 'flex';
+          cornerBadge.style.background = 'rgba(76, 5, 25, 0.95)';
+          cornerBadge.style.border = '1px solid rgba(244, 63, 94, 0.8)';
+          cornerBadge.style.color = '#fb7185';
+          cornerIcon.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" width="13" height="13" stroke-width="3"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>';
+          cornerText.textContent = 'FALLO';
+        }
+        if (caption) caption.innerHTML = `<span>${captionText || 'Error en la instalacion'}</span>`;
+      } else if (state === 'uploading' || state === 'installing' || state === 'dance') {
+        animDance.style.display = 'block';
+        animDone.style.display = 'none';
+        animError.style.display = 'none';
+        if (cornerBadge) cornerBadge.style.display = 'none';
+        badge.style.background = 'rgba(99, 102, 241, 0.18)';
+        badge.style.borderColor = 'rgba(99, 102, 241, 0.5)';
+        badge.style.color = '#818cf8';
+        badgeDot.style.background = '#6366f1';
+        badgeText.textContent = state === 'installing' ? 'INSTALANDO EN SSD' : 'SUBIENDO PAQUETE';
+        if (caption) caption.innerHTML = `<span>${captionText || 'Shin-chan bailando buri-buri mientras actualiza...'}</span>`;
+      } else { // idle
+        animDance.style.display = 'block';
+        animDone.style.display = 'none';
+        animError.style.display = 'none';
+        if (cornerBadge) cornerBadge.style.display = 'none';
+        badge.style.background = 'rgba(6, 182, 212, 0.12)';
+        badge.style.borderColor = 'rgba(6, 182, 212, 0.35)';
+        badge.style.color = 'var(--cyan)';
+        badgeDot.style.background = 'var(--cyan)';
+        badgeText.textContent = 'EN ESPERA';
+        if (caption) caption.innerHTML = `<span>${captionText || 'Shin-chan listo para actualizar'}</span>`;
+      }
+    }
+
     function openUpdaterModal() {
       document.getElementById('updater-modal').classList.add('open');
       resetUpdaterState();
@@ -1450,6 +1632,7 @@ constexpr std::string_view kWebUiHtml = R"rawhtml(<!DOCTYPE html>
       const submitBtn = document.getElementById('btn-updater-submit');
       submitBtn.disabled = true;
       document.getElementById('btn-updater-submit-text').textContent = 'Subir e Instalar Actualizacion';
+      setShinchanState('idle', 'Shin-chan listo para recibir el paquete');
     }
 
     function handleSelectedFile(file) {
@@ -1466,6 +1649,7 @@ constexpr std::string_view kWebUiHtml = R"rawhtml(<!DOCTYPE html>
       document.getElementById('selected-file-card').style.display = 'flex';
       document.getElementById('btn-updater-submit').disabled = false;
       document.getElementById('update-status-box').style.display = 'none';
+      setShinchanState('idle', 'Paquete listo: ' + file.name);
     }
 
     // Dropzone Events
@@ -1561,6 +1745,9 @@ constexpr std::string_view kWebUiHtml = R"rawhtml(<!DOCTYPE html>
           if (pct >= 100) {
             document.getElementById('upload-phase').textContent = 'Descomprimiendo, reemplazando archivos y aplicando permisos 0777...';
             document.getElementById('upload-speed').textContent = 'Instalando en SSD...';
+            setShinchanState('installing', 'Descomprimiendo y aplicando actualizacion en SSD...');
+          } else {
+            setShinchanState('uploading', 'Subiendo paquete a la consola (' + pct + '%)...');
           }
         }
       };
@@ -1582,6 +1769,7 @@ constexpr std::string_view kWebUiHtml = R"rawhtml(<!DOCTYPE html>
             document.getElementById('upload-phase').textContent = 'Instalacion finalizada';
             document.getElementById('upload-bar').style.background = 'linear-gradient(90deg, #10b981, #06b6d4)';
             document.getElementById('btn-updater-submit-text').textContent = 'Actualizado';
+            setShinchanState('success', 'Actualizacion limpia instalada con exito');
             showToast('Actualizacion instalada correctamente', 'success');
             loadStatus();
           } else {
@@ -1592,6 +1780,7 @@ constexpr std::string_view kWebUiHtml = R"rawhtml(<!DOCTYPE html>
             document.getElementById('upload-phase').textContent = 'Fallo en la instalacion';
             document.getElementById('btn-updater-submit-text').textContent = 'Reintentar';
             submitBtn.disabled = false;
+            setShinchanState('error', res.message || 'Fallo en la instalacion');
             showToast(res.message || 'Error al actualizar', 'error');
           }
         } catch (err) {
@@ -1602,6 +1791,7 @@ constexpr std::string_view kWebUiHtml = R"rawhtml(<!DOCTYPE html>
           document.getElementById('upload-phase').textContent = 'Error de respuesta';
           document.getElementById('btn-updater-submit-text').textContent = 'Reintentar';
           submitBtn.disabled = false;
+          setShinchanState('error', 'Error procesando respuesta de la consola');
         }
       };
 
@@ -1618,6 +1808,7 @@ constexpr std::string_view kWebUiHtml = R"rawhtml(<!DOCTYPE html>
         statusBox.style.color = '#f87171';
         statusBox.innerHTML = `<strong>Error de Conexion:</strong><br>Se perdio la comunicacion con el servidor web de la consola.`;
         document.getElementById('upload-phase').textContent = 'Error de conexion';
+        setShinchanState('error', 'Error de conexion con la consola');
         showToast('Error de conexion con la consola', 'error');
       };
 
@@ -1630,5 +1821,9 @@ constexpr std::string_view kWebUiHtml = R"rawhtml(<!DOCTYPE html>
 </body>
 </html>
 )rawhtml";
+
+#if defined(__clang__)
+#pragma clang diagnostic pop
+#endif
 
 } // namespace machete::server
