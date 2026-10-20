@@ -258,17 +258,43 @@ std::string sanitize_title(std::string text)
                     i += 2;
                     continue;
                 }
+                else if (c3 == 0xA6) // … (elipsis)
+                {
+                    clean.append("...");
+                    i += 2;
+                    continue;
+                }
             }
             else if (c2 == 0x84 && c3 == 0xA2) // ™
             {
                 i += 2;
                 continue;
             }
+            else if (c2 == 0x85) // Numeros romanos Unicode (0x2160 - 0x216B)
+            {
+                if (c3 == 0xA0) { clean.append("I"); i += 2; continue; }
+                if (c3 == 0xA1) { clean.append("II"); i += 2; continue; }
+                if (c3 == 0xA2) { clean.append("III"); i += 2; continue; }
+                if (c3 == 0xA3) { clean.append("IV"); i += 2; continue; }
+                if (c3 == 0xA4) { clean.append("V"); i += 2; continue; }
+                if (c3 == 0xA5) { clean.append("VI"); i += 2; continue; }
+                if (c3 == 0xA6) { clean.append("VII"); i += 2; continue; }
+                if (c3 == 0xA7) { clean.append("VIII"); i += 2; continue; }
+                if (c3 == 0xA8) { clean.append("IX"); i += 2; continue; }
+                if (c3 == 0xA9) { clean.append("X"); i += 2; continue; }
+                if (c3 == 0xAA) { clean.append("XI"); i += 2; continue; }
+                if (c3 == 0xAB) { clean.append("XII"); i += 2; continue; }
+            }
         }
         else if (c == 0xC2 && i + 1 < text.size())
         {
             const unsigned char c2 = static_cast<unsigned char>(text[i + 1]);
             if (c2 == 0xAE) // ®
+            {
+                i += 1;
+                continue;
+            }
+            else if (c2 == 0xA9) // ©
             {
                 i += 1;
                 continue;
@@ -281,9 +307,26 @@ std::string sanitize_title(std::string text)
             }
         }
 
-        if (c >= 32 && c != 127)
+        if (c >= 32 && c <= 126)
         {
             clean.push_back(static_cast<char>(c));
+        }
+        else if (c >= 0xC0)
+        {
+            // Preservar caracteres latinos acentuados (UTF-8 de 2 bytes: 0xC2 o 0xC3)
+            if ((c == 0xC2 || c == 0xC3) && i + 1 < text.size())
+            {
+                clean.push_back(static_cast<char>(c));
+                clean.push_back(text[i + 1]);
+                ++i;
+            }
+            else
+            {
+                clean.push_back(' ');
+                if ((c & 0xE0) == 0xC0) i += 1;
+                else if ((c & 0xF0) == 0xE0) i += 2;
+                else if ((c & 0xF8) == 0xF0) i += 3;
+            }
         }
         else if (c == '\t' || c == '\n' || c == '\r')
         {
@@ -311,13 +354,13 @@ std::string sanitize_title(std::string text)
         }
     }
 
-    while (!result.empty() && result.front() == ' ')
+    while (!result.empty() && (result.front() == ' ' || result.front() == '-' || result.front() == ':'))
         result.erase(result.begin());
-    while (!result.empty() && result.back() == ' ')
+    while (!result.empty() && (result.back() == ' ' || result.back() == '-' || result.back() == ':'))
         result.pop_back();
 
-    if (result.size() > 48)
-        result.resize(48);
+    if (result.size() > 80)
+        result.resize(80);
 
     return result;
 }
@@ -410,61 +453,216 @@ bool is_renderable_latin(const std::string &str)
         return false;
 
     std::size_t latin_alphanum = 0;
-    std::size_t non_latin_chars = 0;
-
-    for (std::size_t i = 0; i < str.size();)
+    for (char c : str)
     {
-        const unsigned char c = static_cast<unsigned char>(str[i]);
-        if (c < 0x80)
+        const unsigned char uc = static_cast<unsigned char>(c);
+        if ((uc >= 'A' && uc <= 'Z') || (uc >= 'a' && uc <= 'z') || (uc >= '0' && uc <= '9'))
         {
-            if ((c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9'))
-                ++latin_alphanum;
-            ++i;
-        }
-        else if ((c & 0xE0) == 0xC0 && i + 1 < str.size())
-        {
-            const std::uint32_t cp = ((c & 0x1F) << 6) | (static_cast<unsigned char>(str[i + 1]) & 0x3F);
-            // Latin-1 Supplement, Latin Extended-A/B: 0x00A0 - 0x024F
-            if (cp >= 0x00A0 && cp <= 0x024F)
-            {
-                ++latin_alphanum;
-            }
-            else
-            {
-                // Caracteres cirilicos, arabes, hebreos, etc.
-                ++non_latin_chars;
-            }
-            i += 2;
-        }
-        else if ((c & 0xF0) == 0xE0 && i + 2 < str.size())
-        {
-            const std::uint32_t cp = ((c & 0x0F) << 12) |
-                                     ((static_cast<unsigned char>(str[i + 1]) & 0x3F) << 6) |
-                                     (static_cast<unsigned char>(str[i + 2]) & 0x3F);
-            // Signos de puntuacion seguros como comillas, guiones, elipsis (0x2010 - 0x2027)
-            if (cp >= 0x2010 && cp <= 0x2027)
-            {
-                // Puntuacion aceptable
-            }
-            else
-            {
-                // CJK, formas de presentacion arabe, etc.
-                ++non_latin_chars;
-            }
-            i += 3;
-        }
-        else if ((c & 0xF8) == 0xF0 && i + 3 < str.size())
-        {
-            ++non_latin_chars;
-            i += 4;
-        }
-        else
-        {
-            ++i;
+            ++latin_alphanum;
         }
     }
 
-    return (latin_alphanum > 0 && non_latin_chars == 0);
+    return latin_alphanum >= 2;
+}
+
+std::string_view resolve_known_ps4_title(std::string_view title_id) noexcept
+{
+    static const std::unordered_map<std::string_view, std::string_view> s_catalog = {
+        // Dragon Quest
+        {"CUSA18600", "DRAGON QUEST XI S: Echoes of an Elusive Age - Definitive Edition"},
+        {"CUSA08537", "DRAGON QUEST XI: Echoes of an Elusive Age"},
+        {"CUSA01884", "DRAGON QUEST HEROES"},
+        {"CUSA05706", "DRAGON QUEST BUILDERS"},
+        {"CUSA11235", "DRAGON QUEST BUILDERS 2"},
+        // Bloodborne & Soulsborne
+        {"CUSA03173", "Bloodborne"},
+        {"CUSA00207", "Bloodborne"},
+        {"CUSA03014", "Bloodborne: Game of the Year Edition"},
+        {"CUSA01018", "Bloodborne"},
+        {"CUSA08692", "Dark Souls: Remastered"},
+        {"CUSA01760", "Dark Souls II: Scholar of the First Sin"},
+        {"CUSA01623", "Dark Souls III"},
+        {"CUSA03365", "Dark Souls III"},
+        {"CUSA08434", "Dark Souls III: The Fire Fades Edition"},
+        {"CUSA12047", "Sekiro: Shadows Die Twice"},
+        {"CUSA13801", "Sekiro: Shadows Die Twice"},
+        {"CUSA18581", "Elden Ring"},
+        {"CUSA28863", "Elden Ring"},
+        // God of War
+        {"CUSA07408", "God of War"},
+        {"CUSA07410", "God of War"},
+        {"CUSA07412", "God of War"},
+        {"CUSA16632", "God of War Ragnarok"},
+        {"CUSA34384", "God of War Ragnarok"},
+        {"CUSA01168", "God of War III Remastered"},
+        // The Last of Us
+        {"CUSA00552", "The Last of Us Remastered"},
+        {"CUSA00556", "The Last of Us Remastered"},
+        {"CUSA00557", "The Last of Us Remastered"},
+        {"CUSA00558", "The Last of Us: Left Behind"},
+        {"CUSA10249", "The Last of Us Part II"},
+        {"CUSA13986", "The Last of Us Part II"},
+        // Ghost of Tsushima
+        {"CUSA11456", "Ghost of Tsushima"},
+        {"CUSA13323", "Ghost of Tsushima"},
+        {"CUSA16972", "Ghost of Tsushima Director's Cut"},
+        {"CUSA16973", "Ghost of Tsushima Director's Cut"},
+        // Spider-Man
+        {"CUSA02299", "Marvel's Spider-Man"},
+        {"CUSA11995", "Marvel's Spider-Man"},
+        {"CUSA11993", "Marvel's Spider-Man"},
+        {"CUSA12260", "Marvel's Spider-Man: Game of the Year Edition"},
+        {"CUSA17734", "Marvel's Spider-Man: Miles Morales"},
+        {"CUSA20177", "Marvel's Spider-Man: Miles Morales"},
+        // Horizon
+        {"CUSA01440", "Horizon Zero Dawn"},
+        {"CUSA07320", "Horizon Zero Dawn"},
+        {"CUSA10211", "Horizon Zero Dawn Complete Edition"},
+        {"CUSA10237", "Horizon Zero Dawn Complete Edition"},
+        {"CUSA24705", "Horizon Forbidden West"},
+        {"CUSA24706", "Horizon Forbidden West"},
+        // Red Dead Redemption & GTA
+        {"CUSA03041", "Red Dead Redemption 2"},
+        {"CUSA08519", "Red Dead Redemption 2"},
+        {"CUSA36843", "Red Dead Redemption"},
+        {"CUSA00411", "Grand Theft Auto V"},
+        {"CUSA00419", "Grand Theft Auto V"},
+        {"CUSA08444", "Grand Theft Auto V"},
+        {"CUSA03508", "Grand Theft Auto: San Andreas"},
+        {"CUSA26619", "Grand Theft Auto: The Trilogy - The Definitive Edition"},
+        // The Witcher & Cyberpunk
+        {"CUSA03388", "The Witcher 3: Wild Hunt"},
+        {"CUSA05572", "The Witcher 3: Wild Hunt - Complete Edition"},
+        {"CUSA05725", "The Witcher 3: Wild Hunt - Game of the Year Edition"},
+        {"CUSA16596", "Cyberpunk 2077"},
+        {"CUSA16597", "Cyberpunk 2077"},
+        // Persona & Shin Megami Tensei
+        {"CUSA05877", "Persona 5"},
+        {"CUSA17416", "Persona 5 Royal"},
+        {"CUSA17419", "Persona 5 Royal"},
+        {"CUSA06161", "Persona 5 Strikers"},
+        {"CUSA04506", "Persona 3: Dancing in Moonlight"},
+        {"CUSA04507", "Persona 5: Dancing in Starlight"},
+        {"CUSA19875", "Shin Megami Tensei III: Nocturne HD Remaster"},
+        // Final Fantasy & Kingdom Hearts
+        {"CUSA07237", "Final Fantasy VII Remake"},
+        {"CUSA07737", "Final Fantasy VII Remake"},
+        {"CUSA01615", "Final Fantasy XV"},
+        {"CUSA07022", "Final Fantasy XV Royal Edition"},
+        {"CUSA05599", "Final Fantasy XII: The Zodiac Age"},
+        {"CUSA01227", "Final Fantasy X/X-2 HD Remaster"},
+        {"CUSA07010", "Kingdom Hearts III"},
+        {"CUSA05786", "Kingdom Hearts HD 1.5 + 2.5 ReMIX"},
+        {"CUSA05933", "Kingdom Hearts HD 2.8 Final Chapter Prologue"},
+        // Monster Hunter & Resident Evil
+        {"CUSA07713", "Monster Hunter: World"},
+        {"CUSA07708", "Monster Hunter: World"},
+        {"CUSA16208", "Monster Hunter World: Iceborne"},
+        {"CUSA09311", "Resident Evil 2"},
+        {"CUSA09193", "Resident Evil 2"},
+        {"CUSA14168", "Resident Evil 3"},
+        {"CUSA03842", "Resident Evil 7: Biohazard"},
+        {"CUSA18017", "Resident Evil Village"},
+        {"CUSA08829", "Crash Bandicoot N. Sane Trilogy"},
+        {"CUSA10782", "Crash Team Racing Nitro-Fueled"},
+        {"CUSA19035", "Crash Bandicoot 4: It's About Time"},
+        {"CUSA12532", "Spyro Reignited Trilogy"},
+        // Uncharted & Naughty Dog
+        {"CUSA00900", "Uncharted 4: A Thief's End"},
+        {"CUSA04529", "Uncharted 4: A Thief's End"},
+        {"CUSA07875", "Uncharted: The Lost Legacy"},
+        {"CUSA02320", "Uncharted: The Nathan Drake Collection"},
+        // Death Stranding & Metal Gear
+        {"CUSA08344", "Death Stranding"},
+        {"CUSA11260", "Death Stranding"},
+        {"CUSA00133", "Metal Gear Solid V: Ground Zeroes"},
+        {"CUSA01140", "Metal Gear Solid V: The Phantom Pain"},
+        {"CUSA08691", "Metal Gear Survive"},
+        // NieR
+        {"CUSA04901", "NieR: Automata"},
+        {"CUSA18774", "NieR Replicant ver.1.22474487139..."},
+        // Yakuza & Judgment
+        {"CUSA05070", "Yakuza 0"},
+        {"CUSA06997", "Yakuza Kiwami"},
+        {"CUSA10452", "Yakuza Kiwami 2"},
+        {"CUSA15325", "Yakuza 6: The Song of Life"},
+        {"CUSA15007", "Yakuza: Like a Dragon"},
+        {"CUSA11627", "Judgment"},
+        {"CUSA26989", "Lost Judgment"},
+        // PlayStation Exclusives
+        {"CUSA00180", "inFAMOUS Second Son"},
+        {"CUSA00575", "inFAMOUS First Light"},
+        {"CUSA02168", "Until Dawn"},
+        {"CUSA09749", "Detroit: Become Human"},
+        {"CUSA02343", "Ratchet & Clank"},
+        {"CUSA01047", "Ratchet & Clank"},
+        {"CUSA07923", "Gran Turismo Sport"},
+        {"CUSA24765", "Gran Turismo 7"},
+        {"CUSA11100", "Days Gone"},
+        {"CUSA09176", "Days Gone"},
+        {"CUSA01280", "The Last Guardian"},
+        {"CUSA08034", "Shadow of the Colossus"},
+        {"CUSA00003", "Knack"},
+        {"CUSA08014", "Knack 2"},
+        {"CUSA00559", "Driveclub"},
+        {"CUSA01200", "Gravity Rush Remastered"},
+        {"CUSA03694", "Gravity Rush 2"},
+        {"CUSA01019", "The Order: 1886"},
+        {"CUSA00002", "The Playroom"},
+        {"CUSA00127", "Killzone Shadow Fall"},
+        {"CUSA00080", "Resogun"},
+        // Bethesda & id Software
+        {"CUSA02637", "Fallout 4"},
+        {"CUSA03450", "Fallout 4"},
+        {"CUSA05333", "The Elder Scrolls V: Skyrim Special Edition"},
+        {"CUSA02657", "DOOM"},
+        {"CUSA13338", "DOOM Eternal"},
+        {"CUSA00135", "Wolfenstein: The New Order"},
+        {"CUSA01026", "Wolfenstein: The Old Blood"},
+        {"CUSA07377", "Wolfenstein II: The New Colossus"},
+        {"CUSA01589", "Dishonored 2"},
+        {"CUSA06524", "Dishonored: Death of the Outsider"},
+        {"CUSA04493", "Prey"},
+        // Ubisoft
+        {"CUSA08401", "Assassin's Creed Origins"},
+        {"CUSA09311", "Assassin's Creed Odyssey"},
+        {"CUSA18534", "Assassin's Creed Valhalla"},
+        {"CUSA02389", "Assassin's Creed Syndicate"},
+        {"CUSA00605", "Assassin's Creed Unity"},
+        {"CUSA00130", "Watch_Dogs"},
+        {"CUSA04459", "Watch Dogs 2"},
+        {"CUSA13115", "Watch Dogs: Legion"},
+        {"CUSA07399", "Far Cry 5"},
+        {"CUSA15778", "Far Cry 6"},
+        // EA & Respawn
+        {"CUSA05705", "Titanfall 2"},
+        {"CUSA12529", "Star Wars Jedi: Fallen Order"},
+        {"CUSA01844", "Battlefield 1"},
+        {"CUSA08724", "Battlefield V"},
+        {"CUSA15081", "Need for Speed Heat"},
+        {"CUSA18000", "It Takes Two"},
+        {"CUSA00010", "Minecraft"},
+        {"CUSA00265", "Minecraft"},
+        // Batman & Tomb Raider
+        {"CUSA05625", "Batman: Arkham Knight"},
+        {"CUSA00133", "Tomb Raider: Definitive Edition"},
+        {"CUSA05794", "Rise of the Tomb Raider"},
+        {"CUSA10867", "Shadow of the Tomb Raider"},
+        // Team Ninja
+        {"CUSA08784", "Nioh"},
+        {"CUSA15532", "Nioh 2"},
+        // Call of Duty
+        {"CUSA09303", "Call of Duty: Modern Warfare"},
+        {"CUSA23827", "Call of Duty: Black Ops Cold War"},
+        {"CUSA01127", "Dying Light"},
+        {"CUSA17522", "Dying Light 2 Stay Human"},
+    };
+
+    auto it = s_catalog.find(title_id);
+    if (it != s_catalog.end())
+        return it->second;
+
+    return "";
 }
 
 std::string extract_title_from_param_json(const std::string &param_path)
@@ -695,6 +893,71 @@ std::string extract_title_from_param_sfo(const std::string &sfo_path)
     return "";
 }
 
+// Escanea las bases de datos del sistema PlayStation (app.db / appinfo.db)
+// para resolver nombres oficiales mostrados en el menu principal (XMB)
+static std::unordered_map<std::string, std::string> scan_app_database_titles()
+{
+    std::unordered_map<std::string, std::string> titles;
+    const char *dbs[] = {
+        "/system_data/priv/mms/app.db",
+        "/system_data/priv/mms/appinfo.db",
+        "/system_data/mms/app.db",
+        "/mnt/ext0/system_data/priv/mms/app.db",
+        "/mnt/ext1/system_data/priv/mms/app.db",
+    };
+
+    for (const char *db_path : dbs)
+    {
+        if (access(db_path, R_OK) != 0)
+            continue;
+
+        void *pdb = nullptr;
+        if (db::SqliteAdapter::instance().open(db_path, &pdb) == 0 && pdb)
+        {
+            // 1. Consultar tbl_appbrowse (titleId, titleName)
+            auto cb_browse = [](void *arg, int argc, char **argv, char **) -> int {
+                auto *m = reinterpret_cast<std::unordered_map<std::string, std::string> *>(arg);
+                if (argc >= 2 && argv && argv[0] && argv[1])
+                {
+                    const std::string tid = extract_valid_title_id(argv[0]);
+                    const std::string name = sanitize_title(argv[1]);
+                    if (!tid.empty() && !name.empty() && name != tid && is_renderable_latin(name))
+                    {
+                        (*m)[tid] = name;
+                    }
+                }
+                return 0;
+            };
+            (void)db::SqliteAdapter::instance().exec(
+                pdb, "SELECT titleId, titleName FROM tbl_appbrowse;", cb_browse, &titles, nullptr);
+
+            // 2. Consultar tbl_appinfo (titleId, val con claves de titulo oficial)
+            auto cb_info = [](void *arg, int argc, char **argv, char **) -> int {
+                auto *m = reinterpret_cast<std::unordered_map<std::string, std::string> *>(arg);
+                if (argc >= 2 && argv && argv[0] && argv[1])
+                {
+                    const std::string tid = extract_valid_title_id(argv[0]);
+                    const std::string name = sanitize_title(argv[1]);
+                    if (!tid.empty() && !name.empty() && name != tid && is_renderable_latin(name))
+                    {
+                        if (m->find(tid) == m->end())
+                        {
+                            (*m)[tid] = name;
+                        }
+                    }
+                }
+                return 0;
+            };
+            (void)db::SqliteAdapter::instance().exec(
+                pdb, "SELECT titleId, val FROM tbl_appinfo WHERE key = 'TITLE' OR key = 'TITLE_03' OR key = 'TITLE_01' OR key = 'TITLE_20';",
+                cb_info, &titles, nullptr);
+
+            db::SqliteAdapter::instance().close(pdb);
+        }
+    }
+    return titles;
+}
+
 std::vector<ScannedGame> scan_installed_games_and_saves()
 {
     MACHETE_BREADCRUMB("scanner:start");
@@ -740,6 +1003,12 @@ std::vector<ScannedGame> scan_installed_games_and_saves()
         "/mnt/ext1/user/appmeta/external",
         "/mnt/ext0/appmeta",
         "/mnt/ext1/appmeta",
+        "/user/app",
+        "/mnt/ext0/user/app",
+        "/mnt/ext1/user/app",
+        "/system_ex/app",
+        "/system_data/app",
+        "/data/pkg",
         "/data/homebrew",
     };
 
@@ -753,13 +1022,33 @@ std::vector<ScannedGame> scan_installed_games_and_saves()
             {
                 icon_candidates.push_back(hint_dir + "/icon0.png");
                 icon_candidates.push_back(hint_dir + "/sce_sys/icon0.png");
+                icon_candidates.push_back(hint_dir + "/app0/sce_sys/icon0.png");
                 icon_candidates.push_back(hint_dir + "/icon0.PNG");
                 icon_candidates.push_back(hint_dir + "/sce_sys/icon0.PNG");
+                icon_candidates.push_back(hint_dir + "/app0/sce_sys/icon0.PNG");
+
+                DIR *hd = opendir(hint_dir.c_str());
+                if (hd)
+                {
+                    while (const dirent *he = readdir(hd))
+                    {
+                        if (he->d_name[0] == '.')
+                            continue;
+                        const std::string fn = he->d_name;
+                        if ((fn.ends_with(".png") || fn.ends_with(".PNG")) &&
+                            (fn.find("icon") != std::string::npos || fn.find("ICON") != std::string::npos))
+                        {
+                            icon_candidates.push_back(hint_dir + "/" + fn);
+                        }
+                    }
+                    closedir(hd);
+                }
             }
             for (const char *mb : meta_bases)
             {
                 icon_candidates.push_back(std::string(mb) + "/" + title_id + "/icon0.png");
                 icon_candidates.push_back(std::string(mb) + "/" + title_id + "/sce_sys/icon0.png");
+                icon_candidates.push_back(std::string(mb) + "/" + title_id + "/app0/sce_sys/icon0.png");
             }
             for (const auto &p : icon_candidates)
             {
@@ -779,17 +1068,49 @@ std::vector<ScannedGame> scan_installed_games_and_saves()
             {
                 meta_files.push_back(hint_dir + "/param.json");
                 meta_files.push_back(hint_dir + "/sce_sys/param.json");
+                meta_files.push_back(hint_dir + "/app0/sce_sys/param.json");
                 meta_files.push_back(hint_dir + "/param.sfo");
                 meta_files.push_back(hint_dir + "/sce_sys/param.sfo");
+                meta_files.push_back(hint_dir + "/app0/sce_sys/param.sfo");
                 meta_files.push_back(hint_dir + "/sce_sys/PARAM.SFO");
+                meta_files.push_back(hint_dir + "/app0/sce_sys/PARAM.SFO");
+
+                DIR *hd = opendir(hint_dir.c_str());
+                if (hd)
+                {
+                    while (const dirent *he = readdir(hd))
+                    {
+                        if (he->d_name[0] == '.')
+                            continue;
+                        const std::string fn = he->d_name;
+                        if (fn.ends_with(".sfo") || fn.ends_with(".SFO"))
+                        {
+                            meta_files.push_back(hint_dir + "/" + fn);
+                        }
+                    }
+                    closedir(hd);
+                }
             }
             for (const char *mb : meta_bases)
             {
                 meta_files.push_back(std::string(mb) + "/" + title_id + "/param.json");
                 meta_files.push_back(std::string(mb) + "/" + title_id + "/sce_sys/param.json");
+                meta_files.push_back(std::string(mb) + "/" + title_id + "/app0/sce_sys/param.json");
                 meta_files.push_back(std::string(mb) + "/" + title_id + "/param.sfo");
                 meta_files.push_back(std::string(mb) + "/" + title_id + "/sce_sys/param.sfo");
+                meta_files.push_back(std::string(mb) + "/" + title_id + "/app0/sce_sys/param.sfo");
                 meta_files.push_back(std::string(mb) + "/" + title_id + "/sce_sys/PARAM.SFO");
+                meta_files.push_back(std::string(mb) + "/" + title_id + "/app0/sce_sys/PARAM.SFO");
+            }
+            for (const std::string &bp : {
+                     "/data/MacheteSVG/" + title_id,
+                     "/mnt/usb0/MacheteSVG/" + title_id,
+                     "/mnt/usb1/MacheteSVG/" + title_id,
+                     "/mnt/usb2/MacheteSVG/" + title_id})
+            {
+                meta_files.push_back(bp + "/sce_sys/param.sfo");
+                meta_files.push_back(bp + "/param.sfo");
+                meta_files.push_back(bp + "/param.json");
             }
             for (const auto &mf : meta_files)
             {
@@ -1031,13 +1352,13 @@ std::vector<ScannedGame> scan_installed_games_and_saves()
     }
 
     // =========================================================================
-    // 2c. Enriquecer desde savedata.db (main_title y vinculo title_id <-> game_title_id)
+    // 2c. Enriquecer desde app.db y savedata.db (main_title, sub_title, detail y vinculo title_id <-> game_title_id)
     //     y vincular entradas de distintas regiones / SKUs del mismo juego cuando
     //     una entrada en appmeta tiene 0 bytes y otra entrada del mismo titulo
     //     o SKU adyacente posee la partida guardada real (ej. PPSA01969 <-> PPSA01970).
     // =========================================================================
     std::unordered_map<std::string, std::string> db_save_to_game_tid;
-    std::unordered_map<std::string, std::string> db_tid_to_title;
+    std::unordered_map<std::string, std::string> db_tid_to_title = scan_app_database_titles();
     {
         DIR *hdir = opendir("/user/home");
         if (hdir)
@@ -1063,18 +1384,29 @@ std::vector<ScannedGame> scan_installed_games_and_saves()
                             auto *c = reinterpret_cast<DbScanCtx *>(arg);
                             if (argc >= 3 && argv)
                             {
-                                const std::string tid = argv[0] ? argv[0] : "";
-                                const std::string gtid = argv[1] ? argv[1] : "";
-                                const std::string mtitle = argv[2] ? argv[2] : "";
+                                const std::string tid = argv[0] ? extract_valid_title_id(argv[0]) : "";
+                                const std::string gtid = argv[1] ? extract_valid_title_id(argv[1]) : "";
+                                std::string mtitle = argv[2] ? argv[2] : "";
+                                if (mtitle.empty() || mtitle == tid)
+                                {
+                                    if (argc >= 4 && argv[3] && argv[3][0] != '\0')
+                                        mtitle = argv[3];
+                                }
+                                if (mtitle.empty() || mtitle == tid)
+                                {
+                                    if (argc >= 5 && argv[4] && argv[4][0] != '\0')
+                                        mtitle = argv[4];
+                                }
+                                mtitle = sanitize_title(mtitle);
                                 if (!tid.empty() && !gtid.empty() && tid != gtid)
                                     (*c->save_to_game)[tid] = gtid;
-                                if (!tid.empty() && !mtitle.empty() && mtitle != tid)
+                                if (!tid.empty() && !mtitle.empty() && mtitle != tid && is_renderable_latin(mtitle))
                                     (*c->tid_to_title)[tid] = mtitle;
                             }
                             return 0;
                         };
                         (void)db::SqliteAdapter::instance().exec(
-                            pdb, "SELECT title_id, game_title_id, main_title FROM savedata;", cb, &ctx, nullptr);
+                            pdb, "SELECT title_id, game_title_id, main_title, sub_title, detail FROM savedata;", cb, &ctx, nullptr);
                         db::SqliteAdapter::instance().close(pdb);
                     }
                 }
@@ -1104,6 +1436,16 @@ std::vector<ScannedGame> scan_installed_games_and_saves()
                 }
             }
         }
+
+        if (g.title.empty() || g.title == g.title_id)
+        {
+            std::string_view known = resolve_known_ps4_title(g.title_id);
+            if (!known.empty())
+            {
+                g.title = std::string(known);
+            }
+        }
+
         g.title = sanitize_title(g.title);
     }
 
@@ -1193,10 +1535,18 @@ std::vector<ScannedGame> scan_installed_games_and_saves()
         if (has_saves || has_real_title || has_icon)
         {
             game.title = sanitize_title(game.title);
-            if (!is_renderable_latin(game.title))
-                game.title = game.title_id;
-            if (game.title.empty())
-                game.title = game.title_id;
+            if (game.title.empty() || game.title == game.title_id || !is_renderable_latin(game.title))
+            {
+                std::string_view known = resolve_known_ps4_title(game.title_id);
+                if (!known.empty())
+                {
+                    game.title = std::string(known);
+                }
+                else if (game.title.empty())
+                {
+                    game.title = game.title_id;
+                }
+            }
             if (game.size_str.empty())
                 game.size_str = (game.total_bytes > 0) ? format_bytes(game.total_bytes) : "Partida detectada";
             if (game.timestamp_str.empty())

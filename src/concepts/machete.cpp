@@ -650,10 +650,15 @@ class Machete final : public app::Concept
         shinchan_timer_ = 0.0f;
 
         const bool is_es = (machete::i18n::current_language() == machete::i18n::Language::Spanish);
+        std::string disp_title = (!game.title.empty() && game.title != game.title_id)
+                                     ? game.title
+                                     : (!machete::scanner::resolve_known_ps4_title(game.title_id).empty()
+                                            ? std::string(machete::scanner::resolve_known_ps4_title(game.title_id))
+                                            : game.title_id);
         {
             std::lock_guard<std::mutex> lock(op_mutex_);
-            operation_title_ = is_es ? ("Respaldando " + (!game.title.empty() ? game.title : game.title_id))
-                                     : ("Backing up " + (!game.title.empty() ? game.title : game.title_id));
+            operation_title_ = is_es ? ("Respaldando " + disp_title)
+                                     : ("Backing up " + disp_title);
             operation_detail_ = is_es ? ("Iniciando transferencia a " + dev.label + "...")
                                       : ("Starting transfer to " + dev.label + "...");
             operation_result_ = {};
@@ -716,10 +721,15 @@ class Machete final : public app::Concept
         shinchan_timer_ = 0.0f;
 
         const bool is_es = (machete::i18n::current_language() == machete::i18n::Language::Spanish);
+        std::string disp_title = (!game.title.empty() && game.title != game.title_id)
+                                     ? game.title
+                                     : (!machete::scanner::resolve_known_ps4_title(game.title_id).empty()
+                                            ? std::string(machete::scanner::resolve_known_ps4_title(game.title_id))
+                                            : game.title_id);
         {
             std::lock_guard<std::mutex> lock(op_mutex_);
-            operation_title_ = is_es ? ("Restaurando " + (!game.title.empty() ? game.title : game.title_id))
-                                     : ("Restoring " + (!game.title.empty() ? game.title : game.title_id));
+            operation_title_ = is_es ? ("Restaurando " + disp_title)
+                                     : ("Restoring " + disp_title);
             operation_detail_ = is_es ? "Extrayendo partida preservando Keystone..."
                                       : "Extracting save preserving Keystone...";
             operation_result_ = {};
@@ -780,10 +790,15 @@ class Machete final : public app::Concept
         shinchan_timer_ = 0.0f;
 
         const bool is_es = (machete::i18n::current_language() == machete::i18n::Language::Spanish);
+        std::string disp_title = (!game.title.empty() && game.title != game.title_id)
+                                     ? game.title
+                                     : (!machete::scanner::resolve_known_ps4_title(game.title_id).empty()
+                                            ? std::string(machete::scanner::resolve_known_ps4_title(game.title_id))
+                                            : game.title_id);
         {
             std::lock_guard<std::mutex> lock(op_mutex_);
-            operation_title_ = is_es ? ("Resignando " + (!game.title.empty() ? game.title : game.title_id))
-                                     : ("Resigning " + (!game.title.empty() ? game.title : game.title_id));
+            operation_title_ = is_es ? ("Resignando " + disp_title)
+                                     : ("Resigning " + disp_title);
             operation_detail_ = is_es ? "Alineando Keystone y resignando param.sfo (Modo Apollo)..."
                                       : "Aligning Keystone & resigning param.sfo (Apollo Mode)...";
             operation_result_ = {};
@@ -2045,6 +2060,9 @@ class Machete final : public app::Concept
             }
 
             // Icono Real del juego (icon0.png) con fallback suave
+            const std::string resolved_title = (!game.title.empty() && game.title != game.title_id)
+                                                   ? game.title
+                                                   : std::string(machete::scanner::resolve_known_ps4_title(game.title_id));
             const Rect icon_rect{r.x + 14, r.y + 14, 64, 64};
             if (game.icon_texture != 0)
             {
@@ -2057,10 +2075,10 @@ class Machete final : public app::Concept
                 list.rounded_rect(icon_rect, 8.0f, Color::rgb(0x142b4d).with_alpha(0.85f));
                 paint.stroke(icon_rect, 8.0f, 1.0f, Color::rgb(0x76d6ff).with_alpha(0.3f));
                 char init[4] = "PS";
-                if (!game.title.empty() && static_cast<unsigned char>(game.title[0]) >= 32 &&
-                    static_cast<unsigned char>(game.title[0]) <= 126)
+                if (!resolved_title.empty() && static_cast<unsigned char>(resolved_title[0]) >= 32 &&
+                    static_cast<unsigned char>(resolved_title[0]) <= 126)
                 {
-                    init[0] = game.title[0];
+                    init[0] = resolved_title[0];
                     init[1] = '\0';
                 }
                 paint.label(init, icon_rect.cx(), icon_rect.cy() + 7, 24, Color::rgb(0x76d6ff),
@@ -2068,7 +2086,7 @@ class Machete final : public app::Concept
             }
 
             // Título oficial y metadatos con salvaguarda
-            const std::string title_disp = !game.title.empty() ? game.title : game.title_id;
+            const std::string title_disp = !resolved_title.empty() ? resolved_title : game.title_id;
             paint.heading(title_disp.c_str(), r.x + 92, r.y + 44, 24,
                           is_focused ? theme.text : theme.text.with_alpha(0.9f));
             char sub[128];
@@ -2102,11 +2120,14 @@ class Machete final : public app::Concept
             {
                 list.rounded_rect(big_cover, 14.0f, Color::rgb(0x142b4d).with_alpha(0.85f));
                 paint.stroke(big_cover, 14.0f, 2.0f, Color::rgb(0x76d6ff).with_alpha(0.4f));
+                const std::string curr_resolved = (!current_game.title.empty() && current_game.title != current_game.title_id)
+                                                      ? current_game.title
+                                                      : std::string(machete::scanner::resolve_known_ps4_title(current_game.title_id));
                 char init[4] = "PS";
-                if (!current_game.title.empty() && static_cast<unsigned char>(current_game.title[0]) >= 32 &&
-                    static_cast<unsigned char>(current_game.title[0]) <= 126)
+                if (!curr_resolved.empty() && static_cast<unsigned char>(curr_resolved[0]) >= 32 &&
+                    static_cast<unsigned char>(curr_resolved[0]) <= 126)
                 {
-                    init[0] = current_game.title[0];
+                    init[0] = curr_resolved[0];
                     init[1] = '\0';
                 }
                 paint.heading(init, big_cover.cx(), big_cover.cy() + 20, 68,
@@ -2134,7 +2155,10 @@ class Machete final : public app::Concept
             {
                 paint.label(current_game.title_id.c_str(), 1184, 276, 18, theme.text_muted);
             }
-            const std::string current_title_disp = !current_game.title.empty() ? current_game.title : current_game.title_id;
+            const std::string curr_resolved_title = (!current_game.title.empty() && current_game.title != current_game.title_id)
+                                                        ? current_game.title
+                                                        : std::string(machete::scanner::resolve_known_ps4_title(current_game.title_id));
+            const std::string current_title_disp = !curr_resolved_title.empty() ? curr_resolved_title : current_game.title_id;
             paint.heading(current_title_disp.c_str(), 1058, 334, 38, theme.text);
 
             char slot_info[128];

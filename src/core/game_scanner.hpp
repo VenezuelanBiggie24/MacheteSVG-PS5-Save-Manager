@@ -44,6 +44,9 @@ std::string extract_title_from_param_json(const std::string &param_path);
 // Extrae el título oficial localizado de un archivo param.sfo (PS4)
 std::string extract_title_from_param_sfo(const std::string &sfo_path);
 
+// Resuelve el nombre oficial de un Title ID de PS4 si se encuentra en el catalogo interno
+std::string_view resolve_known_ps4_title(std::string_view title_id) noexcept;
+
 // Carga una textura OpenGL desde un archivo de imagen PNG
 unsigned int load_texture_from_png(const std::string &path);
 

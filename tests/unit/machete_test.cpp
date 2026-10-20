@@ -1603,4 +1603,55 @@ TEST(MacheteKeystonePriorityTest, InstalledGameKeystoneOverridesForeignBackupKey
     (void)rmdir(test_root.c_str());
 }
 
+TEST(MachetePs4TitleResolutionTest, ResolvesKnownPs4TitlesFromDictionary)
+{
+    EXPECT_EQ(machete::scanner::resolve_known_ps4_title("CUSA18600"),
+              "DRAGON QUEST XI S: Echoes of an Elusive Age - Definitive Edition");
+    EXPECT_EQ(machete::scanner::resolve_known_ps4_title("CUSA03173"),
+              "Bloodborne");
+    EXPECT_EQ(machete::scanner::resolve_known_ps4_title("CUSA07408"),
+              "God of War");
+    EXPECT_EQ(machete::scanner::resolve_known_ps4_title("CUSA00552"),
+              "The Last of Us Remastered");
+    EXPECT_EQ(machete::scanner::resolve_known_ps4_title("CUSA10249"),
+              "The Last of Us Part II");
+    EXPECT_EQ(machete::scanner::resolve_known_ps4_title("CUSA11456"),
+              "Ghost of Tsushima");
+    EXPECT_EQ(machete::scanner::resolve_known_ps4_title("CUSA02299"),
+              "Marvel's Spider-Man");
+    EXPECT_EQ(machete::scanner::resolve_known_ps4_title("CUSA01440"),
+              "Horizon Zero Dawn");
+    EXPECT_EQ(machete::scanner::resolve_known_ps4_title("CUSA03041"),
+              "Red Dead Redemption 2");
+    EXPECT_EQ(machete::scanner::resolve_known_ps4_title("CUSA00411"),
+              "Grand Theft Auto V");
+    EXPECT_EQ(machete::scanner::resolve_known_ps4_title("CUSA03388"),
+              "The Witcher 3: Wild Hunt");
+    EXPECT_EQ(machete::scanner::resolve_known_ps4_title("CUSA01623"),
+              "Dark Souls III");
+    EXPECT_EQ(machete::scanner::resolve_known_ps4_title("CUSA12047"),
+              "Sekiro: Shadows Die Twice");
+    EXPECT_EQ(machete::scanner::resolve_known_ps4_title("CUSA18581"),
+              "Elden Ring");
+    EXPECT_EQ(machete::scanner::resolve_known_ps4_title("CUSA05877"),
+              "Persona 5");
+    EXPECT_EQ(machete::scanner::resolve_known_ps4_title("CUSA07237"),
+              "Final Fantasy VII Remake");
+    EXPECT_EQ(machete::scanner::resolve_known_ps4_title("CUSA07713"),
+              "Monster Hunter: World");
+    EXPECT_EQ(machete::scanner::resolve_known_ps4_title("CUSA00900"),
+              "Uncharted 4: A Thief's End");
+    EXPECT_EQ(machete::scanner::resolve_known_ps4_title("CUSA16596"),
+              "Cyberpunk 2077");
+    EXPECT_TRUE(machete::scanner::resolve_known_ps4_title("CUSA99999").empty());
+}
+
+TEST(MachetePs4TitleResolutionTest, RenderableLatinDetectsLatinPresenceCorrectly)
+{
+    EXPECT_TRUE(machete::scanner::is_renderable_latin("Bloodborne"));
+    EXPECT_TRUE(machete::scanner::is_renderable_latin("DRAGON QUEST XI S"));
+    EXPECT_FALSE(machete::scanner::is_renderable_latin("وولڤرين من مارفل"));
+    EXPECT_FALSE(machete::scanner::is_renderable_latin(""));
+}
+
 } // namespace hui::testing
