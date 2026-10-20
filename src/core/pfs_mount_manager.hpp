@@ -5,6 +5,7 @@
 #pragma once
 
 #include "core/account_manager.hpp"
+#include "core/aes_xts.hpp"
 #include "core/keystone_manager.hpp"
 #include "core/logger.hpp"
 #include "core/samu_vault.hpp"
@@ -405,6 +406,12 @@ public:
         }
 
         static const char *candidate_paths[] = {
+            "/system_ex/common_ex/lib/libSceFsInternalForVsh.sprx",
+            "/system_ex/priv_ex/lib/libSceFsInternalForVsh.sprx",
+            "/system_ex/vsh_ex/lib/libSceFsInternalForVsh.sprx",
+            "/system_ex/common/lib/libSceFsInternalForVsh.sprx",
+            "/system_ex/priv/lib/libSceFsInternalForVsh.sprx",
+            "/system_ex/app_ex/lib/libSceFsInternalForVsh.sprx",
             "/system/vsh/libSceFsInternalForVsh.sprx",
             "/system/common/lib/libSceFsInternalForVsh.sprx",
             "/system/priv/lib/libSceFsInternalForVsh.sprx",
@@ -412,8 +419,12 @@ public:
             "/preinst2/common/lib/libSceFsInternalForVsh.sprx",
             "/preinst2/priv/lib/libSceFsInternalForVsh.sprx",
             "/system/vsh/module/libSceFsInternalForVsh.sprx",
+            "/system_ex/common_ex/lib/libSceFsInternal.sprx",
+            "/system_ex/priv_ex/lib/libSceFsInternal.sprx",
             "/system/priv/lib/libSceFsInternal.sprx",
             "/system/common/lib/libSceFsInternal.sprx",
+            "/system/sys/libSceFsInternalForVsh.sprx",
+            "/system/sys/libSceFsInternal.sprx",
             "libSceFsInternalForVsh.sprx",
             "libSceFsInternal.sprx",
             nullptr
@@ -518,9 +529,6 @@ public:
         for (int i = 0; candidate_paths[i]; ++i)
         {
             const char *cand = candidate_paths[i];
-            if (cand[0] == '/' && access(cand, R_OK) != 0)
-                continue;
-
             int res_out = 0;
             int mod_handle = sceKernelLoadStartModule(cand, 0, nullptr, 0, nullptr, &res_out);
             if (mod_handle >= 0)
@@ -1404,13 +1412,62 @@ inline PfsRestoreReport inject_and_resign_save(const std::string &title_id,
                 std::uint64_t fsz = 0;
                 if (stat(image_path.c_str(), &st_f) == 0)
                     fsz = static_cast<std::uint64_t>(st_f.st_size);
+
+                sfo::SfoSaveMetadata in_place_meta{};
+                if (!is_ps5)
+                {
+                    std::vector<std::uint8_t> extracted_sfo;
+                    if (crypto::resign_ps4_pfs_container_sectors(image_path, plain_key, rp, &extracted_sfo))
+                    {
+                        report.sfo_resigned = true;
+                        if (!extracted_sfo.empty())
+                        {
+                            (void)sfo::read_sfo_metadata_from_buffer(extracted_sfo.data(), extracted_sfo.size(), in_place_meta);
+                            char uid_hex[32];
+                            std::snprintf(uid_hex, sizeof(uid_hex), "%x", user_id);
+                            const std::string meta_ps4 = std::string("/user/home/") + uid_hex + "/savedata_meta/user/" + title_id;
+                            ensure_dir_tree(meta_ps4, owner_uid, owner_gid);
+
+                            const std::string out_sfo = meta_ps4 + "/param.sfo";
+                            const std::string out_slot_sfo = meta_ps4 + "/" + slot_name + "_param.sfo";
+                            std::FILE *sf = std::fopen(out_sfo.c_str(), "wb");
+                            if (sf) {
+                                std::fwrite(extracted_sfo.data(), 1, extracted_sfo.size(), sf);
+                                std::fclose(sf);
+                                (void)chmod(out_sfo.c_str(), 0666);
+                            }
+                            std::FILE *ssf = std::fopen(out_slot_sfo.c_str(), "wb");
+                            if (ssf) {
+                                std::fwrite(extracted_sfo.data(), 1, extracted_sfo.size(), ssf);
+                                std::fclose(ssf);
+                                (void)chmod(out_slot_sfo.c_str(), 0666);
+                            }
+                            ensure_dir_tree(dst_target + "/sce_sys", owner_uid, owner_gid);
+                            std::FILE *dsf = std::fopen((dst_target + "/sce_sys/param.sfo").c_str(), "wb");
+                            if (dsf) {
+                                std::fwrite(extracted_sfo.data(), 1, extracted_sfo.size(), dsf);
+                                std::fclose(dsf);
+                                (void)chmod((dst_target + "/sce_sys/param.sfo").c_str(), 0666);
+                            }
+                        }
+
+                        // Sincronizar tambien el backup slot sce_bu_<slot>
+                        const std::string bu_img = dst_target + "/sce_bu_" + slot_name;
+                        if (access(bu_img.c_str(), R_OK) == 0)
+                        {
+                            (void)crypto::resign_ps4_pfs_container_sectors(bu_img, plain_key, rp);
+                        }
+                    }
+                }
+
                 if (is_ps5)
                 {
                     db::update_or_register_ps5_savedata_db(user_id, active_account_id, title_id, slot_name, fsz);
                 }
                 else
                 {
-                    db::update_or_register_ps4_savedata_db(user_id, active_account_id, title_id, slot_name, fsz);
+                    db::update_or_register_ps4_savedata_db(user_id, active_account_id, title_id, slot_name, fsz,
+                                                           in_place_meta.valid ? &in_place_meta : (dummy_sfo_meta.valid ? &dummy_sfo_meta : nullptr));
                 }
                 continue;
             }

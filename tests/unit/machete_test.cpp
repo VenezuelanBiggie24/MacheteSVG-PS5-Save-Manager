@@ -18,6 +18,7 @@
 #include "core/pfs_mount_manager.hpp"
 #include "core/samu_vault.hpp"
 #include "core/account_manager.hpp"
+#include "core/aes_xts.hpp"
 #include "ui/qr_code.hpp"
 #include "core/build_info.hpp"
 #include "core/sqlite_adapter.hpp"
@@ -1289,7 +1290,7 @@ TEST(MacheteParamJsonSizeTest, UpdateFileSizeAndMtimeInParamJson)
 
 TEST(MacheteBuildInfoTest, BuildNumberMatchesExpected)
 {
-    EXPECT_STREQ(machete::build::build_number(), "71");
+    EXPECT_STREQ(machete::build::build_number(), "72");
 }
 
 TEST(MacheteParamJsonDirNameTest, UpdateDirNameInParamJson)
@@ -1887,6 +1888,102 @@ TEST(MacheteLoggerTest, ResetFreshExecutesSafelyAndStartsCleanSession)
     machete::log::flush();
 
     SUCCEED();
+}
+
+TEST(MacheteAes128XtsTest, EncryptDecryptRoundTrip)
+{
+    const std::uint8_t key[32] = {
+        0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07,
+        0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f,
+        0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17,
+        0x18, 0x19, 0x1a, 0x1b, 0x1c, 0x1d, 0x1e, 0x1f
+    };
+
+    machete::crypto::XtsAes128 xts(key);
+
+    std::vector<std::uint8_t> plain(1024);
+    for (std::size_t i = 0; i < plain.size(); ++i)
+        plain[i] = static_cast<std::uint8_t>((i * 7 + 13) & 0xff);
+
+    std::vector<std::uint8_t> cipher(1024, 0);
+    std::vector<std::uint8_t> decrypted(1024, 0);
+
+    // Encrypt sector 0 (512 bytes) and sector 1 (512 bytes)
+    xts.encrypt_sector(0, plain.data(), cipher.data(), 512);
+    xts.encrypt_sector(1, plain.data() + 512, cipher.data() + 512, 512);
+
+    // Ciphertext must differ from plaintext
+    EXPECT_NE(std::memcmp(plain.data(), cipher.data(), 1024), 0);
+
+    // Decrypt both sectors
+    xts.decrypt_sector(0, cipher.data(), decrypted.data(), 512);
+    xts.decrypt_sector(1, cipher.data() + 512, decrypted.data() + 512, 512);
+
+    // Decrypted must match plaintext exactly
+    EXPECT_EQ(std::memcmp(plain.data(), decrypted.data(), 1024), 0);
+}
+
+TEST(MacheteAes128XtsTest, ResignPs4ContainerInPlaceSucceeds)
+{
+    const std::string tmp_img = "/tmp/machete_test_ps4_container.bin";
+    const std::string tmp_sfo = "/tmp/machete_test_synth.sfo";
+
+    // 1. Synthesize a valid PS4 param.sfo
+    ASSERT_TRUE(machete::sfo::synthesize_ps4_save_param_sfo(
+        tmp_sfo, "CUSA18600", "savedata0", "DRAGON QUEST XI S", "Hero", "Save 1",
+        0x105f615a, 0x1122334455667788ULL, 325, 0, nullptr));
+
+    std::ifstream sf(tmp_sfo, std::ios::binary);
+    ASSERT_TRUE(sf.is_open());
+    std::vector<std::uint8_t> sfo_bytes((std::istreambuf_iterator<char>(sf)),
+                                         std::istreambuf_iterator<char>());
+    sf.close();
+    (void)std::remove(tmp_sfo.c_str());
+
+    ASSERT_GE(sfo_bytes.size(), 64u);
+
+    // 2. Build a mock 32 KB container with sector 1 (offset 4096) containing encrypted SFO
+    std::vector<std::uint8_t> container(32768, 0xaa);
+    const std::size_t sfo_offset = 4096; // Sector 1 (4096 bytes)
+    std::memcpy(container.data() + sfo_offset, sfo_bytes.data(), sfo_bytes.size());
+
+    const std::uint8_t samu_key[32] = {
+        0x41, 0x42, 0x43, 0x44, 0x45, 0x46, 0x47, 0x48,
+        0x49, 0x4a, 0x4b, 0x4c, 0x4d, 0x4e, 0x4f, 0x50,
+        0x51, 0x52, 0x53, 0x54, 0x55, 0x56, 0x57, 0x58,
+        0x59, 0x5a, 0x5b, 0x5c, 0x5d, 0x5e, 0x5f, 0x60
+    };
+
+    machete::crypto::XtsAes128 xts(samu_key);
+    // Encrypt PFS sector 1 (4096 bytes)
+    std::vector<std::uint8_t> enc(4096);
+    xts.encrypt_sector(1, container.data() + 4096, enc.data(), 4096);
+    std::memcpy(container.data() + 4096, enc.data(), 4096);
+
+    {
+        std::ofstream img_out(tmp_img, std::ios::binary);
+        ASSERT_TRUE(img_out.is_open());
+        img_out.write(reinterpret_cast<const char *>(container.data()), container.size());
+    }
+
+    // 3. Resign in-place using our autonomous engine
+    machete::sfo::ResignParams rp{};
+    rp.target_account_id = 0x37c80d2e21ead98cULL;
+    rp.target_user_id = 0x105f615a;
+
+    std::vector<std::uint8_t> extracted_sfo;
+    const bool resigned = machete::crypto::resign_ps4_pfs_container_sectors(
+        tmp_img, samu_key, rp, &extracted_sfo);
+
+    EXPECT_TRUE(resigned);
+    EXPECT_FALSE(extracted_sfo.empty());
+
+    // 4. Verify the extracted SFO has the new account ID
+    machete::sfo::SfoSaveMetadata meta{};
+    EXPECT_TRUE(machete::sfo::read_sfo_metadata_from_buffer(extracted_sfo.data(), extracted_sfo.size(), meta));
+    EXPECT_EQ(meta.account_id, 0x37c80d2e21ead98cULL);
+
+    (void)std::remove(tmp_img.c_str());
 }
 
 } // namespace hui::testing

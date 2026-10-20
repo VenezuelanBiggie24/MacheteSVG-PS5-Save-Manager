@@ -92,35 +92,17 @@ struct SfoSaveMetadata
     bool has_psid_hmac = false;
 };
 
-inline bool read_sfo_metadata(const std::string &sfo_path, SfoSaveMetadata &out)
+inline bool read_sfo_metadata_from_buffer(const std::uint8_t *data, std::size_t size, SfoSaveMetadata &out)
 {
     out = SfoSaveMetadata{};
-    std::FILE *in = std::fopen(sfo_path.c_str(), "rb");
-    if (!in)
+    if (!data || size < sizeof(SfoHeader))
         return false;
 
-    std::fseek(in, 0, SEEK_END);
-    const long fsize = std::ftell(in);
-    std::fseek(in, 0, SEEK_SET);
-
-    if (fsize <= 0 || fsize > 2 * 1024 * 1024)
-    {
-        std::fclose(in);
-        return false;
-    }
-
-    std::vector<std::uint8_t> buffer(static_cast<std::size_t>(fsize));
-    const std::size_t read_bytes = std::fread(buffer.data(), 1, buffer.size(), in);
-    std::fclose(in);
-
-    if (read_bytes != buffer.size() || buffer.size() < sizeof(SfoHeader))
-        return false;
-
-    const auto *header = reinterpret_cast<const SfoHeader *>(buffer.data());
+    const auto *header = reinterpret_cast<const SfoHeader *>(data);
     if (header->magic != SFO_MAGIC)
         return false;
 
-    const std::size_t total_buf_size = buffer.size();
+    const std::size_t total_buf_size = size;
     if (header->key_table_offset >= total_buf_size ||
         header->data_table_offset >= total_buf_size ||
         header->data_table_offset < header->key_table_offset)
@@ -130,10 +112,10 @@ inline bool read_sfo_metadata(const std::string &sfo_path, SfoSaveMetadata &out)
     if (sizeof(SfoHeader) + entries_bytes > header->key_table_offset)
         return false;
 
-    const auto *entries = reinterpret_cast<const SfoIndexEntry *>(buffer.data() + sizeof(SfoHeader));
-    const char *key_table = reinterpret_cast<const char *>(buffer.data() + header->key_table_offset);
+    const auto *entries = reinterpret_cast<const SfoIndexEntry *>(data + sizeof(SfoHeader));
+    const char *key_table = reinterpret_cast<const char *>(data + header->key_table_offset);
     const std::size_t key_table_size = header->data_table_offset - header->key_table_offset;
-    const std::uint8_t *data_table = buffer.data() + header->data_table_offset;
+    const std::uint8_t *data_table = data + header->data_table_offset;
     const std::size_t data_table_size = total_buf_size - header->data_table_offset;
 
     auto read_safe_string = [&](const SfoIndexEntry &e) -> std::string {
@@ -227,6 +209,33 @@ inline bool read_sfo_metadata(const std::string &sfo_path, SfoSaveMetadata &out)
     return true;
 }
 
+inline bool read_sfo_metadata(const std::string &sfo_path, SfoSaveMetadata &out)
+{
+    out = SfoSaveMetadata{};
+    std::FILE *in = std::fopen(sfo_path.c_str(), "rb");
+    if (!in)
+        return false;
+
+    std::fseek(in, 0, SEEK_END);
+    const long fsize = std::ftell(in);
+    std::fseek(in, 0, SEEK_SET);
+
+    if (fsize <= 0 || fsize > 2 * 1024 * 1024)
+    {
+        std::fclose(in);
+        return false;
+    }
+
+    std::vector<std::uint8_t> buffer(static_cast<std::size_t>(fsize));
+    const std::size_t read_bytes = std::fread(buffer.data(), 1, buffer.size(), in);
+    std::fclose(in);
+
+    if (read_bytes != buffer.size())
+        return false;
+
+    return read_sfo_metadata_from_buffer(buffer.data(), buffer.size(), out);
+}
+
 inline SfoSaveMetadata read_sfo_metadata(const std::string &sfo_path)
 {
     SfoSaveMetadata meta;
@@ -256,27 +265,10 @@ inline bool read_account_id_from_sfo(const std::string &sfo_path, std::uint64_t 
     return false;
 }
 
-inline bool resign_param_sfo(const std::string &sfo_path, const ResignParams &params)
+inline bool resign_param_sfo_buffer(std::vector<std::uint8_t> &buffer, const ResignParams &params, bool &out_modified, const std::string &log_tag = "")
 {
-    std::FILE *in = std::fopen(sfo_path.c_str(), "rb");
-    if (!in)
-        return false;
-
-    std::fseek(in, 0, SEEK_END);
-    const long fsize = std::ftell(in);
-    std::fseek(in, 0, SEEK_SET);
-
-    if (fsize <= 0 || fsize > 2 * 1024 * 1024)
-    {
-        std::fclose(in);
-        return false;
-    }
-
-    std::vector<std::uint8_t> buffer(static_cast<std::size_t>(fsize));
-    const std::size_t read_bytes = std::fread(buffer.data(), 1, buffer.size(), in);
-    std::fclose(in);
-
-    if (read_bytes != buffer.size() || buffer.size() < sizeof(SfoHeader))
+    out_modified = false;
+    if (buffer.size() < sizeof(SfoHeader))
         return false;
 
     auto *header = reinterpret_cast<SfoHeader *>(buffer.data());
@@ -342,7 +334,7 @@ inline bool resign_param_sfo(const std::string &sfo_path, const ResignParams &pa
                 MACHETE_LOG("[SFO]", "Patched ACCOUNT_ID -> 0x%04llx...%04llx (Apollo standard) in %s",
                             static_cast<unsigned long long>((final_acc >> 48) & 0xffff),
                             static_cast<unsigned long long>(final_acc & 0xffff),
-                            sfo_path.c_str());
+                            log_tag.empty() ? "buffer" : log_tag.c_str());
             }
         }
 
@@ -359,7 +351,7 @@ inline bool resign_param_sfo(const std::string &sfo_path, const ResignParams &pa
                 std::memcpy(val_ptr, &attr, 4);
                 modified = true;
                 MACHETE_LOG("[SFO]", "Unlocked copy-protection flag (ATTRIBUTE 0x%x -> 0x%x) in %s",
-                            attr | 0x01u, attr, sfo_path.c_str());
+                            attr | 0x01u, attr, log_tag.empty() ? "buffer" : log_tag.c_str());
             }
         }
 
@@ -374,7 +366,7 @@ inline bool resign_param_sfo(const std::string &sfo_path, const ResignParams &pa
                 p->user_id = params.target_user_id;
                 modified = true;
                 MACHETE_LOG("[SFO]", "Patched PARAMS.user_id -> 0x%08x in %s",
-                            params.target_user_id, sfo_path.c_str());
+                            params.target_user_id, log_tag.empty() ? "buffer" : log_tag.c_str());
             }
 
             // Sincronizar title_id_2 con title_id_1
@@ -398,7 +390,35 @@ inline bool resign_param_sfo(const std::string &sfo_path, const ResignParams &pa
         }
     }
 
-    if (!modified)
+    out_modified = modified;
+    return true;
+}
+
+inline bool resign_param_sfo(const std::string &sfo_path, const ResignParams &params)
+{
+    std::FILE *in = std::fopen(sfo_path.c_str(), "rb");
+    if (!in)
+        return false;
+
+    std::fseek(in, 0, SEEK_END);
+    const long fsize = std::ftell(in);
+    std::fseek(in, 0, SEEK_SET);
+
+    if (fsize <= 0 || fsize > 2 * 1024 * 1024)
+    {
+        std::fclose(in);
+        return false;
+    }
+
+    std::vector<std::uint8_t> buffer(static_cast<std::size_t>(fsize));
+    const std::size_t read_bytes = std::fread(buffer.data(), 1, buffer.size(), in);
+    std::fclose(in);
+
+    if (read_bytes != buffer.size())
+        return false;
+
+    bool modified = false;
+    if (!resign_param_sfo_buffer(buffer, params, modified, sfo_path) || !modified)
         return true;
 
     // Escribir de vuelta de forma segura

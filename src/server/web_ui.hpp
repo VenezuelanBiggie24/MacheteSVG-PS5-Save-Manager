@@ -769,7 +769,7 @@ constexpr std::string_view kWebUiHtml = R"rawhtml(<!DOCTYPE html>
       <div>
         <div class="brand-title">
           <span>MacheteSVG</span>
-          <span class="version-tag">PPSA99001 v1.3.0 (Build 60)</span>
+          <span class="version-tag" id="main-header-version">PPSA99001 v1.3.0</span>
         </div>
         <div class="brand-subtitle">Estación Web Local & Gestor de Partidas PS5 / PS4</div>
       </div>
@@ -1115,7 +1115,7 @@ constexpr std::string_view kWebUiHtml = R"rawhtml(<!DOCTYPE html>
 
     async function loadStatus() {
       try {
-        const res = await fetch('/api/status');
+        const res = await fetch('/api/status?_t=' + Date.now());
         if (res.ok) {
           const data = await res.json();
           document.getElementById('console-ip').textContent = `${data.ip}:${data.port}`;
@@ -1124,6 +1124,8 @@ constexpr std::string_view kWebUiHtml = R"rawhtml(<!DOCTYPE html>
             const vLabel = `v${data.version}${data.build ? ' (Build ' + data.build + ')' : ''}`;
             const el = document.getElementById('updater-curr-version');
             if (el) el.textContent = vLabel;
+            const hdrEl = document.getElementById('main-header-version');
+            if (hdrEl) hdrEl.textContent = `PPSA99001 ${vLabel}`;
           }
         }
       } catch (e) {
@@ -1133,7 +1135,7 @@ constexpr std::string_view kWebUiHtml = R"rawhtml(<!DOCTYPE html>
 
     async function loadGames() {
       try {
-        const res = await fetch('/api/games');
+        const res = await fetch('/api/games?_t=' + Date.now());
         if (!res.ok) return;
         gamesData = await res.json();
         renderStats();
@@ -1305,7 +1307,7 @@ constexpr std::string_view kWebUiHtml = R"rawhtml(<!DOCTYPE html>
       modal.classList.add('open');
 
       try {
-        const res = await fetch(`/api/backups/${encodeURIComponent(titleId)}`);
+        const res = await fetch(`/api/backups/${encodeURIComponent(titleId)}?_t=${Date.now()}`);
         const backups = res.ok ? await res.json() : [];
 
         const isPs4 = (platform === 'PS4');
@@ -1412,7 +1414,7 @@ constexpr std::string_view kWebUiHtml = R"rawhtml(<!DOCTYPE html>
       modal.classList.add('open');
 
       try {
-        const res = await fetch(`/api/files/${encodeURIComponent(titleId)}`);
+        const res = await fetch(`/api/files/${encodeURIComponent(titleId)}?_t=${Date.now()}`);
         if (!res.ok) {
           modalBody.innerHTML = '<p style="color: #ef4444; text-align: center;">Error al obtener archivos.</p>';
           return;

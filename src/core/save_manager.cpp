@@ -718,21 +718,69 @@ void reconstruct_prospero_metadata(const std::string &title_id,
         }
 
         // 1. Identificar el slot primario para param.json:
-        // En juegos de PS5, preferir la ranura de campana (ej. AUTOSAVE0, SAVEDATA0, o la de mayor tamano), NO PROFILE
+        // Si found_param_json ya contiene un dirName valido de este juego, PRESERVARLO estrictamente.
+        // Solo si dirName esta vacio o apunta a un slot inexistente, determinar la ranura primaria mediante escaneo.
         std::string primary_slot_file;
         std::string primary_slot_name;
         struct stat st_sd{};
-        const char *kGameplayCandidates[] = {
-            "AUTOSAVE0", "SAVEDATA0", "SAVEDATA00", "QUICKSAVE0", "MANUAL0", nullptr
-        };
-        for (int p = 0; kGameplayCandidates[p] && primary_slot_file.empty(); ++p)
+
+        // Leer dirName previo de param.json si existiera
+        std::string existing_dirname;
         {
-            const std::string cand_path = dst_target + "/sdimg_" + kGameplayCandidates[p];
-            if (stat(cand_path.c_str(), &st_sd) == 0 && st_sd.st_size > 0)
+            std::FILE *jf = std::fopen((meta_target + "/param.json").c_str(), "rb");
+            if (jf)
             {
-                primary_slot_file = cand_path;
-                primary_slot_name = kGameplayCandidates[p];
-                break;
+                std::fseek(jf, 0, SEEK_END);
+                long jsz = std::ftell(jf);
+                std::fseek(jf, 0, SEEK_SET);
+                if (jsz > 0 && jsz < 100000)
+                {
+                    std::string jcontent(static_cast<std::size_t>(jsz), '\0');
+                    if (std::fread(&jcontent[0], 1, jcontent.size(), jf) == jcontent.size())
+                    {
+                        std::size_t dpos = jcontent.find("\"dirName\"");
+                        if (dpos != std::string::npos)
+                        {
+                            std::size_t q1 = jcontent.find('"', dpos + 9);
+                            if (q1 != std::string::npos)
+                            {
+                                std::size_t q2 = jcontent.find('"', q1 + 1);
+                                if (q2 != std::string::npos)
+                                {
+                                    existing_dirname = jcontent.substr(q1 + 1, q2 - (q1 + 1));
+                                }
+                            }
+                        }
+                    }
+                }
+                std::fclose(jf);
+            }
+        }
+
+        if (!existing_dirname.empty())
+        {
+            const std::string cand_existing = dst_target + "/sdimg_" + existing_dirname;
+            if (stat(cand_existing.c_str(), &st_sd) == 0 && st_sd.st_size > 0)
+            {
+                primary_slot_file = cand_existing;
+                primary_slot_name = existing_dirname;
+            }
+        }
+
+        if (primary_slot_file.empty())
+        {
+            const char *kGameplayCandidates[] = {
+                "AUTOSAVE0", "SAVEDATA0", "SAVEDATA00", "QUICKSAVE0", "MANUAL0", nullptr
+            };
+            for (int p = 0; kGameplayCandidates[p] && primary_slot_file.empty(); ++p)
+            {
+                const std::string cand_path = dst_target + "/sdimg_" + kGameplayCandidates[p];
+                if (stat(cand_path.c_str(), &st_sd) == 0 && st_sd.st_size > 0)
+                {
+                    primary_slot_file = cand_path;
+                    primary_slot_name = kGameplayCandidates[p];
+                    break;
+                }
             }
         }
         if (primary_slot_file.empty())
@@ -780,7 +828,7 @@ void reconstruct_prospero_metadata(const std::string &title_id,
         // 2. Actualizar titleId dentro de param.json para coincidir exactamente con este SKU (fundamental en SKUs emparejados)
         machete::pfs::update_ps5_param_json_title_id(meta_target + "/param.json", title_id);
 
-        // 3. Actualizar o crear descriptores individuales <slot>_param.json y <slot>.json para cada slot en meta_target
+        // 3. Actualizar o crear descriptores tanto planos (<slot>_param.json) como jerarquicos (<slot>/param.json)
         ScopedDir dir_slots(dst_target);
         if (dir_slots.is_valid())
         {
@@ -792,9 +840,14 @@ void reconstruct_prospero_metadata(const std::string &title_id,
                     struct stat st_slot{};
                     if (stat((dst_target + "/" + ent->d_name).c_str(), &st_slot) == 0 && st_slot.st_size > 0)
                     {
+                        // Subcarpeta jerarquica para la ranura: meta_target/<slot_name>/
+                        const std::string slot_subfolder = meta_target + "/" + slot_name;
+                        ensure_directories_recursive(slot_subfolder, target_uid, target_gid);
+
                         const std::vector<std::string> slot_json_paths = {
                             meta_target + "/" + slot_name + "_param.json",
-                            meta_target + "/" + slot_name + ".json"
+                            meta_target + "/" + slot_name + ".json",
+                            slot_subfolder + "/param.json"
                         };
                         for (const auto &sjp : slot_json_paths)
                         {
@@ -824,6 +877,16 @@ void reconstruct_prospero_metadata(const std::string &title_id,
                                               game_title.c_str(), slot_name.c_str());
                                 write_string_atomic(sjp, s_json, target_uid, target_gid);
                             }
+                            (void)chmod(sjp.c_str(), 0666);
+                            if (target_uid != 0 || target_gid != 0)
+                                (void)chown(sjp.c_str(), target_uid, target_gid);
+                        }
+
+                        // Sincronizar tambien icon0.png dentro de la subcarpeta jerarquica
+                        if (access((meta_target + "/icon0.png").c_str(), R_OK) == 0)
+                        {
+                            (void)pfs::copy_file_atomic(meta_target + "/icon0.png", slot_subfolder + "/icon0.png", target_uid, target_gid);
+                            (void)chmod((slot_subfolder + "/icon0.png").c_str(), 0666);
                         }
                     }
                 }
@@ -1112,7 +1175,7 @@ void post_process_restored_save(const scanner::ScannedGame &game,
                             s_size = static_cast<std::uint64_t>(st_s.st_size);
                         db::update_or_register_ps5_savedata_db(
                             user_id, active_account_id, save_dir_tid, sname, s_size,
-                            game.title, game.title_id);
+                            game.title, save_dir_tid);
                     }
                 }
             }
@@ -1387,6 +1450,36 @@ void post_process_restored_save(const scanner::ScannedGame &game,
                 }
                 MACHETE_LOG("[RESTORE]", "Synchronized and resigned PS4 metadata SFO in %s (from %s)",
                             meta_ps4_user.c_str(), valid_sfo.c_str());
+            }
+            else
+            {
+                // Si el respaldo carecia de param.sfo externo y la imagen Book/savedata.bin no tenia
+                // un SFO extraible, sintetizamos un descriptor param.sfo de contingencia autentico
+                const std::string synth_sfo = meta_ps4_user + "/param.sfo";
+                if (machete::sfo::synthesize_ps4_save_param_sfo(synth_sfo, save_dir_tid, save_dir_tid,
+                                                                 game.title, "", "", user_id, active_account_id, 325, 0, nullptr))
+                {
+                    (void)chmod(synth_sfo.c_str(), 0666);
+                    ScopedDir dslots(dst_target);
+                    if (dslots.is_valid())
+                    {
+                        while (const dirent *de = readdir(dslots.get()))
+                        {
+                            const std::string sname = de->d_name;
+                            if (machete::pfs::is_valid_ps4_slot_name(dst_target, sname))
+                            {
+                                const std::string slot_sfo = meta_ps4_user + "/" + sname + "_param.sfo";
+                                (void)pfs::copy_file_atomic(synth_sfo, slot_sfo, target_uid, target_gid);
+                                (void)chmod(slot_sfo.c_str(), 0666);
+                            }
+                        }
+                    }
+                    ensure_directories_recursive(dst_target + "/sce_sys", target_uid, target_gid);
+                    (void)pfs::copy_file_atomic(synth_sfo, dst_target + "/sce_sys/param.sfo", target_uid, target_gid);
+                    (void)chmod((dst_target + "/sce_sys/param.sfo").c_str(), 0666);
+                    MACHETE_LOG("[RESTORE]", "Synthesized contingency PS4 param.sfo for %s in %s",
+                                save_dir_tid.c_str(), meta_ps4_user.c_str());
+                }
             }
 
             // Purgar subdirectorios anomalos dentro de meta_ps4_user pero PRESERVAR los archivos .sfo y .png

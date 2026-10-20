@@ -748,6 +748,9 @@ void WebServer::send_response(int client_fd, int status_code, const std::string 
         "Content-Length: %zu\r\n"
         "Connection: close\r\n"
         "Access-Control-Allow-Origin: *\r\n"
+        "Cache-Control: no-cache, no-store, must-revalidate\r\n"
+        "Pragma: no-cache\r\n"
+        "Expires: 0\r\n"
         "%s\r\n",
         status_code, status_text.c_str(), content_type.c_str(), body_len, extra_headers.c_str());
 
@@ -801,6 +804,9 @@ void WebServer::send_file_response(int client_fd, const std::string &file_path, 
         "Content-Type: %s\r\n"
         "Content-Length: %llu\r\n"
         "Connection: close\r\n"
+        "Cache-Control: no-cache, no-store, must-revalidate\r\n"
+        "Pragma: no-cache\r\n"
+        "Expires: 0\r\n"
         "%s\r\n",
         content_type.c_str(),
         static_cast<unsigned long long>(file_size), disposition.c_str());
