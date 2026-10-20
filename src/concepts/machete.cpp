@@ -140,24 +140,6 @@ static void draw_shinchan_character(gfx::DrawList &list, ui::Painter &paint,
     const Color yellow_shoes = Color::rgb(0xffca00);
     const Color blush_color = Color::rgb(0xff7582);
 
-    // Pedestal sutil estilo Liquid Glass para unificar esteticamente los tres estados
-    const Rect pedestal{cx - 86.0f, cy - 176.0f, 172.0f, 186.0f};
-    if (state == ShinchanState::Success)
-    {
-        list.rounded_rect(pedestal, 22.0f, Color::rgb(0x062817).with_alpha(0.50f));
-        paint.stroke(pedestal, 22.0f, 1.2f, Color::rgb(0x38ef7d).with_alpha(0.30f));
-    }
-    else if (state == ShinchanState::Error)
-    {
-        list.rounded_rect(pedestal, 22.0f, Color::rgb(0x27070a).with_alpha(0.50f));
-        paint.stroke(pedestal, 22.0f, 1.2f, Color::rgb(0xff4455).with_alpha(0.30f));
-    }
-    else
-    {
-        list.rounded_rect(pedestal, 22.0f, Color::rgb(0x0c1b30).with_alpha(0.45f));
-        paint.stroke(pedestal, 22.0f, 1.2f, Color::rgb(0x38bdf8).with_alpha(0.20f));
-    }
-
     // Sombra suave en el suelo compartida para todos los estados
     list.shadow({cx - 40.0f, cy - 2.0f, 80.0f, 12.0f}, 6.0f, 5.0f,
                 Color::rgb(0x000000).with_alpha(0.30f));
