@@ -1182,35 +1182,45 @@ void post_process_restored_save(const scanner::ScannedGame &game,
     }
     else
     {
-        // 2. Partidas PS4: Inyeccion de Keystone autentico y Resignado SFO para la cuenta activa (Modo Apollo)
-        MACHETE_LOG("[RESTORE]", "Processing PS4 save for active account: Keystone & param.sfo...");
+        // 2. Partidas PS4: Inyeccion de Keystone autentico y Resignado SFO para la cuenta activa (Modo Apollo completo)
+        MACHETE_LOG("[RESTORE]", "Processing PS4 save for active account: Keystone & param.sfo (Apollo Engine)...");
         const bool backup_has_keystone = (access((backup_folder + "/keystone").c_str(), R_OK) == 0 &&
                                           machete::keystone::is_valid_keystone_file(backup_folder + "/keystone")) ||
                                          (access((backup_folder + "/sce_sys/keystone").c_str(), R_OK) == 0 &&
                                           machete::keystone::is_valid_keystone_file(backup_folder + "/sce_sys/keystone"));
 
         const std::string preserved_ks = preserved_dummy_dir + "/keystone";
-        if (backup_has_keystone)
-        {
-            pfs_rep.keystone_injected = true;
-            MACHETE_LOG("[KEYSTONE]", "Using authentic keystone from backup: %s", backup_folder.c_str());
-        }
-        else if (access(preserved_ks.c_str(), R_OK) == 0 && machete::keystone::is_valid_keystone_file(preserved_ks))
+        // 1. Prioridad maxima: Si habia un Keystone preservado del Save Dummy local de esta consola
+        if (access(preserved_ks.c_str(), R_OK) == 0 && machete::keystone::is_valid_keystone_file(preserved_ks))
         {
             (void)pfs::copy_file_atomic(preserved_ks, dst_target + "/keystone", target_uid, target_gid);
             (void)chmod((dst_target + "/keystone").c_str(), 0666);
-            if (access((dst_target + "/sce_sys").c_str(), F_OK) == 0)
-            {
-                (void)pfs::copy_file_atomic(preserved_ks, dst_target + "/sce_sys/keystone", target_uid, target_gid);
-                (void)chmod((dst_target + "/sce_sys/keystone").c_str(), 0666);
-            }
+            (void)pfs::ensure_dir_tree(dst_target + "/sce_sys", target_uid, target_gid);
+            (void)pfs::copy_file_atomic(preserved_ks, dst_target + "/sce_sys/keystone", target_uid, target_gid);
+            (void)chmod((dst_target + "/sce_sys/keystone").c_str(), 0666);
             pfs_rep.keystone_injected = true;
-            MACHETE_LOG("[KEYSTONE]", "Restored preserved local dummy keystone to %s/keystone", dst_target.c_str());
+            MACHETE_LOG("[KEYSTONE]", "Restored authentic local console keystone from preserved dummy: %s", dst_target.c_str());
         }
-        else if (machete::keystone::inject_authentic_keystone(dst_target, save_dir_tid, backup_folder, game.app_path))
+        // 2. Segunda prioridad: Keystone autentico de la aplicacion instalada en la consola (app/appmeta/PKG)
+        else if (machete::keystone::inject_authentic_keystone(dst_target, save_dir_tid, "", game.app_path))
         {
             pfs_rep.keystone_injected = true;
+            MACHETE_LOG("[KEYSTONE]", "Injected installed game's authentic keystone for %s into %s",
+                        save_dir_tid.c_str(), dst_target.c_str());
         }
+        // 3. Tercera prioridad: Keystone preservado en el respaldo si la consola no tiene el juego instalado
+        else if (backup_has_keystone)
+        {
+            pfs_rep.keystone_injected = true;
+            (void)pfs::ensure_dir_tree(dst_target + "/sce_sys", target_uid, target_gid);
+            if (access((dst_target + "/keystone").c_str(), R_OK) == 0)
+            {
+                (void)pfs::copy_file_atomic(dst_target + "/keystone", dst_target + "/sce_sys/keystone", target_uid, target_gid);
+                (void)chmod((dst_target + "/sce_sys/keystone").c_str(), 0666);
+            }
+            MACHETE_LOG("[KEYSTONE]", "Using preserved keystone from backup: %s", backup_folder.c_str());
+        }
+        // 4. Cuarta prioridad: Inyectar keystone universal FPKG estilo Apollo para juegos homebrew/fake PKG
         else
         {
             if (machete::keystone::inject_fallback_fpkg_keystone(dst_target, save_dir_tid))
@@ -2416,7 +2426,235 @@ std::vector<BackupItem> find_available_backups(const scanner::ScannedGame &game,
         }
     }
 
+    // Si es un titulo de PS4 y tiene partida guardada en la consola, anadir la opcion de resignar en caliente estilo Apollo
+    if ((game.platform == "PS4" || game.title_id.rfind("CUSA", 0) == 0) &&
+        !game.save_path.empty() && access(game.save_path.c_str(), F_OK) == 0)
+    {
+        BackupItem local_opt;
+        local_opt.device_id = "RESIGN_LOCAL_PS4";
+        local_opt.device_label = is_es ? "Partida Activa en Consola" : "Active Save on Console";
+        local_opt.storage_type = storage::StorageType::Internal;
+        local_opt.folder_path = game.save_path;
+        local_opt.folder_name = is_es ? "Resignar Partida Local (Modo Apollo)" : "Resign Local Save (Apollo Mode)";
+        local_opt.title_id = game.title_id;
+        local_opt.title = game.title;
+        local_opt.timestamp_str = is_es ? "Auto-Resign / Fix" : "Auto-Resign / Fix";
+        local_opt.size_str = is_es ? "Modo Apollo" : "Apollo Mode";
+        local_opt.file_count = 1;
+        local_opt.has_keystone = true;
+        backups.insert(backups.begin(), local_opt);
+    }
+
     return backups;
+}
+
+OperationResult resign_local_ps4_save(const scanner::ScannedGame &game,
+                                      ProgressCallback progress_cb)
+{
+    OperationResult res;
+    const bool is_es = (machete::i18n::current_language() == machete::i18n::Language::Spanish);
+
+    if (game.platform != "PS4" && game.title_id.rfind("CUSA", 0) != 0)
+    {
+        res.success = false;
+        res.message = is_es ? "El resignado Apollo solo aplica a juegos de PS4 (CUSAxxxxx)."
+                            : "Apollo resign only applies to PS4 games (CUSAxxxxx).";
+        return res;
+    }
+
+    // Resolver ruta de guardado activa
+    std::string save_dir = game.save_path;
+    if (save_dir.empty() || access(save_dir.c_str(), F_OK) != 0)
+    {
+        res.success = false;
+        res.message = is_es ? "No se encontro partida activa en la consola para resignar."
+                            : "No active save found on console to resign.";
+        return res;
+    }
+
+    MACHETE_LOG("[RESIGN]", "Starting native Apollo Save Resign on %s (%s)...",
+                game.title_id.c_str(), save_dir.c_str());
+
+    const std::uint32_t user_id = extract_user_id_from_path(save_dir);
+    const std::uint64_t active_account_id = machete::account::detect_active_account_id(user_id);
+
+    uid_t target_uid = 0;
+    gid_t target_gid = 0;
+    resolve_path_ownership(save_dir, target_uid, target_gid);
+    if (target_uid == 0 && target_gid == 0)
+    {
+        target_uid = 1;
+        target_gid = 1;
+    }
+
+    if (progress_cb)
+    {
+        OperationProgress p;
+        p.progress = 0.2f;
+        p.current_file = is_es ? "Alineando Keystone autentico..." : "Aligning authentic Keystone...";
+        progress_cb(p);
+    }
+
+    // 1. Alinear Keystone autentico
+    (void)machete::keystone::ensure_ps4_keystone_aligned(save_dir, game.title_id, "", game.app_path);
+    if (access((save_dir + "/keystone").c_str(), R_OK) == 0)
+    {
+        (void)chmod((save_dir + "/keystone").c_str(), 0666);
+        (void)pfs::ensure_dir_tree(save_dir + "/sce_sys", target_uid, target_gid);
+        (void)pfs::copy_file_atomic(save_dir + "/keystone", save_dir + "/sce_sys/keystone", target_uid, target_gid);
+        (void)chmod((save_dir + "/sce_sys/keystone").c_str(), 0666);
+    }
+
+    if (progress_cb)
+    {
+        OperationProgress p;
+        p.progress = 0.4f;
+        p.current_file = is_es ? "Resignando param.sfo y recalculando HMAC..." : "Resigning param.sfo & recalculating HMAC...";
+        progress_cb(p);
+    }
+
+    // 2. Resignar SFOs
+    std::uint8_t console_psid[16] = {0};
+    const bool has_psid = machete::vault::get_console_open_psid(console_psid);
+
+    machete::sfo::ResignParams rp;
+    rp.target_user_id = user_id;
+    rp.target_account_id = active_account_id;
+    rp.apply_account_id = true;
+    if (has_psid)
+        rp.psid = console_psid;
+
+    bool sfo_modified = false;
+    resign_sfo_directory_recursive(save_dir, rp, sfo_modified);
+
+    if (progress_cb)
+    {
+        OperationProgress p;
+        p.progress = 0.6f;
+        p.current_file = is_es ? "Sincronizando metadatos de usuario..." : "Synchronizing user metadata...";
+        progress_cb(p);
+    }
+
+    // 3. Sincronizar savedata_meta/user/<TitleID>
+    char uid_hex[32];
+    std::snprintf(uid_hex, sizeof(uid_hex), "%x", user_id);
+    const std::string meta_ps4_user = std::string("/user/home/") + uid_hex + "/savedata_meta/user/" + game.title_id;
+    ensure_directories_recursive(meta_ps4_user, target_uid, target_gid);
+
+    // Buscar SFO valido para meta
+    std::string valid_sfo;
+    for (const auto &cand : {save_dir + "/sce_sys/param.sfo", save_dir + "/param.sfo"})
+    {
+        if (access(cand.c_str(), R_OK) == 0 && machete::sfo::is_valid_save_param_sfo(cand))
+        {
+            valid_sfo = cand;
+            break;
+        }
+    }
+
+    if (!valid_sfo.empty())
+    {
+        (void)pfs::copy_file_atomic(valid_sfo, meta_ps4_user + "/param.sfo", target_uid, target_gid);
+        (void)machete::sfo::resign_param_sfo(meta_ps4_user + "/param.sfo", rp);
+        (void)chmod((meta_ps4_user + "/param.sfo").c_str(), 0666);
+
+        ScopedDir dslots(save_dir);
+        if (dslots.is_valid())
+        {
+            while (const dirent *de = readdir(dslots.get()))
+            {
+                const std::string sname = de->d_name;
+                if (machete::pfs::is_valid_ps4_slot_name(save_dir, sname))
+                {
+                    const std::string slot_sfo = meta_ps4_user + "/" + sname + "_param.sfo";
+                    (void)pfs::copy_file_atomic(valid_sfo, slot_sfo, target_uid, target_gid);
+                    (void)machete::sfo::resign_param_sfo(slot_sfo, rp);
+                    (void)chmod(slot_sfo.c_str(), 0666);
+                }
+            }
+        }
+    }
+
+    // Iconos para meta
+    for (const auto &ic : {save_dir + "/sce_sys/icon0.png", save_dir + "/icon0.png"})
+    {
+        if (access(ic.c_str(), R_OK) == 0)
+        {
+            (void)pfs::copy_file_atomic(ic, meta_ps4_user + "/icon0.png", target_uid, target_gid);
+            (void)pfs::copy_file_atomic(ic, meta_ps4_user + "/system0020_icon0.png", target_uid, target_gid);
+            break;
+        }
+    }
+
+    // Limpiar residuos en meta
+    (void)unlink((meta_ps4_user + "/keystone").c_str());
+    (void)unlink((meta_ps4_user + "/sce_sys/param.sfo").c_str());
+    (void)unlink((meta_ps4_user + "/sce_sys/icon0.png").c_str());
+    (void)rmdir((meta_ps4_user + "/sce_sys").c_str());
+    apply_permissions_recursive(meta_ps4_user, target_uid, target_gid);
+
+    if (progress_cb)
+    {
+        OperationProgress p;
+        p.progress = 0.8f;
+        p.current_file = is_es ? "Registrando en savedata.db..." : "Indexing in savedata.db...";
+        progress_cb(p);
+    }
+
+    // 4. Indexar en savedata.db
+    sfo::SfoSaveMetadata meta_read{};
+    if (!valid_sfo.empty())
+        meta_read = machete::sfo::read_sfo_metadata(valid_sfo);
+
+    int slots_indexed = 0;
+    ScopedDir dslots(save_dir);
+    if (dslots.is_valid())
+    {
+        while (const dirent *de = readdir(dslots.get()))
+        {
+            const std::string sname = de->d_name;
+            if (machete::pfs::is_valid_ps4_slot_name(save_dir, sname))
+            {
+                struct stat st_s{};
+                std::uint64_t s_size = 0;
+                if (stat((save_dir + "/" + sname).c_str(), &st_s) == 0)
+                    s_size = static_cast<std::uint64_t>(st_s.st_size);
+                db::update_or_register_ps4_savedata_db(
+                    user_id, active_account_id, game.title_id, sname, s_size,
+                    meta_read.valid ? &meta_read : nullptr, game.title);
+                ++slots_indexed;
+            }
+        }
+    }
+
+    db::repair_title_corruption_flags(user_id, game.title_id, active_account_id);
+    db::sanitize_database_architecture_isolation(user_id);
+    apply_permissions_recursive(save_dir, target_uid, target_gid);
+
+    ::sync();
+
+    if (progress_cb)
+    {
+        OperationProgress p;
+        p.progress = 1.0f;
+        p.current_file = is_es ? "Completado" : "Completed";
+        progress_cb(p);
+    }
+
+    char acc_hex[32];
+    std::snprintf(acc_hex, sizeof(acc_hex), "%016llx", static_cast<unsigned long long>(active_account_id));
+
+    res.success = true;
+    res.files_transferred = slots_indexed;
+    res.message = is_es
+        ? ("Partida PS4 resignada con exito [Modo Apollo]: Account ID 0x" + std::string(acc_hex) +
+           ", User ID 0x" + std::string(uid_hex) + ", Keystone sincronizado, Candado de copia desactivado y registrada en savedata.db.")
+        : ("PS4 save successfully resigned [Apollo Mode]: Account ID 0x" + std::string(acc_hex) +
+           ", User ID 0x" + std::string(uid_hex) + ", Keystone synced, Copy-lock unlocked and indexed in savedata.db.");
+
+    MACHETE_LOG("[RESIGN]", "Native Apollo Resign completed successfully for %s (%s)",
+                game.title_id.c_str(), res.message.c_str());
+    return res;
 }
 
 __attribute__((noinline)) OperationResult restore_backup_item(const scanner::ScannedGame &game,
@@ -2424,6 +2662,10 @@ __attribute__((noinline)) OperationResult restore_backup_item(const scanner::Sca
                                                                ProgressCallback progress_cb)
 {
     MACHETE_BREADCRUMB("restore_backup_item: start");
+    if (backup.device_id == "RESIGN_LOCAL_PS4")
+    {
+        return resign_local_ps4_save(game, progress_cb);
+    }
     const std::string folder = backup.folder_path;
     const std::string label = backup.device_label;
     return restore_from_folder(game, folder, label, progress_cb);

@@ -88,5 +88,15 @@ OperationResult restore_backup_item(const scanner::ScannedGame &game,
                                     const BackupItem &backup,
                                     ProgressCallback progress_cb = nullptr);
 
+// Resigna y alinea directamente la partida local de PS4 activa en la consola (Motor Apollo completo):
+// - Actualiza ACCOUNT_ID (con fallback sintetico offline de Apollo)
+// - Actualiza PARAMS (User ID, sincronizacion de Title ID y recalculacion de HMAC-SHA256 oficial)
+// - Elimina la proteccion contra copia (ATTRIBUTE copy-lock unlock)
+// - Inyecta el Keystone autentico de la aplicacion instalada (o universal FPKG)
+// - Sincroniza metadatos en savedata_meta/user/<TitleID>/ (param.sfo, slot_param.sfo, icon0.png)
+// - Registra y purga banderas de corrupcion (is_broken=0, fake_broken=0) en savedata.db
+OperationResult resign_local_ps4_save(const scanner::ScannedGame &game,
+                                      ProgressCallback progress_cb = nullptr);
+
 } // namespace machete::save
 

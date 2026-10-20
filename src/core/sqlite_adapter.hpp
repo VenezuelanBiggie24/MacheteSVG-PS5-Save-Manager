@@ -256,6 +256,9 @@ inline bool update_or_register_ps4_savedata_db(std::uint32_t user_id,
     }
     const std::uint32_t size_kib = (file_size_bytes > 0) ? static_cast<std::uint32_t>((file_size_bytes + 1023) / 1024) : (blocks * 32);
     const std::uint32_t user_param = (sfo_meta && sfo_meta->valid) ? sfo_meta->user_param : 0;
+    const std::uint64_t effective_account_id = (account_id != 0)
+                                                   ? account_id
+                                                   : sfo::get_apollo_synthetic_account_id(user_id);
 
     const std::string safe_tid = escape_sql_string(title_id);
     const std::string safe_slot = escape_sql_string(slot_name);
@@ -348,7 +351,7 @@ inline bool update_or_register_ps4_savedata_db(std::uint32_t user_id,
                               "free_blocks = CASE WHEN (free_blocks IS NULL OR free_blocks <= 0) THEN %u ELSE free_blocks END, size_kib = %u, "
                               "mtime = strftime('%%Y-%%m-%%dT%%H:%%M:%%S.00Z', CURRENT_TIMESTAMP) "
                               "WHERE title_id = '%s' AND dir_name = '%s';",
-                              static_cast<unsigned long long>(account_id), user_id,
+                              static_cast<unsigned long long>(effective_account_id), user_id,
                               safe_main.c_str(), safe_sub.c_str(), safe_detail.c_str(),
                               user_param, blocks, blocks, size_kib,
                               safe_tid.c_str(), safe_slot.c_str());
@@ -365,7 +368,7 @@ inline bool update_or_register_ps4_savedata_db(std::uint32_t user_id,
                               "size_kib = CASE WHEN size_kib <= 0 THEN %u ELSE size_kib END, "
                               "mtime = strftime('%%Y-%%m-%%dT%%H:%%M:%%S.00Z', CURRENT_TIMESTAMP) "
                               "WHERE title_id = '%s' AND dir_name = '%s';",
-                              static_cast<unsigned long long>(account_id), user_id,
+                              static_cast<unsigned long long>(effective_account_id), user_id,
                               safe_tid.c_str(), safe_main.c_str(),
                               blocks, blocks, size_kib,
                               safe_tid.c_str(), safe_slot.c_str());
@@ -389,7 +392,7 @@ inline bool update_or_register_ps4_savedata_db(std::uint32_t user_id,
                           safe_tid.c_str(), safe_slot.c_str(),
                           safe_main.c_str(), safe_sub.c_str(), safe_detail.c_str(),
                           user_param, blocks, blocks, size_kib,
-                          static_cast<unsigned long long>(account_id), user_id,
+                          static_cast<unsigned long long>(effective_account_id), user_id,
                           safe_tid.c_str());
             rc = adapter.exec(db, sql_insert, nullptr, nullptr, &errmsg);
         }

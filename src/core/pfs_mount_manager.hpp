@@ -513,6 +513,78 @@ public:
                 return true;
         }
 
+#if defined(__PROSPERO__) || defined(__Prospero__) || defined(__PS5__)
+        // 3. Probar mediante sceKernelLoadStartModule de libkernel (para modulos del sistema priv)
+        for (int i = 0; candidate_paths[i]; ++i)
+        {
+            const char *cand = candidate_paths[i];
+            if (cand[0] == '/' && access(cand, R_OK) != 0)
+                continue;
+
+            int res_out = 0;
+            int mod_handle = sceKernelLoadStartModule(cand, 0, nullptr, 0, nullptr, &res_out);
+            if (mod_handle >= 0)
+            {
+                int (*found_init_m)(SaveMountOpt *) = nullptr;
+                int (*found_m)(SaveMountOpt *, const char *, const char *, const void *) = nullptr;
+                int (*found_init_u)(SaveMountOpt *) = nullptr;
+                int (*found_u)(SaveMountOpt *, const char *, void *, int) = nullptr;
+
+                for (int k = 0; kInitMountSyms[k]; ++k)
+                {
+                    void *s = nullptr;
+                    if (sceKernelDlsym(mod_handle, kInitMountSyms[k], &s) == 0 && s)
+                    {
+                        found_init_m = reinterpret_cast<int (*)(SaveMountOpt *)>(s);
+                        break;
+                    }
+                }
+                for (int k = 0; kMountSyms[k]; ++k)
+                {
+                    void *s = nullptr;
+                    if (sceKernelDlsym(mod_handle, kMountSyms[k], &s) == 0 && s)
+                    {
+                        found_m = reinterpret_cast<int (*)(SaveMountOpt *, const char *, const char *, const void *)>(s);
+                        break;
+                    }
+                }
+                for (int k = 0; kInitUmountSyms[k]; ++k)
+                {
+                    void *s = nullptr;
+                    if (sceKernelDlsym(mod_handle, kInitUmountSyms[k], &s) == 0 && s)
+                    {
+                        found_init_u = reinterpret_cast<int (*)(SaveMountOpt *)>(s);
+                        break;
+                    }
+                }
+                for (int k = 0; kUmountSyms[k]; ++k)
+                {
+                    void *s = nullptr;
+                    if (sceKernelDlsym(mod_handle, kUmountSyms[k], &s) == 0 && s)
+                    {
+                        found_u = reinterpret_cast<int (*)(SaveMountOpt *, const char *, void *, int)>(s);
+                        break;
+                    }
+                }
+
+                if (found_m && found_u)
+                {
+                    s_init_mount = found_init_m;
+                    s_mount_fn = found_m;
+                    s_init_umount = found_init_u;
+                    s_umount_fn = found_u;
+                    s_already_resolved = true;
+                    if (out_init_mount) *out_init_mount = s_init_mount;
+                    if (out_mount) *out_mount = s_mount_fn;
+                    if (out_init_umount) *out_init_umount = s_init_umount;
+                    if (out_umount) *out_umount = s_umount_fn;
+                    MACHETE_LOG("[PFS]", "Resolved PFS mount symbols via sceKernelLoadStartModule: %s", cand);
+                    return true;
+                }
+            }
+        }
+#endif
+
         const char *err = dlerror();
         MACHETE_LOG("[PFS]", "libSceFsInternalForVsh.sprx symbols unavailable (%s)",
                     err ? err : "no matching module");

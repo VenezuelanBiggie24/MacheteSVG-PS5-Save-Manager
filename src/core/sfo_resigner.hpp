@@ -25,6 +25,14 @@ inline const std::uint8_t PSID_HMAC_KEY[16] = {
     0x13, 0xD1, 0xDF, 0x06, 0x75, 0xC9, 0xFD, 0x95,
     0x0A, 0x17, 0xE5, 0x64, 0xC2, 0x77, 0x7F, 0x2C};
 
+// Formula estandar de Apollo Save Tool para derivar un Account ID sintetico en cuentas offline no activadas
+inline std::uint64_t get_apollo_synthetic_account_id(std::uint32_t user_id) noexcept
+{
+    // Prefijo little-endian correspondiente a la cadena ASCII 'apollo' + complemento a uno del User ID
+    const std::uint64_t syn = 0x6F6C6C6F70610000ULL | (static_cast<std::uint64_t>(~user_id & 0xFFFFULL));
+    return (syn != 0) ? syn : 0x0100000000000001ULL;
+}
+
 #pragma pack(push, 1)
 struct SfoHeader
 {
@@ -324,16 +332,38 @@ inline bool resign_param_sfo(const std::string &sfo_path, const ResignParams &pa
         {
             if (params.apply_account_id)
             {
-                std::memcpy(val_ptr, &params.target_account_id, 8);
+                std::uint64_t final_acc = params.target_account_id;
+                if (final_acc == 0)
+                {
+                    final_acc = get_apollo_synthetic_account_id(params.target_user_id);
+                }
+                std::memcpy(val_ptr, &final_acc, 8);
                 modified = true;
-                MACHETE_LOG("[SFO]", "Patched ACCOUNT_ID -> 0x%04llx...%04llx in %s",
-                            static_cast<unsigned long long>((params.target_account_id >> 48) & 0xffff),
-                            static_cast<unsigned long long>(params.target_account_id & 0xffff),
+                MACHETE_LOG("[SFO]", "Patched ACCOUNT_ID -> 0x%04llx...%04llx (Apollo standard) in %s",
+                            static_cast<unsigned long long>((final_acc >> 48) & 0xffff),
+                            static_cast<unsigned long long>(final_acc & 0xffff),
                             sfo_path.c_str());
             }
         }
 
-        // 2. Modificar PARAMS (user_id, psid_hmac, title_id_2) de forma segura
+        // 2. Modificar ATTRIBUTE: Desbloquear candado de proteccion contra copia (Copy-Protection Unlock estilo Apollo)
+        if (std::strcmp(key, "ATTRIBUTE") == 0 &&
+            entries[i].param_max_length >= 4 &&
+            remaining_data_space >= 4)
+        {
+            std::uint32_t attr = 0;
+            std::memcpy(&attr, val_ptr, 4);
+            if ((attr & 0x01) != 0)
+            {
+                attr &= ~0x01u; // Desactivar bit 0 (copy-prohibited) para permitir copiar y restaurar libremente
+                std::memcpy(val_ptr, &attr, 4);
+                modified = true;
+                MACHETE_LOG("[SFO]", "Unlocked copy-protection flag (ATTRIBUTE 0x%x -> 0x%x) in %s",
+                            attr | 0x01u, attr, sfo_path.c_str());
+            }
+        }
+
+        // 3. Modificar PARAMS (user_id, psid_hmac, title_id_2) de forma segura
         if (std::strcmp(key, "PARAMS") == 0 &&
             entries[i].param_max_length >= sizeof(SfoParamsField) &&
             remaining_data_space >= sizeof(SfoParamsField))
@@ -479,9 +509,11 @@ inline bool synthesize_ps4_save_param_sfo(const std::string &out_sfo_path,
     const std::string safe_main = main_title.empty() ? title_id : main_title;
     const std::string safe_sub = sub_title.empty() ? savedata_dir : sub_title;
 
+    const std::uint64_t final_acc = (account_id != 0) ? account_id : get_apollo_synthetic_account_id(user_id);
+
     // Las entradas de un archivo PSF/SFO DEBEN estar en estricto orden ASCII lexicografico por clave
     std::vector<RawEntry> entries;
-    entries.push_back(make_u64_bin("ACCOUNT_ID", account_id));
+    entries.push_back(make_u64_bin("ACCOUNT_ID", final_acc));
     entries.push_back(make_u32("ATTRIBUTE", 0));
     entries.push_back(make_utf8("CATEGORY", "sd", 4));
     entries.push_back(make_utf8("DETAIL", detail, 1024));

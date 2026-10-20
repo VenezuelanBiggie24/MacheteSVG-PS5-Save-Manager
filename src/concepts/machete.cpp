@@ -765,6 +765,55 @@ class Machete final : public app::Concept
         });
     }
 
+    void start_async_resign(const machete::scanner::ScannedGame &game)
+    {
+        if (op_thread_.joinable())
+            op_thread_.join();
+
+        is_operating_.store(true);
+        operation_progress_.store(0.0f);
+        operation_result_ready_.store(false);
+        op_type_ = OperationType::Restore;
+
+        shinchan_state_ = ShinchanState::Dancing;
+        shinchan_opacity_ = 1.0f;
+        shinchan_timer_ = 0.0f;
+
+        const bool is_es = (machete::i18n::current_language() == machete::i18n::Language::Spanish);
+        {
+            std::lock_guard<std::mutex> lock(op_mutex_);
+            operation_title_ = is_es ? ("Resignando " + (!game.title.empty() ? game.title : game.title_id))
+                                     : ("Resigning " + (!game.title.empty() ? game.title : game.title_id));
+            operation_detail_ = is_es ? "Alineando Keystone y resignando param.sfo (Modo Apollo)..."
+                                      : "Aligning Keystone & resigning param.sfo (Apollo Mode)...";
+            operation_result_ = {};
+        }
+
+        MACHETE_LOG("[OPERATION]", "Starting background Apollo Resign: %s (%s)",
+                    game.title_id.c_str(), game.save_path.c_str());
+
+        op_thread_.start([this, game]() {
+            MACHETE_BREADCRUMB("op_thread: resign_local_ps4_save");
+            const auto res = machete::save::resign_local_ps4_save(
+                game, [this](const machete::save::OperationProgress &p) {
+                    operation_progress_.store(p.progress);
+                    std::lock_guard<std::mutex> lock(op_mutex_);
+                    operation_detail_ = p.current_file;
+                });
+
+            {
+                std::lock_guard<std::mutex> lock(op_mutex_);
+                operation_result_ = res;
+            }
+            MACHETE_LOG("[OPERATION]", "Background Apollo Resign finished: success=%d, files=%d",
+                        res.success ? 1 : 0, res.files_transferred);
+            operation_progress_.store(1.0f);
+            operation_result_ready_.store(true);
+            is_operating_.store(false);
+            MACHETE_BREADCRUMB("op_thread: resign_local_ps4_save done");
+        });
+    }
+
     std::vector<int> get_filtered_game_indices() const
     {
         std::vector<int> indices;
@@ -1138,18 +1187,28 @@ class Machete final : public app::Concept
                 open_web_server_dialog(feedback);
             }
         }
-        // Atajo Square: Recargar lista de juegos y reintentar elevación si es necesario
+        // Atajo Square: Resignar partida de PS4 en caliente (Modo Apollo) o Recargar lista
         else if (input.is_pressed(Action::west))
         {
-            if (!root_active_.load())
-                start_async_jailbreak();
-            machete::storage::ensure_internal_storage();
-            active_devices_ = machete::storage::scan_storage_devices();
-            refresh_games();
-            std::snprintf(notification_text_, sizeof(notification_text_),
-                          machete::i18n::tr(machete::i18n::StringId::ToastScanUpdated), games_.size());
-            notification_timer_ = 3.0f;
-            feedback.play(audio::Cue::select, 1.0f, 0.0f);
+            const auto *game_ptr = current_selected_game();
+            const bool is_ps4_sel = game_ptr && (game_ptr->platform == "PS4" || game_ptr->title_id.rfind("CUSA", 0) == 0);
+            if (is_ps4_sel && !game_ptr->save_path.empty() && !is_operating_.load())
+            {
+                feedback.play(audio::Cue::select, 1.0f, 0.0f);
+                start_async_resign(*game_ptr);
+            }
+            else
+            {
+                if (!root_active_.load())
+                    start_async_jailbreak();
+                machete::storage::ensure_internal_storage();
+                active_devices_ = machete::storage::scan_storage_devices();
+                refresh_games();
+                std::snprintf(notification_text_, sizeof(notification_text_),
+                              machete::i18n::tr(machete::i18n::StringId::ToastScanUpdated), games_.size());
+                notification_timer_ = 3.0f;
+                feedback.play(audio::Cue::select, 1.0f, 0.0f);
+            }
         }
         // Atajo L3: Alternar Idioma (Inglés / Español)
         else if (input.is_pressed(Action::l3))
@@ -2681,6 +2740,12 @@ class Machete final : public app::Concept
         // ==========================================
         // 6. TECLAS Y CONTROLES DUALSENSE Y PIE DE PAGINA
         // ==========================================
+        const auto *cur_g = current_selected_game();
+        const bool is_ps4_active = cur_g && (cur_g->platform == "PS4" || cur_g->title_id.rfind("CUSA", 0) == 0);
+        const char *square_label = (is_ps4_active && !cur_g->save_path.empty())
+                                       ? (is_es ? "Resignar (Apollo)" : "Resign (Apollo)")
+                                       : machete::i18n::tr(machete::i18n::StringId::HintRefresh);
+
         const ui::GlyphStyle glyphs = theme.dark ? ui::GlyphStyle::dark() : ui::GlyphStyle::light();
         const ui::Hint hints[] = {
             {ui::Button::l1, is_es ? "Pestañas" : "Tabs", ui::Button::r1},
@@ -2689,7 +2754,7 @@ class Machete final : public app::Concept
             {ui::Button::cross, machete::i18n::tr(machete::i18n::StringId::LegendSelect)},
             {ui::Button::circle, machete::i18n::tr(machete::i18n::StringId::LegendBack)},
             {ui::Button::triangle, machete::i18n::tr(machete::i18n::StringId::LegendWebServer)},
-            {ui::Button::square, machete::i18n::tr(machete::i18n::StringId::HintRefresh)},
+            {ui::Button::square, square_label},
             {ui::Button::left_stick, machete::i18n::tr(machete::i18n::StringId::HintLanguage)},
         };
         ui::HintLayout layout;

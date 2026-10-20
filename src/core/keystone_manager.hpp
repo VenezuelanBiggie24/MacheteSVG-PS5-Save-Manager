@@ -196,91 +196,7 @@ inline std::string find_authentic_game_keystone(const std::string &title_id,
                                                 const std::string &dst_target = "",
                                                 const std::string &app_path = "")
 {
-    // 1. Priorizar el keystone del destino de guardado si existe (por ejemplo el generado por un Save Dummy)
-    if (!dst_target.empty())
-    {
-        for (const std::string &dp : {
-                 dst_target + "/keystone",
-                 dst_target + "/sce_sys/keystone"})
-        {
-            if (access(dp.c_str(), R_OK) == 0 && is_valid_keystone_file(dp))
-            {
-                (void)mkdir("/data/MacheteSVG", 0777);
-                (void)mkdir("/data/MacheteSVG/keystones", 0777);
-                const std::string out_ks = "/data/MacheteSVG/keystones/" + title_id + ".keystone";
-                if (dp != out_ks)
-                {
-                    std::uint8_t buf[KEYSTONE_SIZE] = {0};
-                    std::FILE *fin = std::fopen(dp.c_str(), "rb");
-                    if (fin)
-                    {
-                        if (std::fread(buf, 1, KEYSTONE_SIZE, fin) == KEYSTONE_SIZE)
-                        {
-                            std::FILE *fout = std::fopen(out_ks.c_str(), "wb");
-                            if (fout)
-                            {
-                                std::fwrite(buf, 1, KEYSTONE_SIZE, fout);
-                                std::fclose(fout);
-                                (void)chmod(out_ks.c_str(), 0666);
-                            }
-                        }
-                        std::fclose(fin);
-                    }
-                }
-                MACHETE_LOG("[KEYSTONE]", "Using authentic keystone from destination save dir: %s", dp.c_str());
-                return dp;
-            }
-        }
-    }
-
-    // 2. Comprobar en rutas directas del sistema y de la aplicacion instalada
-    const std::vector<std::string> candidates = {
-        "/system_ex/app/" + title_id + "/sce_sys/keystone",
-        "/system_ex/app/" + title_id + "/app0/sce_sys/keystone",
-        "/system_ex/app/" + title_id + "/keystone",
-        "/user/app/" + title_id + "/sce_sys/keystone",
-        "/user/app/" + title_id + "/app0/sce_sys/keystone",
-        "/user/app/" + title_id + "/keystone",
-        "/mnt/sandbox/pfsmnt/" + title_id + "-app0/sce_sys/keystone",
-        "/mnt/sandbox/" + title_id + "_000/app0/sce_sys/keystone",
-        "/mnt/ext0/user/app/" + title_id + "/sce_sys/keystone",
-        "/mnt/ext0/user/app/" + title_id + "/app0/sce_sys/keystone",
-        "/mnt/ext0/user/app/" + title_id + "/keystone",
-        "/mnt/ext1/user/app/" + title_id + "/sce_sys/keystone",
-        "/mnt/ext1/user/app/" + title_id + "/app0/sce_sys/keystone",
-        "/mnt/ext1/user/app/" + title_id + "/keystone",
-        "/system_data/priv/appmeta/" + title_id + "/sce_sys/keystone",
-        "/system_data/priv/appmeta/" + title_id + "/keystone",
-        "/system_data/appmeta/" + title_id + "/keystone",
-        "/user/appmeta/" + title_id + "/sce_sys/keystone",
-        "/user/appmeta/" + title_id + "/keystone",
-        "/user/appmeta/external/" + title_id + "/sce_sys/keystone",
-        "/user/appmeta/external/" + title_id + "/keystone",
-        "/mnt/ext0/user/appmeta/" + title_id + "/sce_sys/keystone",
-        "/mnt/ext1/user/appmeta/" + title_id + "/sce_sys/keystone",
-        "/data/apollo/" + title_id + ".keystone",
-        "/data/apollo/keystones/" + title_id + ".keystone",
-        "/data/MacheteSVG/keystones/" + title_id + ".keystone",
-        "/data/save_staging/preserved_dummy_" + title_id + "/keystone",
-        "/data/save_staging/preserved_dummy_" + title_id + "/harvested_keystone",
-        "/data/save_staging/preserved_dummy_" + title_id + "/.meta_dummy/keystone",
-        "/data/save_staging/preserved_dummy_" + title_id + "/.meta_dummy/sce_sys/keystone",
-        "/data/save_staging/preserved_dummy_" + title_id + "/sce_sys/keystone",
-        "/data/pkg/" + title_id + "/sce_sys/keystone",
-        "/data/homebrew/" + title_id + "/sce_sys/keystone",
-        "/data/homebrew/" + title_id + "/app0/sce_sys/keystone",
-        "/data/homebrew/" + title_id + "/keystone"};
-
-    for (const auto &p : candidates)
-    {
-        if (access(p.c_str(), R_OK) == 0 && is_valid_keystone_file(p))
-        {
-            MACHETE_LOG("[KEYSTONE]", "Authentic keystone located at: %s", p.c_str());
-            return p;
-        }
-    }
-
-    // 3. Comprobar en app_path especifico del juego si fue proporcionado
+    // 1. Priorizar el keystone de la aplicacion instalada especificada en app_path
     if (!app_path.empty())
     {
         for (const std::string &ap : {
@@ -313,7 +229,137 @@ inline std::string find_authentic_game_keystone(const std::string &title_id,
         }
     }
 
-    // 4. Buscar en la carpeta de respaldo proporcionada
+    // 2. Comprobar en rutas directas del sistema y de la aplicacion instalada
+    const std::vector<std::string> candidates = {
+        "/system_ex/app/" + title_id + "/sce_sys/keystone",
+        "/system_ex/app/" + title_id + "/app0/sce_sys/keystone",
+        "/system_ex/app/" + title_id + "/keystone",
+        "/user/app/" + title_id + "/sce_sys/keystone",
+        "/user/app/" + title_id + "/app0/sce_sys/keystone",
+        "/user/app/" + title_id + "/keystone",
+        "/mnt/sandbox/pfsmnt/" + title_id + "-app0/sce_sys/keystone",
+        "/mnt/sandbox/" + title_id + "_000/app0/sce_sys/keystone",
+        "/mnt/ext0/user/app/" + title_id + "/sce_sys/keystone",
+        "/mnt/ext0/user/app/" + title_id + "/app0/sce_sys/keystone",
+        "/mnt/ext0/user/app/" + title_id + "/keystone",
+        "/mnt/ext1/user/app/" + title_id + "/sce_sys/keystone",
+        "/mnt/ext1/user/app/" + title_id + "/app0/sce_sys/keystone",
+        "/mnt/ext1/user/app/" + title_id + "/keystone",
+        "/system_data/priv/appmeta/" + title_id + "/sce_sys/keystone",
+        "/system_data/priv/appmeta/" + title_id + "/keystone",
+        "/system_data/appmeta/" + title_id + "/keystone",
+        "/user/appmeta/" + title_id + "/sce_sys/keystone",
+        "/user/appmeta/" + title_id + "/keystone",
+        "/user/appmeta/external/" + title_id + "/sce_sys/keystone",
+        "/user/appmeta/external/" + title_id + "/keystone",
+        "/mnt/ext0/user/appmeta/" + title_id + "/sce_sys/keystone",
+        "/mnt/ext1/user/appmeta/" + title_id + "/sce_sys/keystone",
+        "/data/save_staging/preserved_dummy_" + title_id + "/keystone",
+        "/data/save_staging/preserved_dummy_" + title_id + "/harvested_keystone",
+        "/data/save_staging/preserved_dummy_" + title_id + "/.meta_dummy/keystone",
+        "/data/save_staging/preserved_dummy_" + title_id + "/.meta_dummy/sce_sys/keystone",
+        "/data/save_staging/preserved_dummy_" + title_id + "/sce_sys/keystone",
+        "/data/pkg/" + title_id + "/sce_sys/keystone",
+        "/data/homebrew/" + title_id + "/sce_sys/keystone",
+        "/data/homebrew/" + title_id + "/app0/sce_sys/keystone",
+        "/data/homebrew/" + title_id + "/keystone"};
+
+    for (const auto &p : candidates)
+    {
+        if (access(p.c_str(), R_OK) == 0 && is_valid_keystone_file(p))
+        {
+            MACHETE_LOG("[KEYSTONE]", "Authentic keystone located at: %s", p.c_str());
+            return p;
+        }
+    }
+
+    // 3. Extraer directamente desde el paquete app.pkg instalado si existe
+    for (const std::string &pkg_cand : {
+             "/user/app/" + title_id + "/app.pkg",
+             "/mnt/ext0/user/app/" + title_id + "/app.pkg",
+             "/mnt/ext1/user/app/" + title_id + "/app.pkg",
+             "/system_ex/app/" + title_id + "/app.pkg",
+             "/data/pkg/" + title_id + ".pkg",
+             "/data/pkg/" + title_id + "/app.pkg",
+             "/data/homebrew/" + title_id + "/app.pkg"})
+    {
+        std::uint8_t extracted[KEYSTONE_SIZE] = {0};
+        if (extract_keystone_from_pkg(pkg_cand, extracted))
+        {
+            (void)mkdir("/data/MacheteSVG", 0777);
+            (void)mkdir("/data/MacheteSVG/keystones", 0777);
+            const std::string out_ks = "/data/MacheteSVG/keystones/" + title_id + ".keystone";
+            std::FILE *fout = std::fopen(out_ks.c_str(), "wb");
+            if (fout)
+            {
+                std::fwrite(extracted, 1, KEYSTONE_SIZE, fout);
+                std::fclose(fout);
+                (void)chmod(out_ks.c_str(), 0666);
+                MACHETE_LOG("[KEYSTONE]", "Extracted authentic keystone from PKG %s -> %s",
+                            pkg_cand.c_str(), out_ks.c_str());
+                return out_ks;
+            }
+        }
+    }
+
+    // 4. Escaneo dinamico de cualquier archivo .pkg en los directorios de la aplicacion
+    for (const std::string &adir : std::vector<std::string>{
+             "/user/app/" + title_id,
+             "/mnt/ext0/user/app/" + title_id,
+             "/mnt/ext1/user/app/" + title_id,
+             "/system_ex/app/" + title_id,
+             "/data/pkg/" + title_id,
+             "/data/pkg",
+             "/data/homebrew/" + title_id})
+    {
+        std::uint8_t extracted[KEYSTONE_SIZE] = {0};
+        if (scan_dir_for_pkg_keystone(adir, extracted))
+        {
+            (void)mkdir("/data/MacheteSVG", 0777);
+            (void)mkdir("/data/MacheteSVG/keystones", 0777);
+            const std::string out_ks = "/data/MacheteSVG/keystones/" + title_id + ".keystone";
+            std::FILE *fout = std::fopen(out_ks.c_str(), "wb");
+            if (fout)
+            {
+                std::fwrite(extracted, 1, KEYSTONE_SIZE, fout);
+                std::fclose(fout);
+                (void)chmod(out_ks.c_str(), 0666);
+                MACHETE_LOG("[KEYSTONE]", "Extracted authentic keystone from scanned PKG in %s -> %s",
+                            adir.c_str(), out_ks.c_str());
+                return out_ks;
+            }
+        }
+    }
+
+    // 5. Comprobar en el directorio de guardado de destino si ya contenia un keystone valido previo
+    if (!dst_target.empty())
+    {
+        for (const std::string &dp : {
+                 dst_target + "/keystone",
+                 dst_target + "/sce_sys/keystone"})
+        {
+            if (access(dp.c_str(), R_OK) == 0 && is_valid_keystone_file(dp))
+            {
+                MACHETE_LOG("[KEYSTONE]", "Using authentic keystone from destination save dir: %s", dp.c_str());
+                return dp;
+            }
+        }
+    }
+
+    // 6. Boveda permanente de keystones guardados previamente (/data/MacheteSVG/keystones, /data/apollo)
+    for (const std::string &vp : {
+             "/data/MacheteSVG/keystones/" + title_id + ".keystone",
+             "/data/apollo/keystones/" + title_id + ".keystone",
+             "/data/apollo/" + title_id + ".keystone"})
+    {
+        if (access(vp.c_str(), R_OK) == 0 && is_valid_keystone_file(vp))
+        {
+            MACHETE_LOG("[KEYSTONE]", "Using cached keystone from vault: %s", vp.c_str());
+            return vp;
+        }
+    }
+
+    // 7. Buscar en la carpeta de respaldo proporcionada
     if (!backup_folder.empty())
     {
         for (const std::string &bp : {
@@ -334,7 +380,7 @@ inline std::string find_authentic_game_keystone(const std::string &title_id,
         }
     }
 
-    // 5. Buscar en dispositivos USB conectados (/mnt/usb0..7)
+    // 8. Buscar en dispositivos USB conectados (/mnt/usb0..7)
     for (int u = 0; u <= 7; ++u)
     {
         const std::string usb_base = "/mnt/usb" + std::to_string(u);
@@ -553,6 +599,28 @@ inline bool inject_fallback_fpkg_keystone(const std::string &save_dir, const std
     }
 
     return written;
+}
+
+// Alinea e inyecta el mejor Keystone para una partida de PS4 (Motor Apollo completo):
+// 1. Prioriza el Keystone AUTENTICO del juego instalado en la consola (app/appmeta/Save Dummy)
+// 2. Si no esta accesible, utiliza el Keystone preservado del respaldo
+// 3. Si ninguno existe, inyecta el Keystone universal FPKG de Apollo
+inline bool ensure_ps4_keystone_aligned(const std::string &save_dir,
+                                        const std::string &title_id,
+                                        const std::string &backup_folder = "",
+                                        const std::string &app_path = "")
+{
+    if (save_dir.empty() || title_id.empty())
+        return false;
+
+    // 1. Intentar inyectar keystone autentico de la aplicacion instalada
+    if (inject_authentic_keystone(save_dir, title_id, backup_folder, app_path))
+    {
+        return true;
+    }
+
+    // 2. Si no se localizo keystone autentico, inyectar el universal FPKG estilo Apollo
+    return inject_fallback_fpkg_keystone(save_dir, title_id);
 }
 
 } // namespace machete::keystone

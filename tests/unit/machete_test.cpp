@@ -1400,4 +1400,207 @@ TEST(MachetePfsTest, PfsMountSymbolsResolutionSafety)
     EXPECT_EQ(u_fn, nullptr);
 }
 
+TEST(MacheteApolloResignTest, ResignParamSfoUnlocksCopyProtectionAndSetsApolloAccountId)
+{
+    const std::string test_dir = "/tmp/machete_apollo_sfo_test";
+    (void)mkdir(test_dir.c_str(), 0777);
+    const std::string sfo_path = test_dir + "/param.sfo";
+
+    // 1. Sintetizar un descriptor de guardado PS4 simulado con cuenta 0 y proteccion contra copia
+    ASSERT_TRUE(machete::sfo::synthesize_ps4_save_param_sfo(
+        sfo_path, "CUSA03173", "savedata0", "Bloodborne", "Hunter Save", "Level 120",
+        0x10000000, 0, 1024, 999));
+
+    // Forzar el atributo de proteccion contra copia (ATTRIBUTE = 1)
+    {
+        std::FILE *f = std::fopen(sfo_path.c_str(), "r+b");
+        ASSERT_NE(f, nullptr);
+        std::vector<std::uint8_t> buf(4096, 0);
+        const std::size_t n = std::fread(buf.data(), 1, buf.size(), f);
+        // Localizar "ATTRIBUTE" en tabla de claves y fijar valor en 1
+        for (std::size_t i = 0; i + 4 <= n; ++i)
+        {
+            if (std::memcmp(buf.data() + i, "\x04\x04", 2) == 0) // format uint32
+            {
+                // Sobrescribir dato con 1 (candado activo)
+                buf[n - 4] = 0x01;
+                break;
+            }
+        }
+        std::fseek(f, 0, SEEK_SET);
+        std::fwrite(buf.data(), 1, n, f);
+        std::fclose(f);
+    }
+
+    // 2. Ejecutar resignado estilo Apollo con cuenta offline (target_account_id = 0)
+    std::uint8_t test_psid[16] = {
+        0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08,
+        0x09, 0x0A, 0x0B, 0x0C, 0x0D, 0x0E, 0x0F, 0x10};
+    machete::sfo::ResignParams rp;
+    rp.target_user_id = 0x105f615a;
+    rp.target_account_id = 0; // Cuenta offline
+    rp.apply_account_id = true;
+    rp.psid = test_psid;
+
+    EXPECT_TRUE(machete::sfo::resign_param_sfo(sfo_path, rp));
+
+    // 3. Validar metadatos resignados
+    machete::sfo::SfoSaveMetadata meta = machete::sfo::read_sfo_metadata(sfo_path);
+    EXPECT_TRUE(meta.valid);
+    EXPECT_TRUE(meta.has_account_id);
+    const std::uint64_t expected_apollo_acc = machete::sfo::get_apollo_synthetic_account_id(0x105f615a);
+    EXPECT_EQ(meta.account_id, expected_apollo_acc);
+    EXPECT_NE(meta.account_id, 0ULL);
+    EXPECT_EQ(meta.user_id, 0x105f615au);
+    EXPECT_TRUE(meta.has_psid_hmac);
+
+    // Limpieza
+    (void)std::remove(sfo_path.c_str());
+    (void)rmdir(test_dir.c_str());
+}
+
+TEST(MacheteApolloResignTest, ResignLocalPs4SaveOperation)
+{
+    const std::string test_root = "/tmp/machete_local_resign_test";
+    const std::string save_dir = test_root + "/user/home/105f615a/savedata/CUSA03173";
+    (void)mkdir(test_root.c_str(), 0777);
+    (void)mkdir((test_root + "/user").c_str(), 0777);
+    (void)mkdir((test_root + "/user/home").c_str(), 0777);
+    (void)mkdir((test_root + "/user/home/105f615a").c_str(), 0777);
+    (void)mkdir((test_root + "/user/home/105f615a/savedata").c_str(), 0777);
+    (void)mkdir(save_dir.c_str(), 0777);
+    (void)mkdir((save_dir + "/sce_sys").c_str(), 0777);
+
+    // Crear archivos simulados de guardado de Bloodborne
+    {
+        std::FILE *f = std::fopen((save_dir + "/savedata0").c_str(), "wb");
+        ASSERT_NE(f, nullptr);
+        std::fputs("BLOODBORNE_SAVE_PFS_DATA", f);
+        std::fclose(f);
+    }
+    {
+        std::FILE *f = std::fopen((save_dir + "/savedata0.bin").c_str(), "wb");
+        ASSERT_NE(f, nullptr);
+        std::fputs("BLOODBORNE_SEALED_KEY_96_BYTES", f);
+        std::fclose(f);
+    }
+    {
+        std::FILE *f = std::fopen((save_dir + "/keystone").c_str(), "wb");
+        ASSERT_NE(f, nullptr);
+        std::vector<std::uint8_t> ks(96, 0x33);
+        std::fwrite(ks.data(), 1, 96, f);
+        std::fclose(f);
+    }
+    ASSERT_TRUE(machete::sfo::synthesize_ps4_save_param_sfo(
+        save_dir + "/sce_sys/param.sfo", "CUSA03173", "savedata0",
+        "Bloodborne", "Hunter", "Detail", 0x10000000, 0x1234ULL, 512, 123));
+
+    machete::scanner::ScannedGame game;
+    game.title = "Bloodborne";
+    game.title_id = "CUSA03173";
+    game.platform = "PS4";
+    game.save_path = save_dir;
+
+    auto res = machete::save::resign_local_ps4_save(game);
+    EXPECT_TRUE(res.success);
+    EXPECT_NE(res.message.find("Apollo"), std::string::npos);
+
+    // Comprobar que el Keystone existe en ambas ubicaciones
+    struct stat st1{}, st2{};
+    EXPECT_EQ(stat((save_dir + "/keystone").c_str(), &st1), 0);
+    EXPECT_EQ(stat((save_dir + "/sce_sys/keystone").c_str(), &st2), 0);
+
+    // Comprobar que param.sfo fue resignado para 0x105f615a
+    machete::sfo::SfoSaveMetadata meta = machete::sfo::read_sfo_metadata(save_dir + "/sce_sys/param.sfo");
+    EXPECT_TRUE(meta.valid);
+    EXPECT_EQ(meta.user_id, 0x105f615au);
+
+    // Limpieza
+    (void)std::remove((save_dir + "/savedata0").c_str());
+    (void)std::remove((save_dir + "/savedata0.bin").c_str());
+    (void)std::remove((save_dir + "/keystone").c_str());
+    (void)std::remove((save_dir + "/sce_sys/keystone").c_str());
+    (void)std::remove((save_dir + "/sce_sys/param.sfo").c_str());
+    (void)rmdir((save_dir + "/sce_sys").c_str());
+    (void)rmdir(save_dir.c_str());
+}
+
+TEST(MacheteKeystonePriorityTest, InstalledGameKeystoneOverridesForeignBackupKeystone)
+{
+    const std::string test_root = "/tmp/machete_ks_priority_test";
+    const std::string dst_save = test_root + "/dst_save";
+    const std::string backup_dir = test_root + "/foreign_backup";
+    const std::string app_dir = test_root + "/app_installed";
+
+    (void)mkdir(test_root.c_str(), 0777);
+    (void)mkdir(dst_save.c_str(), 0777);
+    (void)mkdir(backup_dir.c_str(), 0777);
+    (void)mkdir(app_dir.c_str(), 0777);
+    (void)mkdir((app_dir + "/sce_sys").c_str(), 0777);
+
+    // 1. Keystone autentico del juego instalado en la consola (96 bytes con 0xAA)
+    const std::string app_ks = app_dir + "/sce_sys/keystone";
+    {
+        std::FILE *f = std::fopen(app_ks.c_str(), "wb");
+        ASSERT_NE(f, nullptr);
+        std::vector<std::uint8_t> ks(96, 0xAA);
+        std::fwrite(ks.data(), 1, 96, f);
+        std::fclose(f);
+    }
+
+    // 2. Keystone foraneo proveniente de un respaldo de otra consola (96 bytes con 0x55)
+    const std::string backup_ks = backup_dir + "/keystone";
+    {
+        std::FILE *f = std::fopen(backup_ks.c_str(), "wb");
+        ASSERT_NE(f, nullptr);
+        std::vector<std::uint8_t> ks(96, 0x55);
+        std::fwrite(ks.data(), 1, 96, f);
+        std::fclose(f);
+    }
+    {
+        std::FILE *f = std::fopen((backup_dir + "/savedata0.bin").c_str(), "wb");
+        ASSERT_NE(f, nullptr);
+        std::fputs("PAYLOAD", f);
+        std::fclose(f);
+    }
+
+    machete::scanner::ScannedGame game;
+    game.title = "Test Game Priority";
+    game.title_id = "CUSA99999";
+    game.platform = "PS4";
+    game.save_path = dst_save;
+    game.app_path = app_dir;
+
+    machete::save::BackupItem item;
+    item.title_id = "CUSA99999";
+    item.folder_path = backup_dir;
+
+    auto res = machete::save::restore_backup_item(game, item);
+    EXPECT_TRUE(res.success);
+
+    // 3. Verificar que el keystone restaurado es el AUTENTICO de la aplicacion (0xAA), NO el foraneo del backup (0x55)
+    std::FILE *fr = std::fopen((dst_save + "/keystone").c_str(), "rb");
+    ASSERT_NE(fr, nullptr);
+    std::vector<std::uint8_t> read_buf(96, 0);
+    EXPECT_EQ(std::fread(read_buf.data(), 1, 96, fr), 96u);
+    std::fclose(fr);
+
+    EXPECT_EQ(read_buf[0], 0xAA);
+    EXPECT_EQ(read_buf[95], 0xAA);
+
+    // Limpieza
+    (void)std::remove((dst_save + "/savedata0.bin").c_str());
+    (void)std::remove((dst_save + "/keystone").c_str());
+    (void)std::remove((dst_save + "/sce_sys/keystone").c_str());
+    (void)rmdir((dst_save + "/sce_sys").c_str());
+    (void)rmdir(dst_save.c_str());
+    (void)std::remove((backup_dir + "/savedata0.bin").c_str());
+    (void)std::remove((backup_dir + "/keystone").c_str());
+    (void)rmdir(backup_dir.c_str());
+    (void)std::remove(app_ks.c_str());
+    (void)rmdir((app_dir + "/sce_sys").c_str());
+    (void)rmdir(app_dir.c_str());
+    (void)rmdir(test_root.c_str());
+}
+
 } // namespace hui::testing

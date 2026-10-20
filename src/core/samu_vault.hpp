@@ -11,6 +11,7 @@
 #include <cstdio>
 #include <cstring>
 #include <dirent.h>
+#include <dlfcn.h>
 #include <fcntl.h>
 #include <string>
 #include <sys/ioctl.h>
@@ -182,6 +183,36 @@ inline bool get_console_open_psid(std::uint8_t out_psid[16])
         return true;
     }
 
+#if defined(RTLD_DEFAULT)
+    // 1. Invocar la syscall oficial del kernel si el simbolo esta disponible en libkernel
+    using GetPsIdFn = int (*)(void *);
+    GetPsIdFn psid_fn = reinterpret_cast<GetPsIdFn>(dlsym(RTLD_DEFAULT, "sceKernelGetOpenPsIdForSystem"));
+    if (!psid_fn)
+        psid_fn = reinterpret_cast<GetPsIdFn>(dlsym(RTLD_DEFAULT, "sceKernelGetOpenPsId"));
+    if (psid_fn)
+    {
+        std::uint8_t sys_psid[16] = {0};
+        if (psid_fn(sys_psid) == 0)
+        {
+            bool non_zero = false;
+            for (int i = 0; i < 16; ++i)
+            {
+                if (sys_psid[i] != 0) { non_zero = true; break; }
+            }
+            if (non_zero)
+            {
+                std::memcpy(s_psid, sys_psid, 16);
+                std::memcpy(out_psid, sys_psid, 16);
+                s_cached = true;
+                MACHETE_LOG("[VAULT]", "Console OpenPSID retrieved via libkernel syscall: %02x%02x...%02x%02x (16 bytes)",
+                            out_psid[0], out_psid[1], out_psid[14], out_psid[15]);
+                return true;
+            }
+        }
+    }
+#endif
+
+    // 2. Probar en las rutas de cache del sistema
     for (const char *psid_path : {
              "/system_data/priv/cache/openpsid.dat",
              "/system_data/priv/home/openpsid.dat",
