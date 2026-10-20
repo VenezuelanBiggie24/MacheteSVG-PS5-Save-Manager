@@ -14,11 +14,11 @@ namespace machete::build
 #endif
 
 #ifndef MACHETE_BUILD_NUMBER
-#define MACHETE_BUILD_NUMBER "70"
+#define MACHETE_BUILD_NUMBER "71"
 #endif
 
 #ifndef MACHETE_GIT_COMMIT
-#define MACHETE_GIT_COMMIT "75bd144"
+#define MACHETE_GIT_COMMIT "68fd7b4"
 #endif
 
 #ifndef MACHETE_BUILD_DATE
