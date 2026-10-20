@@ -46,6 +46,10 @@ public:
     // Updates the game library list served by the Web API
     void update_games(const std::vector<scanner::ScannedGame> &games);
 
+    // Enables or disables the OTA Web Updater module (for staging or production deployment)
+    void set_update_module_enabled(bool enabled) noexcept { update_module_enabled_.store(enabled); }
+    bool is_update_module_enabled() const noexcept { return update_module_enabled_.load(); }
+
     // Retrieves current scanned games (thread-safe copy)
     std::vector<scanner::ScannedGame> get_games() const;
 
@@ -75,6 +79,7 @@ private:
 
     std::atomic<bool> running_{false};
     std::atomic<bool> stop_requested_{false};
+    std::atomic<bool> update_module_enabled_{true};
     std::uint16_t port_{kDefaultPort};
     int server_sock_{-1};
     pthread_t thread_{0};

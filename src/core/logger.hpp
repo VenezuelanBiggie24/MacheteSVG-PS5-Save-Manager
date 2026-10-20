@@ -28,6 +28,9 @@ void vwrite(const char *tag, const char *fmt, va_list args);
 // Reabre rutas en disco tras adquirir privilegios root fuera del sandbox
 void reopen_paths();
 
+// Reinicia y trunca los archivos de registro para iniciar una sesion limpia tras una actualizacion
+void reset_fresh();
+
 // Vuelca y sincroniza físicamente todos los descriptores de archivo en disco
 void flush();
 

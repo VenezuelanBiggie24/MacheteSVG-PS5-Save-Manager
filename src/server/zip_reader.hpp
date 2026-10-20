@@ -29,7 +29,9 @@ struct ZipExtractResult
 {
     bool success = false;
     std::size_t files_extracted = 0;
+    std::size_t files_cleaned = 0;
     std::size_t directories_created = 0;
+    std::size_t directories_cleaned = 0;
     std::uint64_t total_bytes_extracted = 0;
     std::string error_message;
 };
@@ -78,7 +80,8 @@ public:
 
     // Extracts all files into target_directory, replacing existing files and applying chmod 0777
     // If strip_root_folder is true, strips leading common directory (e.g. "PPSA99001/")
-    ZipExtractResult extract_all(const std::string &target_directory, bool strip_root_folder = true);
+    // If clean_install is true, removes any old obsolete files in target_directory not present in the new ZIP
+    ZipExtractResult extract_all(const std::string &target_directory, bool strip_root_folder = true, bool clean_install = true);
 
 private:
     int fd_ = -1;
@@ -96,5 +99,10 @@ bool make_directory_recursive(const std::string &path);
 
 // Helper to determine common top directory among entries (e.g. "PPSA99001/")
 std::string detect_common_root_folder(const std::vector<ZipReaderEntry> &entries);
+
+// Helper to recursively remove obsolete files in target_dir that are not in valid_relative_files
+std::size_t cleanup_obsolete_files(const std::string &target_directory,
+                                   const std::vector<std::string> &valid_relative_files,
+                                   std::size_t &out_directories_cleaned);
 
 } // namespace machete::server

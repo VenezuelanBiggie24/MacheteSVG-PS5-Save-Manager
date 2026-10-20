@@ -257,6 +257,51 @@ void reopen_paths()
           ::machete::build::kAppVersion, ::machete::build::kBuildNumber, ::machete::build::kGitCommit);
 }
 
+void reset_fresh()
+{
+    std::lock_guard<std::recursive_mutex> lock(s_log_mutex);
+    if (s_fd_primary >= 0)
+    {
+        ::close(s_fd_primary);
+        s_fd_primary = -1;
+    }
+    if (s_fd_data >= 0)
+    {
+        ::close(s_fd_data);
+        s_fd_data = -1;
+    }
+    if (s_fd_userapp >= 0)
+    {
+        ::close(s_fd_userapp);
+        s_fd_userapp = -1;
+    }
+
+    // Truncar archivos en disco
+    unlink(kPrimaryLogPath);
+    unlink(kDataLogPath);
+    unlink(kUserAppLogPath);
+
+    try_open_fd(s_fd_primary, kPrimaryLogPath);
+    try_open_fd(s_fd_data,    kDataLogPath);
+    try_open_fd(s_fd_userapp, kUserAppLogPath);
+
+    char time_str[64];
+    std::time_t now = std::time(nullptr);
+    std::tm *tm_info = std::localtime(&now);
+    if (tm_info)
+        std::strftime(time_str, sizeof(time_str), "%Y-%m-%d %H:%M:%S", tm_info);
+    else
+        std::snprintf(time_str, sizeof(time_str), "unknown");
+
+    write("[SYSTEM]", "====================================================");
+    write("[SYSTEM]", "MacheteSVG - Registro Limpio de Sesion (Post-Actualizacion OTA)");
+    write("[SYSTEM]", "Version: %s | Build: #%s | Commit: %s",
+          ::machete::build::kAppVersion, ::machete::build::kBuildNumber, ::machete::build::kGitCommit);
+    write("[SYSTEM]", "Fecha y Hora: %s", time_str);
+    write("[SYSTEM]", "Historial previo depurado. Sesion fresca iniciada correctamente.");
+    write("[SYSTEM]", "====================================================");
+}
+
 void vwrite(const char *tag, const char *fmt, va_list args)
 {
     char body[1024];

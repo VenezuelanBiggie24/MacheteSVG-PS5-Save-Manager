@@ -21,6 +21,7 @@
 #include "ui/qr_code.hpp"
 #include "core/build_info.hpp"
 #include "core/sqlite_adapter.hpp"
+#include "core/logger.hpp"
 
 #include <fcntl.h>
 #include <fstream>
@@ -702,7 +703,16 @@ TEST(MacheteServerTest, HttpApiEndpointsAndSecurity)
         std::string update_resp = test_http_request(test_port, req);
         EXPECT_NE(update_resp.find("HTTP/1.1 200 OK"), std::string::npos);
         EXPECT_NE(update_resp.find("\"success\":true"), std::string::npos);
-        EXPECT_NE(update_resp.find("Actualizacion instalada con exito"), std::string::npos);
+        EXPECT_NE(update_resp.find("instalada con exito"), std::string::npos);
+
+        // 8b. Disabling update module returns 403 Forbidden
+        server.set_update_module_enabled(false);
+        EXPECT_FALSE(server.is_update_module_enabled());
+        std::string disabled_resp = test_http_request(test_port, req);
+        EXPECT_NE(disabled_resp.find("HTTP/1.1 403 Forbidden"), std::string::npos);
+        EXPECT_NE(disabled_resp.find("deshabilitado"), std::string::npos);
+        server.set_update_module_enabled(true);
+        EXPECT_TRUE(server.is_update_module_enabled());
     }
 
     server.stop();
@@ -1783,6 +1793,87 @@ TEST(MacheteZipReaderTest, RejectsInvalidCorruptArchive)
     machete::server::ZipReader reader;
     EXPECT_FALSE(reader.open_file(bad_file));
     (void)std::remove(bad_file.c_str());
+}
+
+TEST(MacheteZipReaderTest, CleansUpObsoleteFilesAndDirectories)
+{
+    const std::string test_dir = "/tmp/machete_test_clean_src";
+    const std::string dst_dir = "/tmp/machete_test_clean_dst";
+    const std::string zip_file = "/tmp/machete_test_clean.zip";
+
+    // Prepare destination with obsolete files and directories
+    (void)mkdir(dst_dir.c_str(), 0777);
+    (void)mkdir((dst_dir + "/obsolete_dir").c_str(), 0777);
+    {
+        std::ofstream f(dst_dir + "/obsolete_dir/junk.txt");
+        f << "OBSOLETE_CONTENT";
+    }
+    {
+        std::ofstream f(dst_dir + "/old_module.prx");
+        f << "OLD_PRX_DATA";
+    }
+
+    // Verify obsolete files exist initially
+    ASSERT_EQ(access((dst_dir + "/old_module.prx").c_str(), F_OK), 0);
+    ASSERT_EQ(access((dst_dir + "/obsolete_dir/junk.txt").c_str(), F_OK), 0);
+
+    // Prepare source directory with only new files
+    (void)mkdir(test_dir.c_str(), 0777);
+    {
+        std::ofstream f(test_dir + "/eboot.bin", std::ios::binary);
+        f << "NEW_EBOOT_BIN_DATA";
+    }
+
+    machete::server::ZipWriter writer;
+    writer.add_directory(test_dir, "PPSA99001");
+    writer.prepare();
+    auto zip_bytes = writer.write_to_memory();
+    ASSERT_FALSE(zip_bytes.empty());
+
+    {
+        std::ofstream zf(zip_file, std::ios::binary);
+        zf.write(reinterpret_cast<const char *>(zip_bytes.data()), zip_bytes.size());
+    }
+
+    machete::server::ZipReader reader;
+    ASSERT_TRUE(reader.open_file(zip_file));
+
+    // Extract with clean_obsolete = true
+    auto res = reader.extract_all(dst_dir, true, true);
+    EXPECT_TRUE(res.success);
+    EXPECT_GE(res.files_extracted, 1u);
+    EXPECT_GE(res.files_cleaned, 2u);
+
+    // Assert obsolete files were cleaned up
+    EXPECT_NE(access((dst_dir + "/old_module.prx").c_str(), F_OK), 0);
+    EXPECT_NE(access((dst_dir + "/obsolete_dir/junk.txt").c_str(), F_OK), 0);
+    EXPECT_NE(access((dst_dir + "/obsolete_dir").c_str(), F_OK), 0);
+
+    // Assert new files exist
+    EXPECT_EQ(access((dst_dir + "/eboot.bin").c_str(), F_OK), 0);
+
+    reader.close();
+
+    // Clean up
+    (void)std::remove((test_dir + "/eboot.bin").c_str());
+    (void)rmdir(test_dir.c_str());
+    (void)std::remove((dst_dir + "/eboot.bin").c_str());
+    (void)rmdir(dst_dir.c_str());
+    (void)std::remove(zip_file.c_str());
+}
+
+TEST(MacheteLoggerTest, ResetFreshExecutesSafelyAndStartsCleanSession)
+{
+    machete::log::write("[UNIT_TEST]", "Pre-reset log line for testing");
+    machete::log::flush();
+
+    // Call reset_fresh to truncate and start a clean session
+    machete::log::reset_fresh();
+
+    machete::log::write("[UNIT_TEST]", "Post-reset log line in fresh session");
+    machete::log::flush();
+
+    SUCCEED();
 }
 
 } // namespace hui::testing

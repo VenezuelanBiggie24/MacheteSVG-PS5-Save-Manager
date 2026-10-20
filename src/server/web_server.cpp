@@ -890,6 +890,7 @@ void WebServer::handle_client(int client_fd)
                            "\",\"build_date\":\"" + std::string(::machete::build::kBuildDate) + " " + std::string(::machete::build::kBuildTime) +
                            "\",\"ip\":\"" + local_ip() +
                            "\",\"port\":" + std::to_string(port_) +
+                           ",\"updater_enabled\":" + std::string(is_update_module_enabled() ? "true" : "false") +
                            ",\"games_count\":" + std::to_string(get_games().size()) + "}";
         send_string_response(client_fd, 200, "OK", "application/json", json);
         return;
@@ -1450,6 +1451,13 @@ void WebServer::handle_client(int client_fd)
     // Ruta 6E: API de Actualizacion Remota de MacheteSVG (Subida de ZIP via Web OTA)
     if (path == "/api/update" && method_str == "POST")
     {
+        if (!is_update_module_enabled())
+        {
+            send_string_response(client_fd, 403, "Forbidden", "application/json",
+                                 "{\"success\":false,\"message\":\"El modulo de actualizacion remota esta deshabilitado en esta version.\"}");
+            return;
+        }
+
         MACHETE_LOG("[OTA_UPDATE]", "Received OTA update request from client");
 
         // 1. Localizar fin de cabeceras HTTP (\r\n\r\n o \n\n)
@@ -1661,8 +1669,8 @@ void WebServer::handle_client(int client_fd)
         }
         make_directory_recursive(target_install_dir);
 
-        // 9. Extraer y reemplazar todos los archivos
-        auto res = reader.extract_all(target_install_dir, true);
+        // 9. Extraer y reemplazar todos los archivos, con depuracion de archivos obsoletos
+        auto res = reader.extract_all(target_install_dir, true, true);
         reader.close();
 
         // 10. Limpiar archivo de subida y directorio de staging
@@ -1681,19 +1689,24 @@ void WebServer::handle_client(int client_fd)
         chmod((target_install_dir + "/sce_module/libc.prx").c_str(), 0777);
         chmod((target_install_dir + "/daemon/lapy_jb_daemon.elf").c_str(), 0777);
 
+        // 12. Reiniciar el archivo de registro machete.log para garantizar un registro 100% fresco
+        machete::log::reset_fresh();
+
         // Sincronizar almacenamiento SSD NVMe
         sync();
 
-        MACHETE_LOG("[OTA_UPDATE]", "Update successfully deployed: %zu files (%llu bytes) -> %s",
+        MACHETE_LOG("[OTA_UPDATE]", "Clean update deployed: %zu extracted (%llu bytes), %zu obsolete removed -> %s",
                     res.files_extracted, static_cast<unsigned long long>(res.total_bytes_extracted),
-                    target_install_dir.c_str());
+                    res.files_cleaned, target_install_dir.c_str());
 
-        std::string json = "{\"success\":true,\"message\":\"Actualizacion instalada con exito. Se reemplazaron " +
+        std::string json = "{\"success\":true,\"message\":\"Actualizacion limpia instalada con exito. Se extrajeron " +
                            std::to_string(res.files_extracted) + " archivos (" +
-                           std::to_string(res.total_bytes_extracted / (1024 * 1024)) + " MB) en " +
+                           std::to_string(res.total_bytes_extracted / (1024 * 1024)) + " MB) y se depuraron " +
+                           std::to_string(res.files_cleaned) + " archivos obsoletos en " +
                            json_escape(target_install_dir) +
-                           ". Todo ha quedado limpio como via FTP. Por favor, reinicia la aplicacion en tu consola.\","
+                           ". El registro machete.log ha sido reiniciado. Todo ha quedado limpio como via FTP. Por favor, reinicia la aplicacion en tu consola.\","
                            "\"files_updated\":" + std::to_string(res.files_extracted) +
+                           ",\"files_cleaned\":" + std::to_string(res.files_cleaned) +
                            ",\"total_bytes\":" + std::to_string(res.total_bytes_extracted) + "}";
 
         send_string_response(client_fd, 200, "OK", "application/json", json);

@@ -10,9 +10,11 @@
 #include <array>
 #include <cerrno>
 #include <cstring>
+#include <dirent.h>
 #include <fcntl.h>
 #include <sys/stat.h>
 #include <unistd.h>
+#include <unordered_set>
 
 namespace machete::server
 {
@@ -67,7 +69,132 @@ std::string sanitize_relative_path(std::string_view raw)
     return out;
 }
 
+class ScopedDir
+{
+public:
+    ScopedDir() noexcept : dir_(nullptr) {}
+    explicit ScopedDir(DIR *dir) noexcept : dir_(dir) {}
+    ~ScopedDir() noexcept { reset(); }
+
+    ScopedDir(const ScopedDir &) = delete;
+    ScopedDir &operator=(const ScopedDir &) = delete;
+
+    ScopedDir(ScopedDir &&other) noexcept : dir_(other.dir_) { other.dir_ = nullptr; }
+    ScopedDir &operator=(ScopedDir &&other) noexcept
+    {
+        if (this != &other)
+        {
+            reset();
+            dir_ = other.dir_;
+            other.dir_ = nullptr;
+        }
+        return *this;
+    }
+
+    DIR *get() const noexcept { return dir_; }
+    bool is_valid() const noexcept { return dir_ != nullptr; }
+    explicit operator bool() const noexcept { return dir_ != nullptr; }
+
+    void reset(DIR *new_dir = nullptr) noexcept
+    {
+        if (dir_)
+        {
+            ::closedir(dir_);
+        }
+        dir_ = new_dir;
+    }
+
+private:
+    DIR *dir_{nullptr};
+};
+
 } // namespace
+
+std::size_t cleanup_obsolete_files(const std::string &target_directory,
+                                   const std::vector<std::string> &valid_relative_files,
+                                   std::size_t &out_directories_cleaned)
+{
+    out_directories_cleaned = 0;
+    std::unordered_set<std::string> valid_set;
+    valid_set.reserve(valid_relative_files.size());
+    for (const auto &vf : valid_relative_files)
+    {
+        valid_set.insert(sanitize_relative_path(vf));
+    }
+
+    std::size_t files_removed = 0;
+
+    auto clean_worker = [&](auto &self, const std::string &current_dir, const std::string &rel_prefix, int depth) -> void
+    {
+        if (depth > 8)
+        {
+            return;
+        }
+
+        ScopedDir dir(opendir(current_dir.c_str()));
+        if (!dir.is_valid())
+        {
+            return;
+        }
+
+        std::vector<std::string> subdirs_to_check;
+        struct dirent *de = nullptr;
+        while ((de = readdir(dir.get())) != nullptr)
+        {
+            if (std::strcmp(de->d_name, ".") == 0 || std::strcmp(de->d_name, "..") == 0)
+            {
+                continue;
+            }
+
+            std::string full_path = current_dir + "/" + de->d_name;
+            std::string rel_path = rel_prefix.empty() ? de->d_name : (rel_prefix + "/" + de->d_name);
+
+            struct stat st{};
+            if (stat(full_path.c_str(), &st) != 0)
+            {
+                continue;
+            }
+
+            if (S_ISDIR(st.st_mode))
+            {
+                subdirs_to_check.push_back(full_path);
+                self(self, full_path, rel_path, depth + 1);
+            }
+            else if (S_ISREG(st.st_mode))
+            {
+                // Preservar machete.log de la eliminacion fisica (sera truncado limpiamente por reset_fresh)
+                if (std::strcmp(de->d_name, "machete.log") == 0)
+                {
+                    continue;
+                }
+
+                if (valid_set.find(rel_path) == valid_set.end())
+                {
+                    MACHETE_LOG("[CLEANUP]", "Removed obsolete file from previous version: %s", rel_path.c_str());
+                    if (unlink(full_path.c_str()) == 0)
+                    {
+                        files_removed++;
+                    }
+                }
+            }
+        }
+
+        dir.reset();
+
+        // Eliminar carpetas que hayan quedado completamente vacias tras depurar archivos obsoletos
+        for (const auto &sub : subdirs_to_check)
+        {
+            if (rmdir(sub.c_str()) == 0)
+            {
+                out_directories_cleaned++;
+                MACHETE_LOG("[CLEANUP]", "Removed empty obsolete directory: %s", sub.c_str());
+            }
+        }
+    };
+
+    clean_worker(clean_worker, target_directory, "", 0);
+    return files_removed;
+}
 
 bool make_directory_recursive(const std::string &path)
 {
@@ -568,7 +695,7 @@ bool ZipReader::extract_to_file(const ZipReaderEntry &entry, const std::string &
     return success;
 }
 
-ZipExtractResult ZipReader::extract_all(const std::string &target_directory, bool strip_root_folder)
+ZipExtractResult ZipReader::extract_all(const std::string &target_directory, bool strip_root_folder, bool clean_install)
 {
     ZipExtractResult result;
     if (fd_ < 0 || entries_.empty())
@@ -588,6 +715,9 @@ ZipExtractResult ZipReader::extract_all(const std::string &target_directory, boo
     {
         root_prefix = detect_common_root_folder(entries_);
     }
+
+    std::vector<std::string> valid_relative_files;
+    valid_relative_files.reserve(entries_.size());
 
     for (const auto &entry : entries_)
     {
@@ -623,9 +753,20 @@ ZipExtractResult ZipReader::extract_all(const std::string &target_directory, boo
                 result.error_message = "Fallo al extraer el archivo: " + rel_name;
                 return result;
             }
+            valid_relative_files.push_back(rel_name);
             result.files_extracted++;
             result.total_bytes_extracted += entry.uncompressed_size;
         }
+    }
+
+    // Depuracion de archivos obsoletos de versiones anteriores para garantizar un update 100% limpio
+    if (clean_install)
+    {
+        std::size_t dirs_cleaned = 0;
+        result.files_cleaned = cleanup_obsolete_files(target_directory, valid_relative_files, dirs_cleaned);
+        result.directories_cleaned = dirs_cleaned;
+        MACHETE_LOG("[ZIP_READER]", "Clean install complete: %zu files extracted, %zu obsolete files removed, %zu empty folders removed",
+                    result.files_extracted, result.files_cleaned, result.directories_cleaned);
     }
 
     result.success = true;

@@ -908,8 +908,8 @@ constexpr std::string_view kWebUiHtml = R"rawhtml(<!DOCTYPE html>
       </div>
       <div class="modal-body" style="gap: 1.25rem;">
         <div style="background: rgba(99, 102, 241, 0.08); border: 1px solid rgba(99, 102, 241, 0.25); border-radius: var(--radius-sm); padding: 1rem; font-size: 0.84rem; line-height: 1.5; color: #cbd5e1;">
-          <strong style="color: #ffffff; display: block; margin-bottom: 0.35rem;">Como funciona la actualizacion via Web:</strong>
-          Sube el archivo <code>.zip</code> de la nueva version (ejemplo: <code>MacheteSVG_v1.3.0_PS5.zip</code>). La consola descomprimira los archivos directamente en <code>/data/homebrew/PPSA99001/</code>, reemplazara las versiones viejas, aplicara permisos <code>0777</code> a ejecutables y librerias, y limpiara los archivos temporales automaticamente.
+          <strong style="color: #ffffff; display: block; margin-bottom: 0.35rem;">Actualizacion 100% Limpia (Depuracion de archivos viejos y reinicio de log):</strong>
+          Sube el archivo <code>.zip</code> de la nueva version (ejemplo: <code>MacheteSVG_v1.3.0_PS5.zip</code>). La consola descomprimira los archivos en <code>/data/homebrew/PPSA99001/</code>, eliminara automaticamente cualquier archivo o carpeta obsoleta que ya no pertenezca a la nueva version, reiniciara el archivo <code>machete.log</code> para una sesion completamente fresca, aplicara permisos <code>0777</code> y limpiara temporales, exactamente igual a un borrado y subida limpia via FTP.
         </div>
 
         <div id="dropzone" style="border: 2px dashed rgba(99, 102, 241, 0.4); border-radius: var(--radius-md); padding: 2.2rem 1.5rem; text-align: center; background: rgba(14, 18, 30, 0.5); cursor: pointer; transition: all 0.2s ease;">
