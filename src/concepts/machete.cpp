@@ -2350,8 +2350,8 @@ class Machete final : public app::Concept
                 ? "2. Gestiona y descarga tus partidas en ZIP o restaura copias con un clic."
                 : "2. Manage and download your saves in ZIP or restore backups in one click.";
             const char *line3 = is_es
-                ? "3. Transferencias directas en red local a maxima velocidad sin servicios cloud."
-                : "3. Direct LAN transfers at maximum speed with zero cloud service dependencies.";
+                ? "3. Sube el .zip de nuevas versiones para actualizar la app directamente sin FTP."
+                : "3. Upload new version .zip packages to update the app directly with no FTP.";
 
             paint.body(line1, info_box.x + 24, info_box.y + 36, 17, theme.text);
             paint.body(line2, info_box.x + 24, info_box.y + 74, 17, theme.text);

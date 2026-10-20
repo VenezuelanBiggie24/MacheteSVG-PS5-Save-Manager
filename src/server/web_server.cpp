@@ -5,6 +5,7 @@
 #include "server/web_server.hpp"
 #include "server/web_ui.hpp"
 #include "server/zip_writer.hpp"
+#include "server/zip_reader.hpp"
 #include "core/build_info.hpp"
 #include "core/logger.hpp"
 #include "core/pfs_mount_manager.hpp"
@@ -927,6 +928,9 @@ void WebServer::handle_client(int client_fd)
             "/app0/sce_sys/icon0.png",
             "/data/homebrew/PPSA99001/sce_sys/icon0.png",
             "sce_sys/icon0.png",
+#ifdef HUI_SOURCE_DIR
+            std::string(HUI_SOURCE_DIR) + "/sce_sys/icon0.png",
+#endif
             "/user/app/PPSA99001/sce_sys/icon0.png"
         };
         for (const auto &cand : logo_candidates)
@@ -1439,6 +1443,259 @@ void WebServer::handle_client(int client_fd)
 
         std::string json = "{\"success\":" + std::string(res.success ? "true" : "false") +
                            ",\"message\":\"" + json_escape(res.message) + "\"}";
+        send_string_response(client_fd, 200, "OK", "application/json", json);
+        return;
+    }
+
+    // Ruta 6E: API de Actualizacion Remota de MacheteSVG (Subida de ZIP via Web OTA)
+    if (path == "/api/update" && method_str == "POST")
+    {
+        MACHETE_LOG("[OTA_UPDATE]", "Received OTA update request from client");
+
+        // 1. Localizar fin de cabeceras HTTP (\r\n\r\n o \n\n)
+        const char *hdr_end = std::strstr(req_buf, "\r\n\r\n");
+        std::size_t header_len = 0;
+        if (hdr_end)
+        {
+            header_len = static_cast<std::size_t>((hdr_end - req_buf) + 4);
+        }
+        else
+        {
+            hdr_end = std::strstr(req_buf, "\n\n");
+            if (hdr_end)
+            {
+                header_len = static_cast<std::size_t>((hdr_end - req_buf) + 2);
+            }
+        }
+
+        if (header_len == 0)
+        {
+            send_string_response(client_fd, 400, "Bad Request", "application/json",
+                                 "{\"success\":false,\"message\":\"Cabeceras HTTP invalidas\"}");
+            return;
+        }
+
+        // 2. Extraer Content-Length
+        std::string raw_headers(req_buf, header_len);
+        std::uint64_t content_length = 0;
+        std::size_t cl_pos = raw_headers.find("Content-Length:");
+        if (cl_pos == std::string::npos)
+        {
+            cl_pos = raw_headers.find("content-length:");
+        }
+        if (cl_pos != std::string::npos)
+        {
+            cl_pos += 15;
+            while (cl_pos < header_len && (raw_headers[cl_pos] == ' ' || raw_headers[cl_pos] == '\t'))
+            {
+                cl_pos++;
+            }
+            content_length = std::strtoull(raw_headers.c_str() + cl_pos, nullptr, 10);
+        }
+
+        // Limite de seguridad: entre 22 bytes (EOCD minimo) y 500 MB
+        if (content_length < 22 || content_length > 500ULL * 1024ULL * 1024ULL)
+        {
+            send_string_response(client_fd, 400, "Bad Request", "application/json",
+                                 "{\"success\":false,\"message\":\"Tamano de paquete no valido o cabecera Content-Length ausente\"}");
+            return;
+        }
+
+        // 3. Preparar directorio temporal de recepcion
+        std::string staging_dir = "/data/homebrew/.update_staging";
+        if (access("/data/homebrew", W_OK) != 0)
+        {
+            staging_dir = "/data/MacheteSVG/update_staging";
+            if (access("/data", W_OK) != 0)
+            {
+                staging_dir = "/tmp/machete_update_staging";
+            }
+        }
+        make_directory_recursive(staging_dir);
+        std::string staging_zip = staging_dir + "/update.zip";
+        unlink(staging_zip.c_str());
+
+        ScopedFd out_fd(open(staging_zip.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0777));
+        if (!out_fd.is_valid())
+        {
+            send_string_response(client_fd, 500, "Internal Server Error", "application/json",
+                                 "{\"success\":false,\"message\":\"No se pudo crear el archivo temporal de actualizacion\"}");
+            return;
+        }
+
+        // 4. Escribir los bytes iniciales del cuerpo recibidos en el primer buffer
+        std::size_t initial_bytes = static_cast<std::size_t>(n) - header_len;
+        if (initial_bytes > 0)
+        {
+            std::size_t to_write = std::min<std::uint64_t>(initial_bytes, content_length);
+            if (write(out_fd.get(), req_buf + header_len, to_write) != static_cast<ssize_t>(to_write))
+            {
+                out_fd.reset();
+                unlink(staging_zip.c_str());
+                send_string_response(client_fd, 500, "Internal Server Error", "application/json",
+                                     "{\"success\":false,\"message\":\"Fallo de escritura en almacenamiento SSD\"}");
+                return;
+            }
+        }
+
+        // 5. Recibir el resto del flujo por bloques de 64 KB
+        std::uint64_t bytes_received = initial_bytes;
+        constexpr std::size_t kChunkSize = 64 * 1024;
+        std::vector<std::uint8_t> chunk(kChunkSize);
+        bool receive_ok = true;
+
+        while (bytes_received < content_length)
+        {
+            std::size_t to_read = std::min<std::uint64_t>(content_length - bytes_received, chunk.size());
+            ssize_t r = recv(client_fd, chunk.data(), to_read, 0);
+            if (r <= 0)
+            {
+                if (r < 0 && (errno == EINTR || errno == EAGAIN))
+                {
+                    continue;
+                }
+                receive_ok = false;
+                break;
+            }
+
+            ssize_t w = write(out_fd.get(), chunk.data(), static_cast<std::size_t>(r));
+            if (w != r)
+            {
+                receive_ok = false;
+                break;
+            }
+            bytes_received += static_cast<std::uint64_t>(r);
+        }
+
+        out_fd.reset(); // Garantiza el cierre del descriptor antes de abrir con ZipReader
+
+        if (!receive_ok || bytes_received < content_length)
+        {
+            unlink(staging_zip.c_str());
+            send_string_response(client_fd, 400, "Bad Request", "application/json",
+                                 "{\"success\":false,\"message\":\"Conexion interrumpida durante la subida del paquete ZIP\"}");
+            return;
+        }
+
+        MACHETE_LOG("[OTA_UPDATE]", "Uploaded package received: %llu bytes",
+                    static_cast<unsigned long long>(bytes_received));
+
+        // 6. Si fue enviado via multipart/form-data, detectar si hay cabecera preliminar y localizar PK\x03\x04
+        {
+            ScopedFd check_fd(open(staging_zip.c_str(), O_RDONLY));
+            if (check_fd.is_valid())
+            {
+                std::uint8_t magic[4] = {0};
+                if (read(check_fd.get(), magic, 4) == 4)
+                {
+                    if (magic[0] != 0x50 || magic[1] != 0x4B)
+                    {
+                        lseek(check_fd.get(), 0, SEEK_SET);
+                        std::vector<std::uint8_t> head(8192);
+                        ssize_t hr = read(check_fd.get(), head.data(), head.size());
+                        if (hr > 4)
+                        {
+                            off_t pk_offset = -1;
+                            for (ssize_t i = 0; i + 4 <= hr; ++i)
+                            {
+                                if (head[i] == 0x50 && head[i+1] == 0x4B && head[i+2] == 0x03 && head[i+3] == 0x04)
+                                {
+                                    pk_offset = i;
+                                    break;
+                                }
+                            }
+                            if (pk_offset > 0)
+                            {
+                                check_fd.reset();
+                                std::string clean_zip = staging_dir + "/update_clean.zip";
+                                unlink(clean_zip.c_str());
+                                ScopedFd src_fd(open(staging_zip.c_str(), O_RDONLY));
+                                ScopedFd dst_fd(open(clean_zip.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0777));
+                                if (src_fd.is_valid() && dst_fd.is_valid())
+                                {
+                                    lseek(src_fd.get(), pk_offset, SEEK_SET);
+                                    std::vector<std::uint8_t> copy_buf(64 * 1024);
+                                    ssize_t cr;
+                                    while ((cr = read(src_fd.get(), copy_buf.data(), copy_buf.size())) > 0)
+                                    {
+                                        write(dst_fd.get(), copy_buf.data(), cr);
+                                    }
+                                    src_fd.reset();
+                                    dst_fd.reset();
+                                    unlink(staging_zip.c_str());
+                                    rename(clean_zip.c_str(), staging_zip.c_str());
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // 7. Abrir y validar estructura del paquete ZIP
+        ZipReader reader;
+        if (!reader.open_file(staging_zip))
+        {
+            unlink(staging_zip.c_str());
+            send_string_response(client_fd, 400, "Bad Request", "application/json",
+                                 "{\"success\":false,\"message\":\"El archivo recibido no es un archivo ZIP valido o esta dañado\"}");
+            return;
+        }
+
+        // Validar autenticidad: debe contener al menos eboot.bin o param.json
+        if (!reader.has_file("eboot.bin") && !reader.has_file("param.json"))
+        {
+            reader.close();
+            unlink(staging_zip.c_str());
+            send_string_response(client_fd, 400, "Bad Request", "application/json",
+                                 "{\"success\":false,\"message\":\"El archivo ZIP no contiene un paquete valido de MacheteSVG (falta eboot.bin)\"}");
+            return;
+        }
+
+        // 8. Determinar directorio de instalacion (/data/homebrew/PPSA99001)
+        std::string target_install_dir = "/data/homebrew/PPSA99001";
+        if (access("/data/homebrew", W_OK) != 0 && access("/data", W_OK) != 0)
+        {
+            // Fallback para entornos de pruebas o emulacion
+            target_install_dir = "/tmp/machete_test_homebrew/PPSA99001";
+        }
+        make_directory_recursive(target_install_dir);
+
+        // 9. Extraer y reemplazar todos los archivos
+        auto res = reader.extract_all(target_install_dir, true);
+        reader.close();
+
+        // 10. Limpiar archivo de subida y directorio de staging
+        unlink(staging_zip.c_str());
+        rmdir(staging_dir.c_str());
+
+        if (!res.success)
+        {
+            send_string_response(client_fd, 500, "Internal Server Error", "application/json",
+                                 "{\"success\":false,\"message\":\"" + json_escape(res.error_message) + "\"}");
+            return;
+        }
+
+        // 11. Reforzar permisos 0777 en ejecutables y modulos criticos
+        chmod((target_install_dir + "/eboot.bin").c_str(), 0777);
+        chmod((target_install_dir + "/sce_module/libc.prx").c_str(), 0777);
+        chmod((target_install_dir + "/daemon/lapy_jb_daemon.elf").c_str(), 0777);
+
+        // Sincronizar almacenamiento SSD NVMe
+        sync();
+
+        MACHETE_LOG("[OTA_UPDATE]", "Update successfully deployed: %zu files (%llu bytes) -> %s",
+                    res.files_extracted, static_cast<unsigned long long>(res.total_bytes_extracted),
+                    target_install_dir.c_str());
+
+        std::string json = "{\"success\":true,\"message\":\"Actualizacion instalada con exito. Se reemplazaron " +
+                           std::to_string(res.files_extracted) + " archivos (" +
+                           std::to_string(res.total_bytes_extracted / (1024 * 1024)) + " MB) en " +
+                           json_escape(target_install_dir) +
+                           ". Todo ha quedado limpio como via FTP. Por favor, reinicia la aplicacion en tu consola.\","
+                           "\"files_updated\":" + std::to_string(res.files_extracted) +
+                           ",\"total_bytes\":" + std::to_string(res.total_bytes_extracted) + "}";
+
         send_string_response(client_fd, 200, "OK", "application/json", json);
         return;
     }

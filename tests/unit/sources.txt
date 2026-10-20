@@ -18,6 +18,7 @@ src/core/save_manager.cpp
 src/core/logger.cpp
 src/server/web_server.cpp
 src/server/zip_writer.cpp
+src/server/zip_reader.cpp
 src/core/frame_stats.cpp
 src/core/input.cpp
 src/core/save_file.cpp
@@ -28,6 +29,7 @@ src/gfx/draw_list.cpp
 src/gfx/font.cpp
 src/gfx/triangulate.cpp
 src/third_party/stb/vorbis.c
+src/third_party/puff/puff.c
 src/vendor/sqlite/sqlite3.c
 src/ui/components/*.cpp
 src/ui/confetti.cpp

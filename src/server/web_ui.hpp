@@ -733,6 +733,14 @@ constexpr std::string_view kWebUiHtml = R"rawhtml(<!DOCTYPE html>
         </svg>
         <span>Guia Multi-Consola (PS5 & PS4)</span>
       </button>
+      <button class="btn btn-secondary btn-sm" id="btn-open-updater" onclick="openUpdaterModal()" title="Subir paquete ZIP para actualizar MacheteSVG directamente">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
+          <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+          <polyline points="17 8 12 3 7 8"></polyline>
+          <line x1="12" y1="3" x2="12" y2="15"></line>
+        </svg>
+        <span>Actualizar App (ZIP)</span>
+      </button>
       <button class="btn btn-secondary btn-sm" id="btn-copy-url" title="Copiar enlace de conexion al portapapeles">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
           <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
@@ -880,6 +888,93 @@ constexpr std::string_view kWebUiHtml = R"rawhtml(<!DOCTYPE html>
     </div>
   </div>
 
+  <!-- Modal de Actualizacion Remota (OTA Web Updater) -->
+  <div id="updater-modal" class="modal-backdrop">
+    <div class="modal-card" style="max-width: 640px;">
+      <div class="modal-header">
+        <div>
+          <h3 style="display:flex; align-items:center; gap:0.6rem;">
+            <span>Actualizador Remoto de MacheteSVG</span>
+            <span class="version-tag" id="updater-curr-version">v1.3.0</span>
+          </h3>
+          <p>Instalacion automatica de paquetes de actualizacion .zip sin necesidad de cliente FTP</p>
+        </div>
+        <button id="updater-modal-close" class="modal-close" title="Cerrar ventana">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
+            <line x1="18" y1="6" x2="6" y2="18"></line>
+            <line x1="6" y1="6" x2="18" y2="18"></line>
+          </svg>
+        </button>
+      </div>
+      <div class="modal-body" style="gap: 1.25rem;">
+        <div style="background: rgba(99, 102, 241, 0.08); border: 1px solid rgba(99, 102, 241, 0.25); border-radius: var(--radius-sm); padding: 1rem; font-size: 0.84rem; line-height: 1.5; color: #cbd5e1;">
+          <strong style="color: #ffffff; display: block; margin-bottom: 0.35rem;">Como funciona la actualizacion via Web:</strong>
+          Sube el archivo <code>.zip</code> de la nueva version (ejemplo: <code>MacheteSVG_v1.3.0_PS5.zip</code>). La consola descomprimira los archivos directamente en <code>/data/homebrew/PPSA99001/</code>, reemplazara las versiones viejas, aplicara permisos <code>0777</code> a ejecutables y librerias, y limpiara los archivos temporales automaticamente.
+        </div>
+
+        <div id="dropzone" style="border: 2px dashed rgba(99, 102, 241, 0.4); border-radius: var(--radius-md); padding: 2.2rem 1.5rem; text-align: center; background: rgba(14, 18, 30, 0.5); cursor: pointer; transition: all 0.2s ease;">
+          <input type="file" id="zip-file-input" accept=".zip" style="display: none;">
+          <div style="width: 54px; height: 54px; margin: 0 auto 1rem auto; background: rgba(99, 102, 241, 0.15); border-radius: 50%; display: flex; align-items: center; justify-content: center; color: var(--primary);">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" width="28" height="28" stroke-width="2.2">
+              <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+              <polyline points="17 8 12 3 7 8"></polyline>
+              <line x1="12" y1="3" x2="12" y2="15"></line>
+            </svg>
+          </div>
+          <div style="font-weight: 700; color: #ffffff; font-size: 1rem; margin-bottom: 0.35rem;" id="dropzone-text">
+            Arrastra el archivo ZIP aqui o haz clic para seleccionar
+          </div>
+          <div style="font-size: 0.78rem; color: var(--text-dim);" id="dropzone-sub">
+            Formatos aceptados: MacheteSVG_*.zip (hasta 500 MB)
+          </div>
+        </div>
+
+        <div id="selected-file-card" style="display: none; background: rgba(255, 255, 255, 0.04); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 0.85rem 1.15rem; align-items: center; justify-content: space-between;">
+          <div style="display: flex; align-items: center; gap: 0.85rem; min-width: 0;">
+            <svg viewBox="0 0 24 24" fill="none" stroke="var(--cyan)" width="24" height="24" stroke-width="2">
+              <path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"></path>
+              <polyline points="3.27 6.96 12 12.01 20.73 6.96"></polyline>
+              <line x1="12" y1="22.08" x2="12" y2="12"></line>
+            </svg>
+            <div style="min-width: 0;">
+              <div id="selected-file-name" style="font-weight: 600; color: #ffffff; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-size: 0.9rem;"></div>
+              <div id="selected-file-size" style="font-size: 0.75rem; color: var(--text-muted);"></div>
+            </div>
+          </div>
+          <button class="btn btn-secondary btn-sm" id="btn-change-file" style="flex-shrink: 0;">Cambiar</button>
+        </div>
+
+        <div id="upload-progress-wrap" style="display: none; flex-direction: column; gap: 0.55rem;">
+          <div style="display: flex; justify-content: space-between; font-size: 0.82rem; font-weight: 600;">
+            <span id="upload-phase" style="color: var(--cyan);">Subiendo paquete a la consola...</span>
+            <span id="upload-percent" style="font-family: ui-monospace, monospace; color: #ffffff;">0%</span>
+          </div>
+          <div style="width: 100%; height: 8px; background: rgba(255, 255, 255, 0.08); border-radius: 9999px; overflow: hidden; position: relative;">
+            <div id="upload-bar" style="width: 0%; height: 100%; background: linear-gradient(90deg, var(--primary), var(--cyan)); border-radius: 9999px; transition: width 0.15s ease;"></div>
+          </div>
+          <div style="display: flex; justify-content: space-between; font-size: 0.75rem; color: var(--text-dim);">
+            <span id="upload-stats">0 MB / 0 MB</span>
+            <span id="upload-speed">0 KB/s</span>
+          </div>
+        </div>
+
+        <div id="update-status-box" style="display: none; border-radius: var(--radius-sm); padding: 1rem; font-size: 0.84rem; line-height: 1.5;"></div>
+
+        <div style="display: flex; justify-content: flex-end; gap: 0.75rem; margin-top: 0.5rem;">
+          <button class="btn btn-secondary" id="btn-updater-cancel">Cerrar</button>
+          <button class="btn btn-primary" id="btn-updater-submit" disabled>
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
+              <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+              <polyline points="17 8 12 3 7 8"></polyline>
+              <line x1="12" y1="3" x2="12" y2="15"></line>
+            </svg>
+            <span id="btn-updater-submit-text">Subir e Instalar Actualizacion</span>
+          </button>
+        </div>
+      </div>
+    </div>
+  </div>
+
   <!-- Toast Notification Container -->
   <div id="toast-container" class="toast-container"></div>
 
@@ -918,6 +1013,11 @@ constexpr std::string_view kWebUiHtml = R"rawhtml(<!DOCTYPE html>
           const data = await res.json();
           document.getElementById('console-ip').textContent = `${data.ip}:${data.port}`;
           document.getElementById('stat-port').textContent = data.port;
+          if (data.version) {
+            const vLabel = `v${data.version}${data.build ? ' (Build ' + data.build + ')' : ''}`;
+            const el = document.getElementById('updater-curr-version');
+            if (el) el.textContent = vLabel;
+          }
         }
       } catch (e) {
         document.getElementById('console-ip').textContent = 'Conectado (LAN :8383)';
@@ -1322,6 +1422,207 @@ constexpr std::string_view kWebUiHtml = R"rawhtml(<!DOCTYPE html>
       if (!str) return "";
       return str.replace(/'/g, "\\'");
     }
+
+    // OTA Web Updater Logic
+    let selectedZipFile = null;
+    let isUpdating = false;
+
+    function openUpdaterModal() {
+      document.getElementById('updater-modal').classList.add('open');
+      resetUpdaterState();
+    }
+
+    function closeUpdaterModal() {
+      if (isUpdating) {
+        if (!confirm('La instalacion esta en curso. Seguro que deseas cancelar?')) return;
+      }
+      document.getElementById('updater-modal').classList.remove('open');
+    }
+
+    function resetUpdaterState() {
+      selectedZipFile = null;
+      isUpdating = false;
+      document.getElementById('zip-file-input').value = '';
+      document.getElementById('dropzone').style.display = 'block';
+      document.getElementById('selected-file-card').style.display = 'none';
+      document.getElementById('upload-progress-wrap').style.display = 'none';
+      document.getElementById('update-status-box').style.display = 'none';
+      const submitBtn = document.getElementById('btn-updater-submit');
+      submitBtn.disabled = true;
+      document.getElementById('btn-updater-submit-text').textContent = 'Subir e Instalar Actualizacion';
+    }
+
+    function handleSelectedFile(file) {
+      if (!file) return;
+      if (!file.name.toLowerCase().endsWith('.zip')) {
+        showToast('El archivo seleccionado debe ser un archivo .zip', 'error');
+        return;
+      }
+      selectedZipFile = file;
+      document.getElementById('selected-file-name').textContent = file.name;
+      const sizeMb = (file.size / (1024 * 1024)).toFixed(2);
+      document.getElementById('selected-file-size').textContent = `${sizeMb} MB (${file.size.toLocaleString()} bytes)`;
+      document.getElementById('dropzone').style.display = 'none';
+      document.getElementById('selected-file-card').style.display = 'flex';
+      document.getElementById('btn-updater-submit').disabled = false;
+      document.getElementById('update-status-box').style.display = 'none';
+    }
+
+    // Dropzone Events
+    const dropzone = document.getElementById('dropzone');
+    const zipFileInput = document.getElementById('zip-file-input');
+
+    dropzone.addEventListener('click', () => zipFileInput.click());
+    document.getElementById('btn-change-file').addEventListener('click', () => zipFileInput.click());
+
+    zipFileInput.addEventListener('change', (e) => {
+      if (e.target.files && e.target.files[0]) {
+        handleSelectedFile(e.target.files[0]);
+      }
+    });
+
+    ['dragenter', 'dragover'].forEach(eventName => {
+      dropzone.addEventListener(eventName, (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        dropzone.style.borderColor = 'var(--cyan)';
+        dropzone.style.background = 'rgba(6, 182, 212, 0.12)';
+      });
+    });
+
+    ['dragleave', 'drop'].forEach(eventName => {
+      dropzone.addEventListener(eventName, (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        dropzone.style.borderColor = 'rgba(99, 102, 241, 0.4)';
+        dropzone.style.background = 'rgba(14, 18, 30, 0.5)';
+      });
+    });
+
+    dropzone.addEventListener('drop', (e) => {
+      if (e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files[0]) {
+        handleSelectedFile(e.dataTransfer.files[0]);
+      }
+    });
+
+    document.getElementById('updater-modal-close').addEventListener('click', closeUpdaterModal);
+    document.getElementById('btn-updater-cancel').addEventListener('click', closeUpdaterModal);
+
+    document.getElementById('updater-modal').addEventListener('click', (e) => {
+      if (e.target.id === 'updater-modal') {
+        closeUpdaterModal();
+      }
+    });
+
+    // Subir e instalar
+    document.getElementById('btn-updater-submit').addEventListener('click', () => {
+      if (!selectedZipFile || isUpdating) return;
+
+      isUpdating = true;
+      const submitBtn = document.getElementById('btn-updater-submit');
+      submitBtn.disabled = true;
+      document.getElementById('btn-updater-cancel').disabled = true;
+      document.getElementById('btn-change-file').style.display = 'none';
+      document.getElementById('upload-progress-wrap').style.display = 'flex';
+      document.getElementById('update-status-box').style.display = 'none';
+      document.getElementById('upload-bar').style.width = '0%';
+      document.getElementById('upload-percent').textContent = '0%';
+      document.getElementById('upload-phase').textContent = 'Subiendo paquete a la consola...';
+      document.getElementById('btn-updater-submit-text').textContent = 'Instalando...';
+
+      const xhr = new XMLHttpRequest();
+      xhr.open('POST', '/api/update');
+      xhr.setRequestHeader('Content-Type', 'application/zip');
+
+      const startTime = Date.now();
+      let lastLoaded = 0;
+      let lastTime = startTime;
+
+      xhr.upload.onprogress = (e) => {
+        if (e.lengthComputable) {
+          const pct = Math.round((e.loaded / e.total) * 100);
+          document.getElementById('upload-bar').style.width = pct + '%';
+          document.getElementById('upload-percent').textContent = pct + '%';
+
+          const loadedMb = (e.loaded / (1024 * 1024)).toFixed(1);
+          const totalMb = (e.total / (1024 * 1024)).toFixed(1);
+          document.getElementById('upload-stats').textContent = `${loadedMb} MB / ${totalMb} MB`;
+
+          const now = Date.now();
+          const dt = (now - lastTime) / 1000;
+          if (dt >= 0.5) {
+            const bytesPerSec = (e.loaded - lastLoaded) / dt;
+            const speedMb = (bytesPerSec / (1024 * 1024)).toFixed(1);
+            document.getElementById('upload-speed').textContent = `${speedMb} MB/s`;
+            lastLoaded = e.loaded;
+            lastTime = now;
+          }
+
+          if (pct >= 100) {
+            document.getElementById('upload-phase').textContent = 'Descomprimiendo, reemplazando archivos y aplicando permisos 0777...';
+            document.getElementById('upload-speed').textContent = 'Instalando en SSD...';
+          }
+        }
+      };
+
+      xhr.onload = () => {
+        isUpdating = false;
+        document.getElementById('btn-updater-cancel').disabled = false;
+        document.getElementById('btn-change-file').style.display = 'inline-block';
+        const statusBox = document.getElementById('update-status-box');
+        statusBox.style.display = 'block';
+
+        try {
+          const res = JSON.parse(xhr.responseText);
+          if (xhr.status === 200 && res.success) {
+            statusBox.style.background = 'rgba(16, 185, 129, 0.12)';
+            statusBox.style.border = '1px solid rgba(16, 185, 129, 0.4)';
+            statusBox.style.color = '#34d399';
+            statusBox.innerHTML = `<strong>Actualizacion Completada con Exito:</strong><br>${escapeHtml(res.message)}`;
+            document.getElementById('upload-phase').textContent = 'Instalacion finalizada';
+            document.getElementById('upload-bar').style.background = 'linear-gradient(90deg, #10b981, #06b6d4)';
+            document.getElementById('btn-updater-submit-text').textContent = 'Actualizado';
+            showToast('Actualizacion instalada correctamente', 'success');
+            loadStatus();
+          } else {
+            statusBox.style.background = 'rgba(239, 68, 68, 0.12)';
+            statusBox.style.border = '1px solid rgba(239, 68, 68, 0.4)';
+            statusBox.style.color = '#f87171';
+            statusBox.innerHTML = `<strong>Fallo de Instalacion:</strong><br>${escapeHtml(res.message || 'Error desconocido')}`;
+            document.getElementById('upload-phase').textContent = 'Fallo en la instalacion';
+            document.getElementById('btn-updater-submit-text').textContent = 'Reintentar';
+            submitBtn.disabled = false;
+            showToast(res.message || 'Error al actualizar', 'error');
+          }
+        } catch (err) {
+          statusBox.style.background = 'rgba(239, 68, 68, 0.12)';
+          statusBox.style.border = '1px solid rgba(239, 68, 68, 0.4)';
+          statusBox.style.color = '#f87171';
+          statusBox.innerHTML = `<strong>Error de Respuesta:</strong><br>No se pudo procesar la respuesta de la consola.`;
+          document.getElementById('upload-phase').textContent = 'Error de respuesta';
+          document.getElementById('btn-updater-submit-text').textContent = 'Reintentar';
+          submitBtn.disabled = false;
+        }
+      };
+
+      xhr.onerror = () => {
+        isUpdating = false;
+        document.getElementById('btn-updater-cancel').disabled = false;
+        document.getElementById('btn-change-file').style.display = 'inline-block';
+        submitBtn.disabled = false;
+        document.getElementById('btn-updater-submit-text').textContent = 'Reintentar';
+        const statusBox = document.getElementById('update-status-box');
+        statusBox.style.display = 'block';
+        statusBox.style.background = 'rgba(239, 68, 68, 0.12)';
+        statusBox.style.border = '1px solid rgba(239, 68, 68, 0.4)';
+        statusBox.style.color = '#f87171';
+        statusBox.innerHTML = `<strong>Error de Conexion:</strong><br>Se perdio la comunicacion con el servidor web de la consola.`;
+        document.getElementById('upload-phase').textContent = 'Error de conexion';
+        showToast('Error de conexion con la consola', 'error');
+      };
+
+      xhr.send(selectedZipFile);
+    });
 
     loadStatus();
     loadGames();

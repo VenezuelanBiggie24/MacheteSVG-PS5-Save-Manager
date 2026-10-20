@@ -11,6 +11,7 @@
 #include "core/save_manager.hpp"
 #include "server/web_server.hpp"
 #include "server/zip_writer.hpp"
+#include "server/zip_reader.hpp"
 #include "core/sha256_hmac.hpp"
 #include "core/sfo_resigner.hpp"
 #include "core/keystone_manager.hpp"
@@ -22,6 +23,7 @@
 #include "core/sqlite_adapter.hpp"
 
 #include <fcntl.h>
+#include <fstream>
 #include <sys/stat.h>
 #include <unistd.h>
 #include <arpa/inet.h>
@@ -674,6 +676,34 @@ TEST(MacheteServerTest, HttpApiEndpointsAndSecurity)
     // 6. Security Traversal Attack on /api/download/
     std::string trav_dl = test_http_request(test_port, "GET /api/download/../../etc/passwd HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n");
     EXPECT_NE(trav_dl.find("HTTP/1.1 400 Bad Request"), std::string::npos);
+
+    // 7. Security rejection on invalid /api/update upload
+    std::string bad_update = test_http_request(test_port, "POST /api/update HTTP/1.1\r\nHost: localhost\r\nContent-Length: 5\r\nConnection: close\r\n\r\nHELLO");
+    EXPECT_NE(bad_update.find("HTTP/1.1 400 Bad Request"), std::string::npos);
+
+    // 8. Successful OTA update deployment with valid package
+    {
+        machete::server::ZipWriter pkg_writer;
+        const std::string ota_temp = "/tmp/machete_test_ota_pkg";
+        mkdir(ota_temp.c_str(), 0777);
+        {
+            std::ofstream f(ota_temp + "/eboot.bin", std::ios::binary);
+            f << "TEST_EBOOT_OTA";
+        }
+        pkg_writer.add_directory(ota_temp, "PPSA99001");
+        auto zip_data = pkg_writer.write_to_memory();
+        (void)std::remove((ota_temp + "/eboot.bin").c_str());
+        (void)rmdir(ota_temp.c_str());
+
+        std::string req = "POST /api/update HTTP/1.1\r\nHost: localhost\r\nContent-Length: " +
+                          std::to_string(zip_data.size()) + "\r\nConnection: close\r\n\r\n";
+        req.append(reinterpret_cast<const char *>(zip_data.data()), zip_data.size());
+
+        std::string update_resp = test_http_request(test_port, req);
+        EXPECT_NE(update_resp.find("HTTP/1.1 200 OK"), std::string::npos);
+        EXPECT_NE(update_resp.find("\"success\":true"), std::string::npos);
+        EXPECT_NE(update_resp.find("Actualizacion instalada con exito"), std::string::npos);
+    }
 
     server.stop();
     EXPECT_FALSE(server.is_running());
@@ -1652,6 +1682,107 @@ TEST(MachetePs4TitleResolutionTest, RenderableLatinDetectsLatinPresenceCorrectly
     EXPECT_TRUE(machete::scanner::is_renderable_latin("DRAGON QUEST XI S"));
     EXPECT_FALSE(machete::scanner::is_renderable_latin("وولڤرين من مارفل"));
     EXPECT_FALSE(machete::scanner::is_renderable_latin(""));
+}
+
+TEST(MacheteZipReaderTest, ExtractsStoreArchiveWithPermissionsAndIntegrity)
+{
+    const std::string test_dir = "/tmp/machete_test_ota_src";
+    const std::string dst_dir = "/tmp/machete_test_ota_dst";
+    const std::string zip_file = "/tmp/machete_test_ota.zip";
+
+    (void)mkdir(test_dir.c_str(), 0777);
+    (void)mkdir((test_dir + "/sce_sys").c_str(), 0777);
+
+    {
+        std::ofstream f(test_dir + "/eboot.bin", std::ios::binary);
+        f << "MOCK_EBOOT_BIN_PROSPERO_PAYLOAD";
+    }
+    {
+        std::ofstream f(test_dir + "/sce_sys/param.json", std::ios::binary);
+        f << "{\"titleId\":\"PPSA99001\",\"titleName\":\"MacheteSVG\"}";
+    }
+
+    machete::server::ZipWriter writer;
+    writer.add_directory(test_dir, "PPSA99001");
+    writer.prepare();
+    EXPECT_GT(writer.entry_count(), 0u);
+
+    auto zip_bytes = writer.write_to_memory();
+    ASSERT_FALSE(zip_bytes.empty());
+
+    {
+        std::ofstream zf(zip_file, std::ios::binary);
+        zf.write(reinterpret_cast<const char *>(zip_bytes.data()), zip_bytes.size());
+    }
+
+    machete::server::ZipReader reader;
+    ASSERT_TRUE(reader.open_file(zip_file));
+    EXPECT_TRUE(reader.has_file("eboot.bin"));
+    EXPECT_TRUE(reader.has_file("param.json"));
+
+    auto res = reader.extract_all(dst_dir, true);
+    EXPECT_TRUE(res.success);
+    EXPECT_GE(res.files_extracted, 2u);
+
+    EXPECT_EQ(access((dst_dir + "/eboot.bin").c_str(), F_OK), 0);
+    EXPECT_EQ(access((dst_dir + "/sce_sys/param.json").c_str(), F_OK), 0);
+
+    struct stat st{};
+    EXPECT_EQ(stat((dst_dir + "/eboot.bin").c_str(), &st), 0);
+    EXPECT_EQ(st.st_mode & 0777, 0777);
+
+    reader.close();
+
+    (void)std::remove((test_dir + "/eboot.bin").c_str());
+    (void)std::remove((test_dir + "/sce_sys/param.json").c_str());
+    (void)rmdir((test_dir + "/sce_sys").c_str());
+    (void)rmdir(test_dir.c_str());
+
+    (void)std::remove((dst_dir + "/eboot.bin").c_str());
+    (void)std::remove((dst_dir + "/sce_sys/param.json").c_str());
+    (void)rmdir((dst_dir + "/sce_sys").c_str());
+    (void)rmdir(dst_dir.c_str());
+    (void)std::remove(zip_file.c_str());
+}
+
+TEST(MacheteZipReaderTest, ExtractsRealDeflateDistributionPackage)
+{
+    const std::string pkg_path = "/Users/thebigmike/Downloads/MacheteSVG_v1.3.0_PS5.zip";
+    if (access(pkg_path.c_str(), F_OK) != 0)
+    {
+        GTEST_SKIP() << "Distribution zip not found at " << pkg_path;
+    }
+
+    machete::server::ZipReader reader;
+    ASSERT_TRUE(reader.open_file(pkg_path));
+    EXPECT_TRUE(reader.has_file("eboot.bin"));
+    EXPECT_TRUE(reader.has_file("param.json"));
+    EXPECT_TRUE(reader.has_file("libc.prx"));
+
+    const auto *entry = reader.find_entry("param.json");
+    ASSERT_NE(entry, nullptr);
+
+    std::vector<std::uint8_t> data;
+    ASSERT_TRUE(reader.extract_to_memory(*entry, data));
+    ASSERT_FALSE(data.empty());
+
+    std::string text(reinterpret_cast<const char *>(data.data()), data.size());
+    EXPECT_NE(text.find("PPSA99001"), std::string::npos);
+
+    reader.close();
+}
+
+TEST(MacheteZipReaderTest, RejectsInvalidCorruptArchive)
+{
+    const std::string bad_file = "/tmp/machete_test_bad.zip";
+    {
+        std::ofstream f(bad_file, std::ios::binary);
+        f << "NOT_A_VALID_ZIP_ARCHIVE_DATA_JUST_RANDOM_TEXT";
+    }
+
+    machete::server::ZipReader reader;
+    EXPECT_FALSE(reader.open_file(bad_file));
+    (void)std::remove(bad_file.c_str());
 }
 
 } // namespace hui::testing
