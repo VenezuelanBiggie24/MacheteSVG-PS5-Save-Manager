@@ -554,23 +554,38 @@ bool synthesize_ps5_param_json(const std::string &title_id,
     }
 
     // Identificar slot primario:
-    // En juegos de PS5, "PROFILE" suele ser unicamente configuracion/opciones y NO contiene el progreso de campana.
-    // El slot primario debe ser la ranura de juego real (ej. AUTOSAVE0, SAVEDATA0, o la ranura que no sea PROFILE con mayor tamano).
+    // Si existe una ranura "PROFILE", DEBE ser la primaria. En Decima Engine (Horizon, Death Stranding)
+    // y la mayoria de motores multi-ranura de PS5, "PROFILE" es el indice maestro y catalogo de guardados.
+    // Si dirName en param.json apunta a AUTOSAVE0 en vez de PROFILE, el juego no encuentra el catalogo
+    // de ranuras y muestra "Datos dañados" o unicamente "Nueva partida".
     std::string primary_slot;
     std::uint64_t primary_size = 0;
 
-    const char *kGameplayPrefixes[] = {
-        "AUTOSAVE", "SAVEDATA", "QUICKSAVE", "MANUAL", "SAVE", "GAME", "SLOT", nullptr
-    };
-    for (int p = 0; kGameplayPrefixes[p] && primary_slot.empty(); ++p)
+    for (const auto &sl : slots)
     {
-        for (const auto &sl : slots)
+        if (sl.first == "PROFILE")
         {
-            if (sl.first.rfind(kGameplayPrefixes[p], 0) == 0)
+            primary_slot = "PROFILE";
+            primary_size = sl.second;
+            break;
+        }
+    }
+
+    if (primary_slot.empty())
+    {
+        const char *kGameplayPrefixes[] = {
+            "AUTOSAVE", "SAVEDATA", "QUICKSAVE", "MANUAL", "SAVE", "GAME", "SLOT", nullptr
+        };
+        for (int p = 0; kGameplayPrefixes[p] && primary_slot.empty(); ++p)
+        {
+            for (const auto &sl : slots)
             {
-                primary_slot = sl.first;
-                primary_size = sl.second;
-                break;
+                if (sl.first.rfind(kGameplayPrefixes[p], 0) == 0)
+                {
+                    primary_slot = sl.first;
+                    primary_size = sl.second;
+                    break;
+                }
             }
         }
     }
@@ -757,7 +772,18 @@ void reconstruct_prospero_metadata(const std::string &title_id,
             }
         }
 
-        if (!existing_dirname.empty())
+        // 1. Identificar el slot primario para param.json:
+        // Si existe sdimg_PROFILE, es obligatoriamente el slot primario maestro (Decima Engine, Capcom, etc.).
+        // Si dirName en param.json apunta a una ranura subordinada (ej. AUTOSAVE0), el juego no encuentra el
+        // catalogo de guardados y muestra "Datos dañados" o solo "Nueva partida".
+        const std::string cand_profile = dst_target + "/sdimg_PROFILE";
+        if (stat(cand_profile.c_str(), &st_sd) == 0 && st_sd.st_size > 0)
+        {
+            primary_slot_file = cand_profile;
+            primary_slot_name = "PROFILE";
+        }
+
+        if (primary_slot_file.empty() && !existing_dirname.empty())
         {
             const std::string cand_existing = dst_target + "/sdimg_" + existing_dirname;
             if (stat(cand_existing.c_str(), &st_sd) == 0 && st_sd.st_size > 0)
@@ -1009,10 +1035,30 @@ void reconstruct_prospero_metadata(const std::string &title_id,
                     dst_target.c_str(), found_ks.c_str());
     }
 
-    // 5. PURGA ESTRICTA DE dst_target (/user/home/<uid>/savedata_prospero/<TitleID>/):
-    // El sistema operativo Prospero exige que esta carpeta contenga EXCLUSIVAMENTE
-    // sdimg_* y keystone. Cualquier param.json, icon0.png, *.png o sce_sys/ provoca que el
-    // daemon sceSaveData marque la carpeta como datos dañados!
+    // Asegurar subdirectorio sce_sys en dst_target (los guardados nativos de PS5 mantienen
+    // metadatos de respaldo icon0.png, param.json y keystone bajo sce_sys/ segun ps5upload / SDK de Prospero)
+    const std::string dst_sce_sys = dst_target + "/sce_sys";
+    ensure_directories_recursive(dst_sce_sys, target_uid, target_gid);
+
+    if (access((meta_target + "/param.json").c_str(), R_OK) == 0)
+    {
+        (void)pfs::copy_file_atomic(meta_target + "/param.json", dst_sce_sys + "/param.json", target_uid, target_gid);
+        (void)chmod((dst_sce_sys + "/param.json").c_str(), 0666);
+    }
+    if (access((meta_target + "/icon0.png").c_str(), R_OK) == 0)
+    {
+        (void)pfs::copy_file_atomic(meta_target + "/icon0.png", dst_sce_sys + "/icon0.png", target_uid, target_gid);
+        (void)chmod((dst_sce_sys + "/icon0.png").c_str(), 0666);
+    }
+    if (!found_ks.empty())
+    {
+        (void)pfs::copy_file_atomic(found_ks, dst_sce_sys + "/keystone", target_uid, target_gid);
+        (void)chmod((dst_sce_sys + "/keystone").c_str(), 0666);
+    }
+    apply_permissions_recursive(dst_sce_sys, target_uid, target_gid);
+
+    // 5. PURGA DE ARCHIVOS SUELTOS EN dst_target (/user/home/<uid>/savedata_prospero/<TitleID>/):
+    // Preservar estrictamente los contenedores sdimg_*, keystone y la subcarpeta oficial sce_sys/
     ScopedDir dclean(dst_target);
     if (dclean.is_valid())
     {
@@ -1020,7 +1066,8 @@ void reconstruct_prospero_metadata(const std::string &title_id,
         {
             if (std::strcmp(ent->d_name, ".") == 0 || std::strcmp(ent->d_name, "..") == 0)
                 continue;
-            if (std::strncmp(ent->d_name, "sdimg_", 6) == 0 || std::strcmp(ent->d_name, "keystone") == 0)
+            if (std::strncmp(ent->d_name, "sdimg_", 6) == 0 || std::strcmp(ent->d_name, "keystone") == 0 ||
+                std::strcmp(ent->d_name, "sce_sys") == 0)
                 continue;
             const std::string foreign_item = dst_target + "/" + ent->d_name;
             struct stat st_f{};
@@ -1229,7 +1276,7 @@ void post_process_restored_save(const scanner::ScannedGame &game,
                             ps_size = static_cast<std::uint64_t>(st_ps.st_size);
                         db::update_or_register_ps5_savedata_db(
                             user_id, active_account_id, paired_tid, psname, ps_size,
-                            game.title, game.title_id);
+                            game.title, paired_tid);
                     }
                 }
             }
@@ -1402,8 +1449,10 @@ void post_process_restored_save(const scanner::ScannedGame &game,
                 }
             }
 
-            // Sincronizar y resignar param.sfo en meta_ps4_user (/user/home/<uid>/savedata_meta/user/<TitleID>/)
-            // En PS4 / PS5 BC, la consola lee param.sfo de esta carpeta para el menu de almacenamiento y el juego
+            // Sincronizar y resignar param.sfo exclusivamente en dst_target (/user/home/<uid>/savedata/<TitleID>/)
+            // En PS5 para retrocompatibilidad de PS4, savedata_meta/user/<TitleID> solo debe contener los iconos
+            // (system0020_icon0.png e icon0.png). La presencia de un param.sfo en meta_ps4_user genera conflicto
+            // con el daemon de retrocompatibilidad y provoca que la consola marque "Datos dañados".
             const std::vector<std::string> sfo_candidates = {
                 backup_folder + "/.meta/param.sfo",
                 backup_folder + "/meta/param.sfo",
@@ -1426,13 +1475,25 @@ void post_process_restored_save(const scanner::ScannedGame &game,
                 }
             }
 
+            ensure_directories_recursive(dst_target + "/sce_sys", target_uid, target_gid);
+
             if (!valid_sfo.empty())
             {
-                (void)pfs::copy_file_atomic(valid_sfo, meta_ps4_user + "/param.sfo", target_uid, target_gid);
-                (void)machete::sfo::resign_param_sfo(meta_ps4_user + "/param.sfo", rp);
-                (void)chmod((meta_ps4_user + "/param.sfo").c_str(), 0666);
+                (void)pfs::copy_file_atomic(valid_sfo, dst_target + "/param.sfo", target_uid, target_gid);
+                (void)pfs::copy_file_atomic(valid_sfo, dst_target + "/sce_sys/param.sfo", target_uid, target_gid);
+                (void)machete::sfo::resign_param_sfo(dst_target + "/param.sfo", rp);
+                (void)machete::sfo::resign_param_sfo(dst_target + "/sce_sys/param.sfo", rp);
+                (void)chmod((dst_target + "/param.sfo").c_str(), 0666);
+                (void)chmod((dst_target + "/sce_sys/param.sfo").c_str(), 0666);
 
-                // Tambien sincronizar <slot>_param.sfo para cada ranura detectada
+                MACHETE_LOG("[RESTORE]", "Synchronized and resigned PS4 save param.sfo in %s (from %s)",
+                            dst_target.c_str(), valid_sfo.c_str());
+            }
+            else
+            {
+                // Si el respaldo carecia de param.sfo externo y la imagen Book/savedata.bin no tenia
+                // un SFO extraible, sintetizamos un descriptor param.sfo con la ranura real detectada
+                std::string primary_slot = save_dir_tid;
                 ScopedDir dslots(dst_target);
                 if (dslots.is_valid())
                 {
@@ -1441,48 +1502,37 @@ void post_process_restored_save(const scanner::ScannedGame &game,
                         const std::string sname = de->d_name;
                         if (machete::pfs::is_valid_ps4_slot_name(dst_target, sname))
                         {
-                            const std::string slot_sfo = meta_ps4_user + "/" + sname + "_param.sfo";
-                            (void)pfs::copy_file_atomic(valid_sfo, slot_sfo, target_uid, target_gid);
-                            (void)machete::sfo::resign_param_sfo(slot_sfo, rp);
-                            (void)chmod(slot_sfo.c_str(), 0666);
+                            primary_slot = sname;
+                            break;
                         }
                     }
                 }
-                MACHETE_LOG("[RESTORE]", "Synchronized and resigned PS4 metadata SFO in %s (from %s)",
-                            meta_ps4_user.c_str(), valid_sfo.c_str());
-            }
-            else
-            {
-                // Si el respaldo carecia de param.sfo externo y la imagen Book/savedata.bin no tenia
-                // un SFO extraible, sintetizamos un descriptor param.sfo de contingencia autentico
-                const std::string synth_sfo = meta_ps4_user + "/param.sfo";
-                if (machete::sfo::synthesize_ps4_save_param_sfo(synth_sfo, save_dir_tid, save_dir_tid,
+                const std::string synth_sfo = dst_target + "/sce_sys/param.sfo";
+                if (machete::sfo::synthesize_ps4_save_param_sfo(synth_sfo, save_dir_tid, primary_slot,
                                                                  game.title, "", "", user_id, active_account_id, 325, 0, nullptr))
                 {
                     (void)chmod(synth_sfo.c_str(), 0666);
-                    ScopedDir dslots(dst_target);
-                    if (dslots.is_valid())
-                    {
-                        while (const dirent *de = readdir(dslots.get()))
-                        {
-                            const std::string sname = de->d_name;
-                            if (machete::pfs::is_valid_ps4_slot_name(dst_target, sname))
-                            {
-                                const std::string slot_sfo = meta_ps4_user + "/" + sname + "_param.sfo";
-                                (void)pfs::copy_file_atomic(synth_sfo, slot_sfo, target_uid, target_gid);
-                                (void)chmod(slot_sfo.c_str(), 0666);
-                            }
-                        }
-                    }
-                    ensure_directories_recursive(dst_target + "/sce_sys", target_uid, target_gid);
-                    (void)pfs::copy_file_atomic(synth_sfo, dst_target + "/sce_sys/param.sfo", target_uid, target_gid);
-                    (void)chmod((dst_target + "/sce_sys/param.sfo").c_str(), 0666);
-                    MACHETE_LOG("[RESTORE]", "Synthesized contingency PS4 param.sfo for %s in %s",
-                                save_dir_tid.c_str(), meta_ps4_user.c_str());
+                    (void)pfs::copy_file_atomic(synth_sfo, dst_target + "/param.sfo", target_uid, target_gid);
+                    (void)chmod((dst_target + "/param.sfo").c_str(), 0666);
+                    MACHETE_LOG("[RESTORE]", "Synthesized contingency PS4 param.sfo for slot %s in %s",
+                                primary_slot.c_str(), dst_target.c_str());
                 }
             }
 
-            // Purgar subdirectorios anomalos dentro de meta_ps4_user pero PRESERVAR los archivos .sfo y .png
+            // Purgar cualquier archivo .sfo residual en meta_ps4_user para dejar UNICAMENTE los iconos oficiales
+            ScopedDir dmeta(meta_ps4_user);
+            if (dmeta.is_valid())
+            {
+                while (const dirent *me = readdir(dmeta.get()))
+                {
+                    const std::string mname = me->d_name;
+                    if (mname.size() >= 4 && mname.substr(mname.size() - 4) == ".sfo")
+                    {
+                        (void)unlink((meta_ps4_user + "/" + mname).c_str());
+                    }
+                }
+            }
+            (void)unlink((meta_ps4_user + "/param.sfo").c_str());
             (void)unlink((meta_ps4_user + "/keystone").c_str());
             (void)unlink((meta_ps4_user + "/sce_sys/param.sfo").c_str());
             (void)unlink((meta_ps4_user + "/sce_sys/icon0.png").c_str());
@@ -2634,7 +2684,7 @@ OperationResult resign_local_ps4_save(const scanner::ScannedGame &game,
     const std::string meta_ps4_user = std::string("/user/home/") + uid_hex + "/savedata_meta/user/" + game.title_id;
     ensure_directories_recursive(meta_ps4_user, target_uid, target_gid);
 
-    // Buscar SFO valido para meta
+    // Sincronizar y resignar param.sfo en save_dir (/user/home/<uid>/savedata/<TitleID>/)
     std::string valid_sfo;
     for (const auto &cand : {save_dir + "/sce_sys/param.sfo", save_dir + "/param.sfo"})
     {
@@ -2647,28 +2697,16 @@ OperationResult resign_local_ps4_save(const scanner::ScannedGame &game,
 
     if (!valid_sfo.empty())
     {
-        (void)pfs::copy_file_atomic(valid_sfo, meta_ps4_user + "/param.sfo", target_uid, target_gid);
-        (void)machete::sfo::resign_param_sfo(meta_ps4_user + "/param.sfo", rp);
-        (void)chmod((meta_ps4_user + "/param.sfo").c_str(), 0666);
-
-        ScopedDir dslots(save_dir);
-        if (dslots.is_valid())
-        {
-            while (const dirent *de = readdir(dslots.get()))
-            {
-                const std::string sname = de->d_name;
-                if (machete::pfs::is_valid_ps4_slot_name(save_dir, sname))
-                {
-                    const std::string slot_sfo = meta_ps4_user + "/" + sname + "_param.sfo";
-                    (void)pfs::copy_file_atomic(valid_sfo, slot_sfo, target_uid, target_gid);
-                    (void)machete::sfo::resign_param_sfo(slot_sfo, rp);
-                    (void)chmod(slot_sfo.c_str(), 0666);
-                }
-            }
-        }
+        (void)machete::sfo::resign_param_sfo(valid_sfo, rp);
+        ensure_directories_recursive(save_dir + "/sce_sys", target_uid, target_gid);
+        (void)pfs::copy_file_atomic(valid_sfo, save_dir + "/param.sfo", target_uid, target_gid);
+        (void)pfs::copy_file_atomic(valid_sfo, save_dir + "/sce_sys/param.sfo", target_uid, target_gid);
+        (void)chmod((save_dir + "/param.sfo").c_str(), 0666);
+        (void)chmod((save_dir + "/sce_sys/param.sfo").c_str(), 0666);
     }
 
-    // Iconos para meta
+    // Iconos para meta_ps4_user: En PS5 para retrocompatibilidad, meta_ps4_user contiene
+    // exclusivamente los iconos (icon0.png y system0020_icon0.png)
     for (const auto &ic : {save_dir + "/sce_sys/icon0.png", save_dir + "/icon0.png"})
     {
         if (access(ic.c_str(), R_OK) == 0)
@@ -2679,7 +2717,20 @@ OperationResult resign_local_ps4_save(const scanner::ScannedGame &game,
         }
     }
 
-    // Limpiar residuos en meta
+    // Purgar cualquier residuo de .sfo o directorios en meta_ps4_user
+    ScopedDir dmeta_r(meta_ps4_user);
+    if (dmeta_r.is_valid())
+    {
+        while (const dirent *me = readdir(dmeta_r.get()))
+        {
+            const std::string mname = me->d_name;
+            if (mname.size() >= 4 && mname.substr(mname.size() - 4) == ".sfo")
+            {
+                (void)unlink((meta_ps4_user + "/" + mname).c_str());
+            }
+        }
+    }
+    (void)unlink((meta_ps4_user + "/param.sfo").c_str());
     (void)unlink((meta_ps4_user + "/keystone").c_str());
     (void)unlink((meta_ps4_user + "/sce_sys/param.sfo").c_str());
     (void)unlink((meta_ps4_user + "/sce_sys/icon0.png").c_str());

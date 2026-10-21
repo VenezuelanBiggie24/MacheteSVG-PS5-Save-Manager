@@ -1290,7 +1290,7 @@ TEST(MacheteParamJsonSizeTest, UpdateFileSizeAndMtimeInParamJson)
 
 TEST(MacheteBuildInfoTest, BuildNumberMatchesExpected)
 {
-    EXPECT_STREQ(machete::build::build_number(), "72");
+    EXPECT_STREQ(machete::build::build_number(), "73");
 }
 
 TEST(MacheteParamJsonDirNameTest, UpdateDirNameInParamJson)
@@ -1405,7 +1405,7 @@ TEST(MachetePs5ParamJsonSynthesisTest, SynthesizeParamJsonFromSlots)
     EXPECT_EQ(access(slot_meta_param.c_str(), F_OK), 0);
     EXPECT_EQ(access(slot_auto_param.c_str(), F_OK), 0);
 
-    // Leer pj_meta y validar contenido (AUTOSAVE0 debe ser el slot primario de campana)
+    // Leer pj_meta y validar contenido (PROFILE debe ser el slot primario maestro)
     {
         std::FILE *f = std::fopen(pj_meta.c_str(), "rb");
         ASSERT_NE(f, nullptr);
@@ -1415,7 +1415,7 @@ TEST(MachetePs5ParamJsonSynthesisTest, SynthesizeParamJsonFromSlots)
         ASSERT_GT(n, 0u);
         const std::string content(buf, n);
         EXPECT_NE(content.find("\"titleId\": \"PPSA01969\""), std::string::npos);
-        EXPECT_NE(content.find("\"dirName\": \"AUTOSAVE0\""), std::string::npos);
+        EXPECT_NE(content.find("\"dirName\": \"PROFILE\""), std::string::npos);
         EXPECT_NE(content.find("DEATH STRANDING"), std::string::npos);
     }
 

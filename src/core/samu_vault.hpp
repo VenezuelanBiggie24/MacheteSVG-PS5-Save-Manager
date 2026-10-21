@@ -53,14 +53,42 @@ inline bool read_sealed_blob(const std::string &path, off_t offset, std::uint8_t
     return (n == 96);
 }
 
-// Localiza y lee el blob sellado de 96 bytes ("pfsSKKey") dentro de un contenedor PS5 (sdimg_*)
-// Escanea los primeros 64 KB buscando la firma exacta "pfsSKKey" (70 66 73 53 4B 4B 65 79)
+// Localiza y lee el blob sellado de 96 bytes dentro de un contenedor PS5 (sdimg_*)
+// En PS5 nativo, el sealed key reside exactamente en el offset 0x800 (2048) del sdimg (ps5upload / garlic-savemgr)
 inline bool read_ps5_sealed_blob(const std::string &sdimg_path, std::uint8_t out_blob[96], off_t *out_offset = nullptr)
 {
+    if (sdimg_path.empty() || !out_blob)
+        return false;
+
     int fd = open(sdimg_path.c_str(), O_RDONLY);
     if (fd < 0)
         return false;
 
+    // 1. Comprobar primero el offset estandar de PS5 nativo 0x800 (2048)
+    std::uint8_t blob_800[96] = {0};
+    const ssize_t r_800 = pread(fd, blob_800, 96, 0x800);
+    if (r_800 == 96)
+    {
+        bool non_zero = false;
+        for (int i = 0; i < 96; ++i)
+        {
+            if (blob_800[i] != 0)
+            {
+                non_zero = true;
+                break;
+            }
+        }
+        if (non_zero)
+        {
+            close(fd);
+            std::memcpy(out_blob, blob_800, 96);
+            if (out_offset)
+                *out_offset = 0x800;
+            return true;
+        }
+    }
+
+    // 2. Fallback: escanear los primeros 64 KB buscando la firma "pfsSKKey"
     constexpr std::size_t kScanBytes = 64 * 1024;
     std::vector<std::uint8_t> buf(kScanBytes, 0);
     const ssize_t n = pread(fd, buf.data(), kScanBytes, 0);
@@ -69,7 +97,6 @@ inline bool read_ps5_sealed_blob(const std::string &sdimg_path, std::uint8_t out
     if (n < 96)
         return false;
 
-    // 1. Buscar la firma exacta de 8 bytes "pfsSKKey" en cualquier offset de los primeros 64 KB
     static const std::uint8_t kPfsSkKeyMagic[8] = {'p', 'f', 's', 'S', 'K', 'K', 'e', 'y'};
     const std::size_t limit = static_cast<std::size_t>(n) - 96;
     for (std::size_t off = 0; off <= limit; ++off)

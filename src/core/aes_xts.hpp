@@ -250,8 +250,11 @@ inline const std::uint8_t Aes128::rcon[10] = {
 class XtsAes128
 {
   public:
-    XtsAes128(const std::uint8_t key[32]) noexcept
-        : cipher1_(key), cipher2_(key + 16)
+    // En Sony PlayStation PFS: tweak_key = key[0..15], data_key = key[16..31]
+    // En estandar IEEE P1619: data_key = key[0..15], tweak_key = key[16..31]
+    explicit XtsAes128(const std::uint8_t key[32], bool sony_pfs_order = true) noexcept
+        : cipher1_(sony_pfs_order ? (key + 16) : key),
+          cipher2_(sony_pfs_order ? key : (key + 16))
     {
     }
 
@@ -351,62 +354,70 @@ inline bool resign_ps4_pfs_container_sectors(const std::string &image_path,
         return false;
     }
 
-    XtsAes128 xts(plain_key);
     constexpr std::size_t kSectorSize = 4096;
     std::vector<std::uint8_t> enc_sector(kSectorSize);
     std::vector<std::uint8_t> dec_sector(kSectorSize);
-
     const std::uint64_t total_sectors = static_cast<std::uint64_t>(file_size / kSectorSize);
-    bool sfo_found_and_patched = false;
 
-    for (std::uint64_t sec = 0; sec < total_sectors; ++sec)
+    // Intentar primero con el orden nativo de Sony PFS (tweak primero, data segundo).
+    // Si no se encuentra ningun SFO valido, intentar con el orden estandar IEEE P1619.
+    const bool order_modes[] = {true, false};
+
+    for (bool sony_order : order_modes)
     {
-        if (std::fseek(f, static_cast<long>(sec * kSectorSize), SEEK_SET) != 0)
-            break;
+        XtsAes128 xts(plain_key, sony_order);
+        bool sfo_found_and_patched = false;
 
-        if (std::fread(enc_sector.data(), 1, kSectorSize, f) != kSectorSize)
-            break;
-
-        xts.decrypt_sector(sec, enc_sector.data(), dec_sector.data(), kSectorSize);
-
-        // Buscar SFO_MAGIC (0x46535000 = "\0PSF") en el sector descifrado
-        for (std::size_t offset = 0; offset + sizeof(sfo::SfoHeader) <= kSectorSize; offset += 4)
+        for (std::uint64_t sec = 0; sec < total_sectors; ++sec)
         {
-            const auto *hdr = reinterpret_cast<const sfo::SfoHeader *>(dec_sector.data() + offset);
-            if (hdr->magic == sfo::SFO_MAGIC && hdr->version == 0x00000101)
+            if (std::fseek(f, static_cast<long>(sec * kSectorSize), SEEK_SET) != 0)
+                break;
+
+            if (std::fread(enc_sector.data(), 1, kSectorSize, f) != kSectorSize)
+                break;
+
+            xts.decrypt_sector(sec, enc_sector.data(), dec_sector.data(), kSectorSize);
+
+            // Buscar SFO_MAGIC (0x46535000 = "\0PSF") en el sector descifrado
+            for (std::size_t offset = 0; offset + sizeof(sfo::SfoHeader) <= kSectorSize; offset += 4)
             {
-                // Validar que los offsets de tabla caigan dentro de limites razonables
-                if (offset + hdr->key_table_offset < kSectorSize &&
-                    offset + hdr->data_table_offset < kSectorSize &&
-                    hdr->data_table_offset >= hdr->key_table_offset)
+                const auto *hdr = reinterpret_cast<const sfo::SfoHeader *>(dec_sector.data() + offset);
+                if (hdr->magic == sfo::SFO_MAGIC && hdr->version == 0x00000101)
                 {
-                    // Comprobar si parece un descriptor de guardado autentico
-                    std::vector<std::uint8_t> sfo_buf(dec_sector.begin() + offset, dec_sector.end());
-                    sfo::SfoSaveMetadata meta;
-                    if (sfo::read_sfo_metadata_from_buffer(sfo_buf.data(), sfo_buf.size(), meta) &&
-                        (meta.has_account_id || meta.has_params || meta.category == "sd"))
+                    // Validar que los offsets de tabla caigan dentro de limites razonables
+                    if (offset + hdr->key_table_offset < kSectorSize &&
+                        offset + hdr->data_table_offset < kSectorSize &&
+                        hdr->data_table_offset >= hdr->key_table_offset)
                     {
-                        bool modified = false;
-                        if (sfo::resign_param_sfo_buffer(sfo_buf, params, modified) && modified)
+                        // Comprobar si parece un descriptor de guardado autentico
+                        std::vector<std::uint8_t> sfo_buf(dec_sector.begin() + offset, dec_sector.end());
+                        sfo::SfoSaveMetadata meta;
+                        if (sfo::read_sfo_metadata_from_buffer(sfo_buf.data(), sfo_buf.size(), meta) &&
+                            (meta.has_account_id || meta.has_params || meta.category == "sd"))
                         {
-                            // Copiar el SFO resignado de vuelta al sector descifrado
-                            std::memcpy(dec_sector.data() + offset, sfo_buf.data(), sfo_buf.size());
-
-                            // Re-encriptar el sector con AES-128-XTS
-                            xts.encrypt_sector(sec, dec_sector.data(), enc_sector.data(), kSectorSize);
-
-                            // Escribir el sector re-encriptado directamente en el archivo PFS
-                            if (std::fseek(f, static_cast<long>(sec * kSectorSize), SEEK_SET) == 0 &&
-                                std::fwrite(enc_sector.data(), 1, kSectorSize, f) == kSectorSize)
+                            bool modified = false;
+                            if (sfo::resign_param_sfo_buffer(sfo_buf, params, modified) && modified)
                             {
-                                std::fflush(f);
-                                sfo_found_and_patched = true;
-                                MACHETE_LOG("[PFS]", "Resigned param.sfo in-place inside PFS container sector %llu of %s",
-                                            static_cast<unsigned long long>(sec), image_path.c_str());
+                                // Copiar el SFO resignado de vuelta al sector descifrado
+                                std::memcpy(dec_sector.data() + offset, sfo_buf.data(), sfo_buf.size());
 
-                                if (out_extracted_sfo)
+                                // Re-encriptar el sector con AES-128-XTS
+                                xts.encrypt_sector(sec, dec_sector.data(), enc_sector.data(), kSectorSize);
+
+                                // Escribir el sector re-encriptado directamente en el archivo PFS
+                                if (std::fseek(f, static_cast<long>(sec * kSectorSize), SEEK_SET) == 0 &&
+                                    std::fwrite(enc_sector.data(), 1, kSectorSize, f) == kSectorSize)
                                 {
-                                    *out_extracted_sfo = sfo_buf;
+                                    std::fflush(f);
+                                    sfo_found_and_patched = true;
+                                    MACHETE_LOG("[PFS]", "Resigned param.sfo in-place inside PFS container sector %llu of %s (mode=%s)",
+                                                static_cast<unsigned long long>(sec), image_path.c_str(),
+                                                sony_order ? "SonyPFS" : "IEEE");
+
+                                    if (out_extracted_sfo)
+                                    {
+                                        *out_extracted_sfo = sfo_buf;
+                                    }
                                 }
                             }
                         }
@@ -414,10 +425,16 @@ inline bool resign_ps4_pfs_container_sectors(const std::string &image_path,
                 }
             }
         }
+
+        if (sfo_found_and_patched)
+        {
+            std::fclose(f);
+            return true;
+        }
     }
 
     std::fclose(f);
-    return sfo_found_and_patched;
+    return false;
 }
 
 } // namespace machete::crypto
