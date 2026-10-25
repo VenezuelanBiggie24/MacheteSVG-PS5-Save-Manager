@@ -1,14 +1,21 @@
-# MacheteSVG (PS5 & PS4 Savegame Manager & Web Save Station)
+# MacheteSaveGameManager (PS5 & PS4 Savegame Manager & Web Save Station)
 
 ![MacheteSVG Banner](docs/screenshots/banner.png)
 
 [![Platform](https://img.shields.io/badge/Platform-PlayStation_5-blue.svg)](https://github.com/VenezuelanBiggie24/MacheteSVG-PS5-Save-Manager)
 [![Firmware](https://img.shields.io/badge/Firmware-All_Jailbroken_Firmwares-blueviolet.svg)](https://github.com/VenezuelanBiggie24/MacheteSVG-PS5-Save-Manager)
-[![Title ID](https://img.shields.io/badge/Title_ID-PPSA99001-informational.svg)](https://github.com/VenezuelanBiggie24/MacheteSVG-PS5-Save-Manager)
+[![Title ID](https://img.shields.io/badge/Title_ID-PPSA99700-informational.svg)](https://github.com/VenezuelanBiggie24/MacheteSVG-PS5-Save-Manager)
 [![License](https://img.shields.io/badge/License-GPL_v3.0-green.svg)](LICENSE)
-[![Release](https://img.shields.io/badge/Release-v1.2.9-orange.svg)](https://github.com/VenezuelanBiggie24/MacheteSVG-PS5-Save-Manager/releases/tag/v1.2.9)
+[![Release](https://img.shields.io/badge/Release-v1.3.0-orange.svg)](https://github.com/VenezuelanBiggie24/MacheteSVG-PS5-Save-Manager/releases/tag/v1.3.0)
 
-**MacheteSVG** is a native PlayStation 5 homebrew application designed to back up and restore save data (*savegames*) for both PS5 native titles and PS4 backwards-compatible games with **100% reliability**, zero risk of data corruption (preventing errors `CE-108255-1` and `CE-107109-8`), cross-console PS5 Save Dummy injection, Apollo-style PS4 auto-resigning with savedata.db corruption repair, and an embedded high-speed **Web Save Station** HTTP server (:8383) featuring an **in-app QR Code** for instant one-scan access from any smartphone, tablet, or PC on your local Wi-Fi / LAN.
+**MacheteSaveGameManager** (MacheteSVG) is a native PlayStation 5 homebrew application designed to back up and restore save data (*savegames*) for both PS5 native titles and PS4 backwards-compatible games with **100% reliability**, zero risk of data corruption (preventing errors `CE-108255-1` and `CE-107109-8`), cross-console PS5 Save Dummy injection, Apollo-style PS4 auto-resigning with savedata.db corruption repair, and an embedded high-speed **Web Save Station** HTTP server (:8383) featuring an **in-app QR Code** for instant one-scan access from any smartphone, tablet, or PC on your local Wi-Fi / LAN.
+
+> [!IMPORTANT]
+> **Active Development & Hardware Cryptography Disclosure**:
+> - **Continuous Development:** MacheteSaveGameManager is in continuous active development to resolve issues as they arise and refine compatibility across titles.
+> - **Compatibility Scope:** Full compatibility across all PS5 and PS4 titles is not guaranteed due to varying game engines, proprietary internal checksums, and custom archive formats.
+> - **Log Sharing & Feedback:** If you encounter an issue with any title, please export your `machete.log` (available via the Web Save Station or at `/data/homebrew/PPSA99700/machete.log`) and share it with a description of the failure. Community reports allow us to study game-specific behaviors and expand compatibility.
+> - **PS5 Cryptography Limitations (Foreign Saves):** PlayStation 5 root hardware cryptographic keys (SAMU keystore) remain private and unreleased in the scene. As a result, direct offline re-encryption of foreign PS5 saves is currently impossible on any tool. MacheteSaveGameManager overcomes this by mounting the container via kernel `/dev/pfsmgr` and hot-injecting decrypted data into an authentic local Save Dummy container sealed by your console's SAMU.
 
 ---
 
@@ -30,18 +37,18 @@ The user interface is powered by a custom hardware-accelerated OpenGL 4.6 SDF re
 
 ### Installation (Easy FTP Method)
 
-1. Download `MacheteSVG_v1.2.9_PS5.zip` from [Releases](https://github.com/VenezuelanBiggie24/MacheteSVG-PS5-Save-Manager/releases).
-2. Extract the ZIP archive on your computer to obtain the `PPSA99001` application folder.
+1. Download `PPSA99700.zip` (or `MacheteSaveGameManager_v1.3.0_PS5.zip`) from [Releases](https://github.com/VenezuelanBiggie24/MacheteSVG-PS5-Save-Manager/releases).
+2. Extract the ZIP archive on your computer to obtain the `PPSA99700` application folder.
 3. Enable the FTP server on your PlayStation 5 (via OnionHEN, etaHEN, or your jailbreak payload).
-4. Using an FTP client (FileZilla, WinSCP, Cyberduck, etc.), copy the entire `PPSA99001` folder directly into:
+4. Using an FTP client (FileZilla, WinSCP, Cyberduck, etc.), copy the entire `PPSA99700` folder directly into:
    ```
    /data/homebrew/
    ```
    The resulting path on your PS5 must be:
    ```
-   /data/homebrew/PPSA99001/eboot.bin
+   /data/homebrew/PPSA99700/eboot.bin
    ```
-5. Launch **MacheteSVG** directly from your homebrew launcher (Itemzflow, ProsperoStore, or system menu)!
+5. Launch **MacheteSaveGameManager** directly from your homebrew launcher (Itemzflow, ProsperoStore, or system menu)!
 
 ---
 
@@ -64,7 +71,7 @@ The user interface is powered by a custom hardware-accelerated OpenGL 4.6 SDF re
 - **One-Touch Activation:** Toggle the server on/off via the top header badge or by pressing **Triangle** on your DualSense controller.
 
 #### 3. Autonomous Sandbox Escape & Community Title ID Standard
-- **Title ID `PPSA99001`:** Conforms to the community-established homebrew Title ID convention (`PPSA99xxx`, adopted by projects such as ProsperoStore `PPSA99000`) to guarantee zero conflicts with retail PlayStation Store software.
+- **Title ID `PPSA99700`:** Conforms to the community-established homebrew Title ID convention (`PPSA99xxx`, adopted by projects such as ProsperoStore `PPSA99000` and Machete AI Studio `PPSA99699`) to guarantee zero conflicts with retail PlayStation Store software.
 - **Embedded Lapy Daemon:** Packages `lapy_jb_daemon.elf` directly within the application package (`/app0/lapy_jb/`).
 - **Local ELF Loader Auto-Launch:** Connects autonomously to `127.0.0.1:9021` to trigger root privilege escalation (`ucred` credential elevation) through `/download0/etahen_jailbreak`. No manual third-party payload senders are needed.
 - **Live Jailbreak Monitor:** Dynamic status indicator displaying root authorization status with automatic background retry logic.
@@ -98,6 +105,13 @@ Backups follow an organized, sanitized filesystem layout across all supported me
 
 ## Documentación en Español (Spanish Documentation)
 
+> [!IMPORTANTE]
+> **Aviso de Desarrollo Activo y Divulgacion Criptografica de PS5**:
+> - **Desarrollo Continuo y Activo:** MacheteSaveGameManager se encuentra en desarrollo activo y constante para corregir incidencias que puedan surgir y perfeccionar la compatibilidad con cada actualizacion.
+> - **Alcance de Compatibilidad:** No se garantiza compatibilidad al 100% con todos los titulos de PS5 o PS4 debido a particularidades en motores de juego, firmas internas y capas de cifrado propietario de cada desarrollador.
+> - **Envio de Logs y Retroalimentacion:** Si encuentras un juego que no restaure o respalde correctamente, descarga el registro `machete.log` (disponible directamente con 1 clic desde la Estacion Web Local o en `/data/homebrew/PPSA99700/machete.log`) y compartelo junto con un comentario detallado del problema. Tu colaboracion permite estudiar la falla e incorporar soluciones especificas.
+> - **Estado Criptografico de PS5 (Partidas de Otras Consolas):** Las claves maestras criptograficas de hardware de PlayStation 5 (SAMU keystore) aun no estan disponibles publicamente en la scene. En consecuencia, el recifrado directo offline de partidas de PS5 entre consolas distintas no es posible en ninguna herramienta. MacheteSaveGameManager sortea esta limitacion montando el contenedor mediante `/dev/pfsmgr` e inyectando en caliente los datos desencriptados dentro de un Save Dummy local autentico que el procesador SAMU de tu consola sella con sus claves legitimas.
+
 ### Galería de Capturas de Pantalla
 
 La interfaz gráfica cuenta con un renderizador SDF sobre OpenGL 4.6 acelerado por hardware que funciona a 60 FPS fluidos con diseño translúcido "Liquid Glass", vista dividida, carátulas en tiempo real, física de resortes y respuesta sonora completa de DualSense.
@@ -114,18 +128,18 @@ La interfaz gráfica cuenta con un renderizador SDF sobre OpenGL 4.6 acelerado p
 
 ### Instalación (Método Fácil vía FTP)
 
-1. Descarga `MacheteSVG_v1.2.9_PS5.zip` desde la sección [Releases](https://github.com/VenezuelanBiggie24/MacheteSVG-PS5-Save-Manager/releases).
-2. Extrae el archivo ZIP en tu computadora para obtener la carpeta `PPSA99001`.
+1. Descarga `PPSA99700.zip` (o `MacheteSaveGameManager_v1.3.0_PS5.zip`) desde la sección [Releases](https://github.com/VenezuelanBiggie24/MacheteSVG-PS5-Save-Manager/releases).
+2. Extrae el archivo ZIP en tu computadora para obtener la carpeta `PPSA99700`.
 3. Habilita el servidor FTP en tu PlayStation 5 (a través de OnionHEN, etaHEN o tu payload jailbreak).
-4. Usando un cliente FTP (FileZilla, WinSCP, Cyberduck, etc.), copia la carpeta `PPSA99001` completa directamente en:
+4. Usando un cliente FTP (FileZilla, WinSCP, Cyberduck, etc.), copia la carpeta `PPSA99700` completa directamente en:
    ```
    /data/homebrew/
    ```
    La ruta resultante en tu PS5 debe ser:
    ```
-   /data/homebrew/PPSA99001/eboot.bin
+   /data/homebrew/PPSA99700/eboot.bin
    ```
-5. Inicia **MacheteSVG** directamente desde tu lanzador de homebrew (Itemzflow, ProsperoStore o menú principal).
+5. Inicia **MacheteSaveGameManager** directamente desde tu lanzador de homebrew (Itemzflow, ProsperoStore o menú principal).
 
 ---
 
@@ -148,7 +162,7 @@ La interfaz gráfica cuenta con un renderizador SDF sobre OpenGL 4.6 acelerado p
 - **Activación Rápida:** Enciende o apaga el servidor con un solo toque desde la cabecera superior o pulsando el botón **Triángulo** en el mando DualSense.
 
 #### 3. Escape Autónomo del Sandbox y Convención de Title ID
-- **Title ID `PPSA99001`:** Cumple con la nomenclatura comunitaria de homebrew (`PPSA99xxx`) para prevenir conflictos con títulos oficiales de PlayStation Store.
+- **Title ID `PPSA99700`:** Cumple con la nomenclatura comunitaria de homebrew (`PPSA99xxx`) para prevenir conflictos con títulos oficiales de PlayStation Store.
 - **Demonio Lapy Incluido:** Integra `lapy_jb_daemon.elf` dentro de `/app0/lapy_jb/`.
 - **Lanzamiento Automático:** Se conecta al cargador ELF local (`127.0.0.1:9021`) y solicita la elevación de privilegios root (`ucred`) a través de `/download0/etahen_jailbreak`. No se necesitan aplicaciones de inyección adicionales.
 - **Monitor de Jailbreak:** Indicador dinámico de estado root con reintento automático en segundo plano.
@@ -188,7 +202,7 @@ MacheteSVG/
 │   └── screenshots/       # Visual assets, banners, and real hardware captures
 ├── sce_sys/
 │   ├── icon0.png          # High-resolution 512x512 Liquid Glass icon
-│   ├── param.json         # PS5 application manifest (Title ID: PPSA99001)
+│   ├── param.json         # PS5 application manifest (Title ID: PPSA99700)
 │   └── snd0.at9           # System background audio
 ├── src/
 │   ├── app/               # Main application loop, shell, and context

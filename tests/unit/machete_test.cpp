@@ -48,7 +48,7 @@ TEST_F(MacheteTest, ConceptCreationAndIdentity)
 {
     ASSERT_NE(machete_, nullptr);
     EXPECT_STREQ(machete_->info().id, "machete");
-    EXPECT_STREQ(machete_->info().name, "MacheteSVG Save Manager");
+    EXPECT_STREQ(machete_->info().name, "MacheteSaveGameManager");
 }
 
 TEST_F(MacheteTest, InitialDrawIsFiniteAndNotEmpty)
@@ -679,7 +679,15 @@ TEST(MacheteServerTest, HttpApiEndpointsAndSecurity)
     std::string trav_dl = test_http_request(test_port, "GET /api/download/../../etc/passwd HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n");
     EXPECT_NE(trav_dl.find("HTTP/1.1 400 Bad Request"), std::string::npos);
 
-    // 7. Security rejection on invalid /api/update upload
+    // 7. Security rejection when update module is disabled by default for store launch
+    EXPECT_FALSE(server.is_update_module_enabled());
+    std::string disabled_resp = test_http_request(test_port, "POST /api/update HTTP/1.1\r\nHost: localhost\r\nContent-Length: 5\r\nConnection: close\r\n\r\nHELLO");
+    EXPECT_NE(disabled_resp.find("HTTP/1.1 403 Forbidden"), std::string::npos);
+    EXPECT_NE(disabled_resp.find("deshabilitado"), std::string::npos);
+
+    // 7b. Security rejection on invalid /api/update upload when enabled
+    server.set_update_module_enabled(true);
+    EXPECT_TRUE(server.is_update_module_enabled());
     std::string bad_update = test_http_request(test_port, "POST /api/update HTTP/1.1\r\nHost: localhost\r\nContent-Length: 5\r\nConnection: close\r\n\r\nHELLO");
     EXPECT_NE(bad_update.find("HTTP/1.1 400 Bad Request"), std::string::npos);
 
@@ -692,7 +700,7 @@ TEST(MacheteServerTest, HttpApiEndpointsAndSecurity)
             std::ofstream f(ota_temp + "/eboot.bin", std::ios::binary);
             f << "TEST_EBOOT_OTA";
         }
-        pkg_writer.add_directory(ota_temp, "PPSA99001");
+        pkg_writer.add_directory(ota_temp, "PPSA99700");
         auto zip_data = pkg_writer.write_to_memory();
         (void)std::remove((ota_temp + "/eboot.bin").c_str());
         (void)rmdir(ota_temp.c_str());
@@ -709,11 +717,9 @@ TEST(MacheteServerTest, HttpApiEndpointsAndSecurity)
         // 8b. Disabling update module returns 403 Forbidden
         server.set_update_module_enabled(false);
         EXPECT_FALSE(server.is_update_module_enabled());
-        std::string disabled_resp = test_http_request(test_port, req);
-        EXPECT_NE(disabled_resp.find("HTTP/1.1 403 Forbidden"), std::string::npos);
-        EXPECT_NE(disabled_resp.find("deshabilitado"), std::string::npos);
-        server.set_update_module_enabled(true);
-        EXPECT_TRUE(server.is_update_module_enabled());
+        std::string dis_resp = test_http_request(test_port, req);
+        EXPECT_NE(dis_resp.find("HTTP/1.1 403 Forbidden"), std::string::npos);
+        EXPECT_NE(dis_resp.find("deshabilitado"), std::string::npos);
     }
 
     // 9. Shin-chan animation endpoints for Web Updater
@@ -1723,11 +1729,11 @@ TEST(MacheteZipReaderTest, ExtractsStoreArchiveWithPermissionsAndIntegrity)
     }
     {
         std::ofstream f(test_dir + "/sce_sys/param.json", std::ios::binary);
-        f << "{\"titleId\":\"PPSA99001\",\"titleName\":\"MacheteSVG\"}";
+        f << "{\"titleId\":\"PPSA99700\",\"titleName\":\"MacheteSaveGameManager\"}";
     }
 
     machete::server::ZipWriter writer;
-    writer.add_directory(test_dir, "PPSA99001");
+    writer.add_directory(test_dir, "PPSA99700");
     writer.prepare();
     EXPECT_GT(writer.entry_count(), 0u);
 
@@ -1771,7 +1777,7 @@ TEST(MacheteZipReaderTest, ExtractsStoreArchiveWithPermissionsAndIntegrity)
 
 TEST(MacheteZipReaderTest, ExtractsRealDeflateDistributionPackage)
 {
-    const std::string pkg_path = "/Users/thebigmike/Downloads/MacheteSVG_v1.3.0_PS5.zip";
+    const std::string pkg_path = "/Users/thebigmike/Downloads/PPSA99700.zip";
     if (access(pkg_path.c_str(), F_OK) != 0)
     {
         GTEST_SKIP() << "Distribution zip not found at " << pkg_path;
@@ -1791,7 +1797,7 @@ TEST(MacheteZipReaderTest, ExtractsRealDeflateDistributionPackage)
     ASSERT_FALSE(data.empty());
 
     std::string text(reinterpret_cast<const char *>(data.data()), data.size());
-    EXPECT_NE(text.find("PPSA99001"), std::string::npos);
+    EXPECT_NE(text.find("PPSA99700"), std::string::npos);
 
     reader.close();
 }
@@ -1839,7 +1845,7 @@ TEST(MacheteZipReaderTest, CleansUpObsoleteFilesAndDirectories)
     }
 
     machete::server::ZipWriter writer;
-    writer.add_directory(test_dir, "PPSA99001");
+    writer.add_directory(test_dir, "PPSA99700");
     writer.prepare();
     auto zip_bytes = writer.write_to_memory();
     ASSERT_FALSE(zip_bytes.empty());

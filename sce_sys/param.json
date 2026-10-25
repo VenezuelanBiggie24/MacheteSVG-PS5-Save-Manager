@@ -12,9 +12,9 @@
   "attribute": 0,
   "attribute2": 0,
   "attribute3": 0,
-  "conceptId": "99001",
+  "conceptId": "99700",
   "contentBadgeType": 1,
-  "contentId": "UP9000-PPSA99001_00-MACHETESVG000000",
+  "contentId": "UP9000-PPSA99700_00-MACHETESVG000000",
   "contentVersion": "01.030.000",
   "downloadDataSize": 256,
   "gameIntent": {
@@ -31,13 +31,13 @@
   "localizedParameters": {
     "defaultLanguage": "en-US",
     "en-US": {
-      "titleName": "MacheteSVG"
+      "titleName": "MacheteSaveGameManager"
     },
     "es-ES": {
-      "titleName": "MacheteSVG"
+      "titleName": "MacheteSaveGameManager"
     },
     "es-419": {
-      "titleName": "MacheteSVG"
+      "titleName": "MacheteSaveGameManager"
     }
   },
   "masterVersion": "01.00",
@@ -48,6 +48,6 @@
   },
   "requiredSystemSoftwareVersion": "0x0000000000000000",
   "sdkVersion": "0x0000000000000000",
-  "titleId": "PPSA99001",
+  "titleId": "PPSA99700",
   "versionFileUri": ""
 }

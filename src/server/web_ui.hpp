@@ -19,7 +19,7 @@ constexpr std::string_view kWebUiHtml = R"rawhtml(<!DOCTYPE html>
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>MacheteSVG - PS5 Save Station</title>
+  <title>MacheteSaveGameManager - PS5 Save Station</title>
   <style>
     :root {
       --bg: #07090e;
@@ -757,7 +757,7 @@ constexpr std::string_view kWebUiHtml = R"rawhtml(<!DOCTYPE html>
   <header>
     <a href="/" class="brand">
       <div class="brand-icon" style="overflow: hidden; padding: 0;">
-        <img src="/api/logo" alt="MacheteSVG Logo" style="width: 100%; height: 100%; object-fit: cover; border-radius: var(--radius-sm);" onerror="this.style.display='none'; this.nextElementSibling.style.display='block';">
+        <img src="/api/logo" alt="MacheteSaveGameManager Logo" style="width: 100%; height: 100%; object-fit: cover; border-radius: var(--radius-sm);" onerror="this.style.display='none'; this.nextElementSibling.style.display='block';">
         <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#ffffff" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" style="display: none;">
           <rect x="2" y="4" width="20" height="16" rx="4"></rect>
           <path d="M6 12h4"></path>
@@ -768,8 +768,8 @@ constexpr std::string_view kWebUiHtml = R"rawhtml(<!DOCTYPE html>
       </div>
       <div>
         <div class="brand-title">
-          <span>MacheteSVG</span>
-          <span class="version-tag" id="main-header-version">PPSA99001 v1.3.0</span>
+          <span>MacheteSaveGameManager</span>
+          <span class="version-tag" id="main-header-version">PPSA99700 v1.3.0</span>
         </div>
         <div class="brand-subtitle">Estación Web Local & Gestor de Partidas PS5 / PS4</div>
       </div>
@@ -974,7 +974,7 @@ constexpr std::string_view kWebUiHtml = R"rawhtml(<!DOCTYPE html>
       <div class="modal-body" style="gap: 1.25rem;">
         <div style="background: rgba(99, 102, 241, 0.08); border: 1px solid rgba(99, 102, 241, 0.25); border-radius: var(--radius-sm); padding: 1rem; font-size: 0.84rem; line-height: 1.5; color: #cbd5e1;">
           <strong style="color: #ffffff; display: block; margin-bottom: 0.35rem;">Actualizacion 100% Limpia (Depuracion de archivos viejos y reinicio de log):</strong>
-          Sube el archivo <code>.zip</code> de la nueva version (ejemplo: <code>MacheteSVG_v1.3.0_PS5.zip</code>). La consola descomprimira los archivos en <code>/data/homebrew/PPSA99001/</code>, eliminara automaticamente cualquier archivo o carpeta obsoleta que ya no pertenezca a la nueva version, reiniciara el archivo <code>machete.log</code> para una sesion completamente fresca, aplicara permisos <code>0777</code> y limpiara temporales, exactamente igual a un borrado y subida limpia via FTP.
+          Sube el archivo <code>.zip</code> de la nueva version (ejemplo: <code>PPSA99700.zip</code>). La consola descomprimira los archivos en <code>/data/homebrew/PPSA99700/</code>, eliminara automaticamente cualquier archivo o carpeta obsoleta que ya no pertenezca a la nueva version, reiniciara el archivo <code>machete.log</code> para una sesion completamente fresca, aplicara permisos <code>0777</code> y limpiara temporales, exactamente igual a un borrado y subida limpia via FTP.
         </div>
 
         <!-- Escenario de Animaciones Shin-chan (Consistencia Visual & Alta Fidelidad) -->
@@ -1087,7 +1087,7 @@ constexpr std::string_view kWebUiHtml = R"rawhtml(<!DOCTYPE html>
 
   <!-- Footer -->
   <footer>
-    MacheteSVG • Disenado para PlayStation 5 con Jailbreak • Arquitectura Cero Corrupcion (PFS Mount + Apollo Resign)
+    MacheteSaveGameManager • Disenado para PlayStation 5 con Jailbreak • Arquitectura Cero Corrupcion (PFS Mount + Apollo Resign)
   </footer>
 
   <script>
@@ -1120,12 +1120,16 @@ constexpr std::string_view kWebUiHtml = R"rawhtml(<!DOCTYPE html>
           const data = await res.json();
           document.getElementById('console-ip').textContent = `${data.ip}:${data.port}`;
           document.getElementById('stat-port').textContent = data.port;
+          if (data.updater_enabled === false) {
+            const upBtn = document.getElementById('btn-open-updater');
+            if (upBtn) upBtn.style.display = 'none';
+          }
           if (data.version) {
             const vLabel = `v${data.version}${data.build ? ' (Build ' + data.build + ')' : ''}`;
             const el = document.getElementById('updater-curr-version');
             if (el) el.textContent = vLabel;
             const hdrEl = document.getElementById('main-header-version');
-            if (hdrEl) hdrEl.textContent = `PPSA99001 ${vLabel}`;
+            if (hdrEl) hdrEl.textContent = `PPSA99700 ${vLabel}`;
           }
         }
       } catch (e) {

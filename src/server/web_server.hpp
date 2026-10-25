@@ -79,7 +79,7 @@ private:
 
     std::atomic<bool> running_{false};
     std::atomic<bool> stop_requested_{false};
-    std::atomic<bool> update_module_enabled_{true};
+    std::atomic<bool> update_module_enabled_{false};
     std::uint16_t port_{kDefaultPort};
     int server_sock_{-1};
     pthread_t thread_{0};

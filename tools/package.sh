@@ -6,12 +6,12 @@
 set -euo pipefail
 
 root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
-title_id="PPSA99001"
-app_name="MacheteSVG"
+title_id="PPSA99700"
+app_name="MacheteSaveGameManager"
 version="1.3.0"
 
 echo "=================================================="
-echo "   Empaquetador de Distribución de MacheteSVG     "
+echo "   Empaquetador de Distribución de MacheteSaveGameManager     "
 echo "=================================================="
 
 # 1. Validar recursos
@@ -58,7 +58,7 @@ rm -rf "$root/dist/lapy_jb" "$root/dist/PPSA00001"
 # 3. Crear guía de instalación bilingüe (Nombre en inglés: INSTRUCTIONS.txt, Inglés primero, Español después)
 cat << 'EOF' > "$dist_dir/INSTRUCTIONS.txt"
 =====================================================
-   MacheteSVG v1.3.0 - PS5 & PS4 Savegame Manager
+   MacheteSaveGameManager v1.3.0 - PS5 & PS4 Savegame Manager
 =====================================================
 
 [ENGLISH GUIDE]
@@ -69,10 +69,10 @@ SYSTEM REQUIREMENTS & COMPATIBILITY:
 - Save Formats: PlayStation 5 native titles and PlayStation 4 backwards-compatible (BC) games
 
 AUTONOMOUS & FULLY SELF-CONTAINED:
-- MacheteSVG contains everything needed to operate out of the box.
+- MacheteSaveGameManager contains everything needed to operate out of the box.
 - No external daemons or payload senders are required.
-- If a resident daemon is running, MacheteSVG detects and uses it.
-- If no daemon is running, MacheteSVG automatically launches its embedded daemon
+- If a resident daemon is running, MacheteSaveGameManager detects and uses it.
+- If no daemon is running, MacheteSaveGameManager automatically launches its embedded daemon
   via the local loader on 127.0.0.1:9021 without requiring user intervention.
 
 KEY FEATURES:
@@ -93,24 +93,24 @@ KEY FEATURES:
      instantly connect from your mobile device camera without typing.
 
 PACKAGE CONTENTS:
-- PPSA99001/eboot.bin             (Signed native application executable)
-- PPSA99001/sce_module/libc.prx   (Prospero runtime compatibility layer)
-- PPSA99001/sce_sys/param.json    (Title ID: PPSA99001 package metadata)
-- PPSA99001/sce_sys/icon0.png     (Official Liquid Glass Memory Card icon)
-- PPSA99001/assets/               (SDF fonts, UI graphics, soundbank)
-- PPSA99001/daemon/               (Embedded privilege escalation daemon)
-- PPSA99001/INSTRUCTIONS.txt      (Installation and operational guide)
-- PPSA99001/LEGAL.txt             (License, warranty, and trademark notices)
+- PPSA99700/eboot.bin             (Signed native application executable)
+- PPSA99700/sce_module/libc.prx   (Prospero runtime compatibility layer)
+- PPSA99700/sce_sys/param.json    (Title ID: PPSA99700 package metadata)
+- PPSA99700/sce_sys/icon0.png     (Official Liquid Glass Memory Card icon)
+- PPSA99700/assets/               (SDF fonts, UI graphics, soundbank)
+- PPSA99700/daemon/               (Embedded privilege escalation daemon)
+- PPSA99700/INSTRUCTIONS.txt      (Installation and operational guide)
+- PPSA99700/LEGAL.txt             (License, warranty, and trademark notices)
 
 INSTALLATION INSTRUCTIONS (EASY FTP METHOD):
 1. Ensure your PS5 and computer/phone are connected to the same local network.
 2. Enable the FTP server on your PS5 (via OnionHEN / etaHEN settings or payload).
 3. Connect using any FTP client (FileZilla, WinSCP, Cyberduck, etc.).
-4. Copy the entire "PPSA99001" folder directly into:
+4. Copy the entire "PPSA99700" folder directly into:
      /data/homebrew/
    The resulting path must be:
-     /data/homebrew/PPSA99001/eboot.bin
-5. Launch MacheteSVG directly from your homebrew launcher or system menu!
+     /data/homebrew/PPSA99700/eboot.bin
+5. Launch MacheteSaveGameManager directly from your homebrew launcher or system menu!
 
 CONTROLLER SHORTCUTS:
 - D-Pad: Navigate game list and menus
@@ -130,10 +130,10 @@ REQUISITOS DEL SISTEMA Y COMPATIBILIDAD:
 - Formatos: Títulos nativos de PlayStation 5 y juegos de PS4 en retrocompatibilidad (BC)
 
 TOTALMENTE AUTONOMO Y AUTOCONTENIDO:
-- MacheteSVG incluye todo lo necesario para funcionar de inmediato.
+- MacheteSaveGameManager incluye todo lo necesario para funcionar de inmediato.
 - No se requieren demonios externos ni aplicaciones de inyección de payloads.
-- Si un demonio residente está activo, MacheteSVG lo detecta y lo utiliza.
-- Si no hay ningún demonio en ejecución, MacheteSVG auto-lanza su demonio integrado
+- Si un demonio residente está activo, MacheteSaveGameManager lo detecta y lo utiliza.
+- Si no hay ningún demonio en ejecución, MacheteSaveGameManager auto-lanza su demonio integrado
   mediante el cargador local en 127.0.0.1:9021 de forma transparente.
 
 CARACTERISTICAS PRINCIPALES:
@@ -155,24 +155,24 @@ CARACTERISTICAS PRINCIPALES:
      movil para entrar al instante sin escribir direcciones IP.
 
 CONTENIDO DEL PAQUETE:
-- PPSA99001/eboot.bin             (Ejecutable nativo firmado)
-- PPSA99001/sce_module/libc.prx   (Capa de compatibilidad runtime Prospero)
-- PPSA99001/sce_sys/param.json    (Metadatos de paquete Title ID: PPSA99001)
-- PPSA99001/sce_sys/icon0.png     (Icono oficial Liquid Glass Memory Card)
-- PPSA99001/assets/               (Fuentes SDF, gráficos de interfaz, banco de sonido)
-- PPSA99001/daemon/               (Demonio integrado de privilegios root)
-- PPSA99001/INSTRUCTIONS.txt      (Guía de instalación y uso)
-- PPSA99001/LEGAL.txt             (Licencia, garantía y avisos legales)
+- PPSA99700/eboot.bin             (Ejecutable nativo firmado)
+- PPSA99700/sce_module/libc.prx   (Capa de compatibilidad runtime Prospero)
+- PPSA99700/sce_sys/param.json    (Metadatos de paquete Title ID: PPSA99700)
+- PPSA99700/sce_sys/icon0.png     (Icono oficial Liquid Glass Memory Card)
+- PPSA99700/assets/               (Fuentes SDF, gráficos de interfaz, banco de sonido)
+- PPSA99700/daemon/               (Demonio integrado de privilegios root)
+- PPSA99700/INSTRUCTIONS.txt      (Guía de instalación y uso)
+- PPSA99700/LEGAL.txt             (Licencia, garantía y avisos legales)
 
 INSTRUCCIONES DE INSTALACION (METODO FACIL VIA FTP):
 1. Conecta tu PS5 y tu computadora o telefono a la misma red local.
 2. Habilita el servidor FTP en tu PS5 (en los ajustes de OnionHEN, etaHEN o payload).
 3. Conéctate usando un cliente FTP (FileZilla, WinSCP, Cyberduck, etc.).
-4. Copia la carpeta "PPSA99001" completa directamente en:
+4. Copia la carpeta "PPSA99700" completa directamente en:
      /data/homebrew/
    La ruta resultante debe ser:
-     /data/homebrew/PPSA99001/eboot.bin
-5. Inicia MacheteSVG directamente desde tu lanzador de homebrew o menú principal.
+     /data/homebrew/PPSA99700/eboot.bin
+5. Inicia MacheteSaveGameManager directamente desde tu lanzador de homebrew o menú principal.
 
 CONTROLES DEL MANDO DUALSENSE:
 - D-Pad: Navegar por la lista de juegos y opciones
@@ -273,16 +273,20 @@ cp "$dist_dir/INSTRUCTIONS.txt" "$root/INSTRUCTIONS.txt"
 cp "$dist_dir/LEGAL.txt" "$root/LEGAL.txt"
 
 echo "==> [5/5] Creando archivo ZIP final limpio que contiene únicamente la carpeta $title_id..."
-zip_output="$root/dist/MacheteSVG_v${version}_PS5.zip"
-rm -f "$zip_output"
-(cd "$root/dist" && zip -r -q "$zip_output" "$title_id")
+store_zip="$root/dist/${title_id}.zip"
+release_zip="$root/dist/MacheteSaveGameManager_v${version}_PS5.zip"
+rm -f "$store_zip" "$release_zip"
+(cd "$root/dist" && zip -r -q "$store_zip" "$title_id")
+cp "$store_zip" "$release_zip"
 
 echo "==> [5/5+] Aplicando permisos abiertos 0777 en las entradas del archivo ZIP..."
-python3 "$root/tools/zip-open-modes.py" "$zip_output"
+python3 "$root/tools/zip-open-modes.py" "$store_zip"
+python3 "$root/tools/zip-open-modes.py" "$release_zip"
 
 echo ""
 echo "=================================================="
 echo " Empaquetado completado con éxito."
-echo " Paquete generado: $zip_output"
-echo " Carpeta de app:   $dist_dir"
+echo " Paquete Store:   $store_zip"
+echo " Paquete Release: $release_zip"
+echo " Carpeta de app:  $dist_dir"
 echo "=================================================="

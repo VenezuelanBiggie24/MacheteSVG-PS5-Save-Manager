@@ -906,10 +906,10 @@ void WebServer::handle_client(int client_fd)
     if (path == "/api/log" || path == "/log" || path == "/machete.log")
     {
         const std::string log_candidates[] = {
-            "/data/homebrew/PPSA99001/machete.log",
+            "/data/homebrew/PPSA99700/machete.log",
             "/data/machete.log",
             "/download0/machete.log",
-            "/user/app/PPSA99001/machete.log",
+            "/user/app/PPSA99700/machete.log",
             "machete.log"
         };
         for (const auto &cand : log_candidates)
@@ -920,7 +920,7 @@ void WebServer::handle_client(int client_fd)
                 return;
             }
         }
-        std::string fallback = "[SYSTEM] MacheteSVG v" + std::string(::machete::build::kAppVersion) +
+        std::string fallback = "[SYSTEM] MacheteSaveGameManager v" + std::string(::machete::build::kAppVersion) +
                                " (Build #" + std::string(::machete::build::kBuildNumber) +
                                ", Commit " + std::string(::machete::build::kGitCommit) +
                                ") - No log file found on disk yet.\n";
@@ -933,12 +933,12 @@ void WebServer::handle_client(int client_fd)
     {
         const std::string logo_candidates[] = {
             "/app0/sce_sys/icon0.png",
-            "/data/homebrew/PPSA99001/sce_sys/icon0.png",
+            "/data/homebrew/PPSA99700/sce_sys/icon0.png",
             "sce_sys/icon0.png",
 #ifdef HUI_SOURCE_DIR
             std::string(HUI_SOURCE_DIR) + "/sce_sys/icon0.png",
 #endif
-            "/user/app/PPSA99001/sce_sys/icon0.png"
+            "/user/app/PPSA99700/sce_sys/icon0.png"
         };
         for (const auto &cand : logo_candidates)
         {
@@ -994,12 +994,12 @@ void WebServer::handle_client(int client_fd)
         const std::string anim_candidates[] = {
             "assets/ui/" + filename,
             "/app0/assets/ui/" + filename,
-            "/data/homebrew/PPSA99001/assets/ui/" + filename,
-            "/user/app/PPSA99001/assets/ui/" + filename,
+            "/data/homebrew/PPSA99700/assets/ui/" + filename,
+            "/user/app/PPSA99700/assets/ui/" + filename,
 #ifdef HUI_SOURCE_DIR
             std::string(HUI_SOURCE_DIR) + "/assets/ui/" + filename,
 #endif
-            "/tmp/machete_test_homebrew/PPSA99001/assets/ui/" + filename
+            "/tmp/machete_test_homebrew/PPSA99700/assets/ui/" + filename
         };
 
         for (const auto &cand : anim_candidates)
@@ -1728,12 +1728,12 @@ void WebServer::handle_client(int client_fd)
             return;
         }
 
-        // 8. Determinar directorio de instalacion (/data/homebrew/PPSA99001)
-        std::string target_install_dir = "/data/homebrew/PPSA99001";
+        // 8. Determinar directorio de instalacion (/data/homebrew/PPSA99700)
+        std::string target_install_dir = "/data/homebrew/PPSA99700";
         if (access("/data/homebrew", W_OK) != 0 && access("/data", W_OK) != 0)
         {
             // Fallback para entornos de pruebas o emulacion
-            target_install_dir = "/tmp/machete_test_homebrew/PPSA99001";
+            target_install_dir = "/tmp/machete_test_homebrew/PPSA99700";
         }
         make_directory_recursive(target_install_dir);
 

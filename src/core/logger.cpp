@@ -39,10 +39,10 @@ namespace machete::log
 namespace
 {
 
-constexpr const char *kPrimaryLogPath   = "/data/homebrew/PPSA99001/machete.log";
+constexpr const char *kPrimaryLogPath   = "/data/homebrew/PPSA99700/machete.log";
 constexpr const char *kSandboxLogPath   = "/download0/machete.log";
 constexpr const char *kDataLogPath      = "/data/machete.log";
-constexpr const char *kUserAppLogPath   = "/user/app/PPSA99001/machete.log";
+constexpr const char *kUserAppLogPath   = "/user/app/PPSA99700/machete.log";
 
 // Descriptores de archivo directos POSIX (seguros contra señales asíncronas)
 int s_fd_primary = -1;

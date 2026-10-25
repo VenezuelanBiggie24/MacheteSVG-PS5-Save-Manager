@@ -544,10 +544,10 @@ class Machete final : public app::Concept
         const char *candidates[] = {
             "/app0/sce_sys/icon0.png",
             "sce_sys/icon0.png",
-            "/data/homebrew/PPSA99001/sce_sys/icon0.png",
-            "/user/appmeta/PPSA99001/icon0.png",
-            "/mnt/ext0/user/appmeta/PPSA99001/icon0.png",
-            "/mnt/ext1/user/appmeta/PPSA99001/icon0.png",
+            "/data/homebrew/PPSA99700/sce_sys/icon0.png",
+            "/user/appmeta/PPSA99700/icon0.png",
+            "/mnt/ext0/user/appmeta/PPSA99700/icon0.png",
+            "/mnt/ext1/user/appmeta/PPSA99700/icon0.png",
         };
 
         for (const char *path : candidates)
@@ -570,7 +570,7 @@ class Machete final : public app::Concept
             char path2[128];
             char path3[128];
             std::snprintf(path1, sizeof(path1), "/app0/assets/ui/shinchan_frames/frame_%02d.png", i + 1);
-            std::snprintf(path2, sizeof(path2), "/data/homebrew/PPSA99001/assets/ui/shinchan_frames/frame_%02d.png", i + 1);
+            std::snprintf(path2, sizeof(path2), "/data/homebrew/PPSA99700/assets/ui/shinchan_frames/frame_%02d.png", i + 1);
             std::snprintf(path3, sizeof(path3), "assets/ui/shinchan_frames/frame_%02d.png", i + 1);
 
             const char *candidates[] = { path1, path2, path3 };
@@ -588,7 +588,7 @@ class Machete final : public app::Concept
             char path2[128];
             char path3[128];
             std::snprintf(path1, sizeof(path1), "/app0/assets/ui/shinchan_done_frames/frame_%02d.png", i + 1);
-            std::snprintf(path2, sizeof(path2), "/data/homebrew/PPSA99001/assets/ui/shinchan_done_frames/frame_%02d.png", i + 1);
+            std::snprintf(path2, sizeof(path2), "/data/homebrew/PPSA99700/assets/ui/shinchan_done_frames/frame_%02d.png", i + 1);
             std::snprintf(path3, sizeof(path3), "assets/ui/shinchan_done_frames/frame_%02d.png", i + 1);
 
             const char *candidates[] = { path1, path2, path3 };
@@ -606,7 +606,7 @@ class Machete final : public app::Concept
             char path2[128];
             char path3[128];
             std::snprintf(path1, sizeof(path1), "/app0/assets/ui/shinchan_crying_frames/frame_%02d.png", i + 1);
-            std::snprintf(path2, sizeof(path2), "/data/homebrew/PPSA99001/assets/ui/shinchan_crying_frames/frame_%02d.png", i + 1);
+            std::snprintf(path2, sizeof(path2), "/data/homebrew/PPSA99700/assets/ui/shinchan_crying_frames/frame_%02d.png", i + 1);
             std::snprintf(path3, sizeof(path3), "assets/ui/shinchan_crying_frames/frame_%02d.png", i + 1);
 
             const char *candidates[] = { path1, path2, path3 };
@@ -623,7 +623,7 @@ class Machete final : public app::Concept
     {
         static const app::ConceptInfo kInfo{
             "machete",
-            "MacheteSVG Save Manager",
+            "MacheteSaveGameManager",
             "PS5 & PS4 Save Data Manager & Web Save Station",
             "src/concepts/machete.cpp",
             audio::SoundSet::glass,
@@ -2244,7 +2244,7 @@ class Machete final : public app::Concept
         else
         {
             const bool is_es = (machete::i18n::current_language() == machete::i18n::Language::Spanish);
-            paint.heading(is_es ? "Estado de MacheteSVG y Almacenamiento" : "MacheteSVG System & Storage",
+            paint.heading(is_es ? "Estado de MacheteSaveGameManager y Almacenamiento" : "MacheteSaveGameManager System & Storage",
                           856, 280, 32, theme.text);
             paint.body(is_es ? "El gestor de partidas nativo para PS5 y PS4 esta listo para operar."
                              : "Native save data manager for PS5 & PS4 is ready to operate.",
@@ -2787,7 +2787,7 @@ class Machete final : public app::Concept
 
         // Marca de agua de Versión y Build en el pie de página
         char footer_build[64];
-        std::snprintf(footer_build, sizeof(footer_build), "MacheteSVG v%s (Build #%s)",
+        std::snprintf(footer_build, sizeof(footer_build), "MacheteSaveGameManager v%s (Build #%s)",
                       machete::build::kAppVersion, machete::build::kBuildNumber);
         paint.label(footer_build, 1824.0f, 1018.0f, 15, theme.text_muted.with_alpha(0.6f), gfx::Align::right);
 

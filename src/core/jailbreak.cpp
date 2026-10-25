@@ -112,7 +112,7 @@ void clean_shadowmount_interference() noexcept
     ::machete::log::reopen_paths();
     MACHETE_BREADCRUMB("clean_shadowmount_interference: checking whitelists");
 
-    // Limpiar de forma segura cualquier rastro de PPSA99001 en listas blancas de etaHEN y ShadowMountPlus.
+    // Limpiar de forma segura cualquier rastro de PPSA99700 en listas blancas de etaHEN y ShadowMountPlus.
     // Las listas blancas activan el auto-pausado de Kstuff (kstuff_game_auto_toggle=1), lo cual detiene
     // la ejecucion de homebrews y provoca el error "Se cerro la app antes de que se pausara kstuff".
     const char *whitelist_files[] = {
@@ -134,7 +134,7 @@ void clean_shadowmount_interference() noexcept
 
         while (std::fgets(line, sizeof(line), f))
         {
-            if (std::strstr(line, "PPSA99001") != nullptr)
+            if (std::strstr(line, "PPSA99700") != nullptr || std::strstr(line, "PPSA99001") != nullptr)
             {
                 modified = true;
                 continue;
@@ -152,7 +152,7 @@ void clean_shadowmount_interference() noexcept
                     std::fputs(l.c_str(), out);
                 std::fclose(out);
                 (void)chmod(path, 0666);
-                MACHETE_LOG("[JAILBREAK]", "purged PPSA99001 from %s", path);
+                MACHETE_LOG("[JAILBREAK]", "purged PPSA99700 from %s", path);
             }
         }
     }
@@ -171,8 +171,8 @@ bool auto_launch_embedded_daemon()
     // Obtener los datos del demonio: probar rutas locales o usar el binario embebido en memoria
     const char *daemon_paths[] = {
         "/app0/daemon/lapy_jb_daemon.elf",
-        "/system_ex/app/PPSA99001/daemon/lapy_jb_daemon.elf",
-        "/data/homebrew/PPSA99001/daemon/lapy_jb_daemon.elf",
+        "/system_ex/app/PPSA99700/daemon/lapy_jb_daemon.elf",
+        "/data/homebrew/PPSA99700/daemon/lapy_jb_daemon.elf",
         "daemon/lapy_jb_daemon.elf",
     };
 
