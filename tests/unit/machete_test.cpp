@@ -1992,4 +1992,83 @@ TEST(MacheteAes128XtsTest, ResignPs4ContainerInPlaceSucceeds)
     (void)std::remove(tmp_img.c_str());
 }
 
+TEST(MacheteProsperoRestoreTest, ParamJsonDirNameUpdatePreservesStructure)
+{
+    const std::string tmp_json = "/tmp/machete_test_param.json";
+    const std::string original = "{\n  \"titleId\": \"PPSA01969\",\n  \"dirName\": \"PROFILE\",\n  \"fileSize\": 1048576\n}\n";
+
+    {
+        std::ofstream out(tmp_json, std::ios::binary);
+        ASSERT_TRUE(out.is_open());
+        out << original;
+    }
+
+    machete::pfs::update_ps5_param_json_dir_name(tmp_json, "AUTOSAVE0");
+
+    std::ifstream in(tmp_json, std::ios::binary);
+    ASSERT_TRUE(in.is_open());
+    std::string modified((std::istreambuf_iterator<char>(in)),
+                          std::istreambuf_iterator<char>());
+    in.close();
+
+    EXPECT_NE(modified.find("\"dirName\": \"AUTOSAVE0\""), std::string::npos);
+    EXPECT_NE(modified.find("\"titleId\": \"PPSA01969\""), std::string::npos);
+    EXPECT_NE(modified.find("\"fileSize\": 1048576"), std::string::npos);
+
+    (void)std::remove(tmp_json.c_str());
+}
+
+TEST(MachetePs4SlotTest, SlotNamePreservesAuthenticNamesWithoutSdimg)
+{
+    const std::string test_dir = "/tmp/machete_ps4_slot_test";
+    (void)mkdir(test_dir.c_str(), 0777);
+
+    // Create authentic PS4 slot files: Book and Book.bin
+    const std::string slot_img = test_dir + "/Book";
+    const std::string slot_bin = test_dir + "/Book.bin";
+    {
+        std::ofstream f(slot_img, std::ios::binary);
+        f << "DUMMY_CONTAINER_DATA";
+    }
+    {
+        std::ofstream f(slot_bin, std::ios::binary);
+        std::vector<char> bin_data(96, 0x01);
+        f.write(bin_data.data(), bin_data.size());
+    }
+
+    EXPECT_TRUE(machete::pfs::is_valid_ps4_slot_name(test_dir, "Book"));
+    EXPECT_FALSE(machete::pfs::is_valid_sdimg_name("Book"));
+    EXPECT_TRUE(machete::pfs::is_valid_sdimg_name("sdimg_Book"));
+
+    (void)std::remove(slot_img.c_str());
+    (void)std::remove(slot_bin.c_str());
+    (void)rmdir(test_dir.c_str());
+}
+
+TEST(MacheteCrossConsoleTest, KeystoneFingerprintMismatchDetection)
+{
+    const std::string b_dir = "/tmp/machete_cross_ks_b";
+    (void)mkdir(b_dir.c_str(), 0777);
+    const std::string b_ks = b_dir + "/keystone";
+
+    std::vector<std::uint8_t> b_ks_data(96, 0);
+    // Keystone magic / header
+    b_ks_data[0] = 0x01;
+    // Fingerprint at 0x2C
+    for (int i = 0x2C; i < 0x4C; ++i)
+        b_ks_data[i] = static_cast<std::uint8_t>(0xAA);
+
+    {
+        std::ofstream f(b_ks, std::ios::binary);
+        f.write(reinterpret_cast<const char *>(b_ks_data.data()), b_ks_data.size());
+    }
+
+    // Backup has no crypto_vault and no decrypted/
+    // With an unknown/uninstalled game, keystone match is skipped cleanly
+    EXPECT_FALSE(machete::pfs::is_backup_from_different_console(b_dir, true, "PPSA_NONEXISTENT"));
+
+    (void)std::remove(b_ks.c_str());
+    (void)rmdir(b_dir.c_str());
+}
+
 } // namespace hui::testing

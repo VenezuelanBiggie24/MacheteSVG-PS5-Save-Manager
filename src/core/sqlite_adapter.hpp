@@ -445,7 +445,8 @@ inline bool update_or_register_ps5_savedata_db(std::uint32_t user_id,
                                                const std::string &slot_name,
                                                std::uint64_t file_size_bytes,
                                                const std::string &game_title = "",
-                                               const std::string &game_title_id_override = "")
+                                               const std::string &game_title_id_override = "",
+                                               const std::string &sub_title = "")
 {
     SqliteAdapter &adapter = SqliteAdapter::instance();
     if (!adapter.is_available())
@@ -464,6 +465,7 @@ inline bool update_or_register_ps5_savedata_db(std::uint32_t user_id,
     const std::string safe_gtid = escape_sql_string(game_title_id_override.empty() ? title_id : game_title_id_override);
     const std::string safe_slot = escape_sql_string(clean_slot);
     const std::string safe_main = escape_sql_string(game_title.empty() ? "Datos guardados" : game_title);
+    const std::string safe_sub = escape_sql_string(sub_title);
 
     const auto unique_dbs = filter_existing_unique_dbs(get_ps5_savedata_db_candidates(user_id));
     bool any_updated = false;
@@ -567,11 +569,15 @@ inline bool update_or_register_ps5_savedata_db(std::uint32_t user_id,
                               "size_kib = %u, "
                               "game_title_id = '%s', "
                               "convert_performance = 0, account_id_in_usb_path = '0000000000000000', "
+                              "sub_title = '%s', "
+                              "main_title = CASE WHEN (main_title IS NULL OR main_title = '' OR main_title = '%s') THEN '%s' ELSE main_title END, "
                               "mtime = strftime('%%Y-%%m-%%dT%%H:%%M:%%S.00Z', CURRENT_TIMESTAMP) "
                               "WHERE title_id = '%s' AND dir_name = '%s';",
                               static_cast<unsigned long long>(account_id), static_cast<unsigned long long>(account_id),
                               user_id, user_id,
                               blocks, system_blocks, free_blocks, size_kib, effective_gtid.c_str(),
+                              safe_sub.c_str(),
+                              safe_tid.c_str(), safe_main.c_str(),
                               safe_tid.c_str(), safe_slot.c_str());
             }
             else
@@ -584,11 +590,15 @@ inline bool update_or_register_ps5_savedata_db(std::uint32_t user_id,
                               "free_blocks = %u, "
                               "size_kib = %u, "
                               "game_title_id = '%s', "
+                              "sub_title = '%s', "
+                              "main_title = CASE WHEN (main_title IS NULL OR main_title = '' OR main_title = '%s') THEN '%s' ELSE main_title END, "
                               "mtime = strftime('%%Y-%%m-%%dT%%H:%%M:%%S.00Z', CURRENT_TIMESTAMP) "
                               "WHERE title_id = '%s' AND dir_name = '%s';",
                               static_cast<unsigned long long>(account_id), static_cast<unsigned long long>(account_id),
                               user_id, user_id,
                               blocks, free_blocks, size_kib, effective_gtid.c_str(),
+                              safe_sub.c_str(),
+                              safe_tid.c_str(), safe_main.c_str(),
                               safe_tid.c_str(), safe_slot.c_str());
             }
             rc = adapter.exec(db, sql_update, nullptr, nullptr, &errmsg);
@@ -611,7 +621,7 @@ inline bool update_or_register_ps5_savedata_db(std::uint32_t user_id,
                               "0, %llu, %u, 0, '', "
                               "0, '%s', %u, 0, '0000000000000000');",
                               safe_tid.c_str(), safe_slot.c_str(),
-                              safe_main.c_str(), "",
+                              safe_main.c_str(), safe_sub.c_str(),
                               blocks, free_blocks, size_kib,
                               static_cast<unsigned long long>(account_id), user_id,
                               effective_gtid.c_str(), system_blocks);
@@ -630,7 +640,7 @@ inline bool update_or_register_ps5_savedata_db(std::uint32_t user_id,
                               "0, %llu, %u, 0, '', "
                               "0, '%s');",
                               safe_tid.c_str(), safe_slot.c_str(),
-                              safe_main.c_str(), "",
+                              safe_main.c_str(), safe_sub.c_str(),
                               blocks, free_blocks, size_kib,
                               static_cast<unsigned long long>(account_id), user_id,
                               effective_gtid.c_str());
@@ -665,6 +675,42 @@ inline bool update_or_register_ps5_savedata_db(std::uint32_t user_id,
     }
 
     return any_updated;
+}
+
+// Purga slots obsoletos de un titulo en savedata.db que ya no existen en dst_target
+inline void prune_missing_ps5_slots_in_db(std::uint32_t user_id,
+                                          const std::string &title_id,
+                                          const std::vector<std::string> &active_clean_slots)
+{
+    SqliteAdapter &adapter = SqliteAdapter::instance();
+    if (!adapter.is_available() || title_id.empty())
+        return;
+
+    const auto unique_dbs = filter_existing_unique_dbs(get_ps5_savedata_db_candidates(user_id));
+    for (const auto &dbp : unique_dbs)
+    {
+        void *db = nullptr;
+        if (adapter.open(dbp.c_str(), &db) != 0 || !db)
+            continue;
+
+        (void)adapter.exec(db, "PRAGMA busy_timeout = 3000;", nullptr, nullptr, nullptr);
+        std::string sql = "DELETE FROM savedata WHERE title_id = '" + escape_sql_string(title_id) + "'";
+        if (!active_clean_slots.empty())
+        {
+            sql += " AND dir_name NOT IN (";
+            for (std::size_t i = 0; i < active_clean_slots.size(); ++i)
+            {
+                if (i > 0)
+                    sql += ", ";
+                sql += "'" + escape_sql_string(active_clean_slots[i]) + "'";
+            }
+            sql += ")";
+        }
+        sql += ";";
+        (void)adapter.exec(db, sql.c_str(), nullptr, nullptr, nullptr);
+        (void)adapter.exec(db, "PRAGMA wal_checkpoint(FULL);", nullptr, nullptr, nullptr);
+        adapter.close(db);
+    }
 }
 
 // Purga registros ajenos en bases de datos (elimina PPSA de DBs de PS4 y CUSA de DBs de PS5)

@@ -1067,7 +1067,7 @@ inline void update_ps5_param_json_dir_name(const std::string &param_json_path, c
 }
 
 // Comprueba si el respaldo proviene de otra consola distinta a la actual
-inline bool is_backup_from_different_console(const std::string &backup_folder, bool is_ps5)
+inline bool is_backup_from_different_console(const std::string &backup_folder, bool is_ps5, const std::string &title_id = "")
 {
     // 1. Si el respaldo solo tiene archivos desencriptados (decrypted/) y ningun slot nativo, requiere inyeccion en Save Dummy
     if (has_decrypted_payload(backup_folder) && !has_local_save_dummy(backup_folder, is_ps5))
@@ -1091,6 +1091,46 @@ inline bool is_backup_from_different_console(const std::string &backup_folder, b
         {
             MACHETE_LOG("[PFS]", "Cross-console backup detected via OpenPSID mismatch in crypto_vault.bin");
             return true;
+        }
+    }
+    else if (is_ps5 && !title_id.empty())
+    {
+        // En PS5, si el respaldo carece de crypto_vault.bin local y de carpeta decrypted/,
+        // verificar el fingerprint de 32 bytes dentro del keystone (offset 0x2C).
+        // Si el fingerprint del keystone del respaldo difiere del keystone autentico de esta consola,
+        // la partida fue generada bajo otra instalacion/consola y SAMU rechazara los sdimg_*.
+        const std::string backup_ks = backup_folder + "/keystone";
+        std::uint8_t b_ks[96] = {0};
+        std::uint8_t l_ks[96] = {0};
+        if (keystone::is_valid_keystone_file(backup_ks))
+        {
+            std::FILE *fb = std::fopen(backup_ks.c_str(), "rb");
+            if (fb)
+            {
+                (void)std::fread(b_ks, 1, 96, fb);
+                std::fclose(fb);
+            }
+            const std::string local_ks_path = keystone::find_authentic_game_keystone(title_id);
+            if (!local_ks_path.empty() && keystone::is_valid_keystone_file(local_ks_path))
+            {
+                std::FILE *fl = std::fopen(local_ks_path.c_str(), "rb");
+                if (fl)
+                {
+                    (void)std::fread(l_ks, 1, 96, fl);
+                    std::fclose(fl);
+                }
+                bool b_has_fp = false, l_has_fp = false;
+                for (int k = 0x2C; k < 0x4C; ++k)
+                {
+                    if (b_ks[k] != 0) b_has_fp = true;
+                    if (l_ks[k] != 0) l_has_fp = true;
+                }
+                if (b_has_fp && l_has_fp && std::memcmp(b_ks + 0x2C, l_ks + 0x2C, 32) != 0)
+                {
+                    MACHETE_LOG("[PFS]", "Cross-console PS5 backup detected via Keystone fingerprint mismatch at offset 0x2C");
+                    return true;
+                }
+            }
         }
     }
 
@@ -1307,7 +1347,7 @@ inline PfsRestoreReport inject_and_resign_save(const std::string &title_id,
     PfsRestoreReport report;
     std::lock_guard<std::mutex> lock(pfs_global_mount_mutex());
 
-    report.cross_console_detected = is_backup_from_different_console(backup_folder, is_ps5);
+    report.cross_console_detected = is_backup_from_different_console(backup_folder, is_ps5, title_id);
     const bool has_dec = has_decrypted_payload(backup_folder);
     const bool has_backup_meta =
         (access((backup_folder + "/.meta/param.json").c_str(), R_OK) == 0 ||
@@ -1727,13 +1767,11 @@ inline PfsRestoreReport inject_and_resign_save(const std::string &title_id,
         }
 
 #if defined(__PROSPERO__) || defined(__Prospero__) || defined(__PS5__)
-        // Si es una partida de PS5, tenemos los simbolos de montaje PFS resueltos, pero NINGUN contenedor sdimg_*
-        // pudo ser montado por el kernel y el respaldo tampoco incluye carpeta decrypted/ en texto plano,
+        // Si es una partida de PS5 de otra consola, NINGUN contenedor sdimg_* pudo ser montado por el kernel
+        // y el respaldo tampoco incluye carpeta decrypted/ en texto plano,
         // entonces los contenedores sdimg_* estan sellados con la clave SAMU de otra consola y no pueden usarse crudos.
-        if (is_ps5 && !report.used_pfs_mount && !have_any_decrypted &&
-            ScopedPfsMount::ensure_pfs_symbols_resolved(nullptr, nullptr, nullptr, nullptr))
+        if (is_ps5 && report.cross_console_detected && !report.used_pfs_mount && !have_any_decrypted)
         {
-            report.cross_console_detected = true;
             report.missing_save_dummy_error = true;
             MACHETE_LOG("[PFS]", "Foreign encrypted PS5 containers in %s cannot be mounted on this console without decrypted/ payload",
                         backup_folder.c_str());
