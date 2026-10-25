@@ -1296,7 +1296,7 @@ TEST(MacheteParamJsonSizeTest, UpdateFileSizeAndMtimeInParamJson)
 
 TEST(MacheteBuildInfoTest, BuildNumberMatchesExpected)
 {
-    EXPECT_STREQ(machete::build::build_number(), "75");
+    EXPECT_STREQ(machete::build::build_number(), "76");
 }
 
 TEST(MacheteParamJsonDirNameTest, UpdateDirNameInParamJson)
@@ -2069,6 +2069,36 @@ TEST(MacheteCrossConsoleTest, KeystoneFingerprintMismatchDetection)
 
     (void)std::remove(b_ks.c_str());
     (void)rmdir(b_dir.c_str());
+}
+
+TEST(MacheteDecimaBackupTest, MirrorMissingBackupContainers)
+{
+    const std::string test_dir = "/tmp/machete_decima_mirror_test";
+    (void)mkdir(test_dir.c_str(), 0777);
+    const std::string main_img = test_dir + "/sdimg_MANUALSAVE0";
+    const std::string bu_img = test_dir + "/sdimg_sce_bu_MANUALSAVE0";
+
+    {
+        std::ofstream f(main_img, std::ios::binary);
+        f.write("DECIMA_SAVE_PAYLOAD", 19);
+    }
+    ASSERT_EQ(access(bu_img.c_str(), F_OK), -1);
+
+    // Verify copy atomic creates the backup mirror
+    EXPECT_TRUE(machete::pfs::copy_file_atomic(main_img, bu_img));
+    EXPECT_EQ(access(bu_img.c_str(), R_OK), 0);
+
+    (void)std::remove(main_img.c_str());
+    (void)std::remove(bu_img.c_str());
+    (void)rmdir(test_dir.c_str());
+}
+
+TEST(MacheteDbTest, PS4SavedataCandidatePriorityPrefersProspero)
+{
+    const auto candidates = machete::db::get_savedata_db_candidates(0x105f615a);
+    ASSERT_FALSE(candidates.empty());
+    // The very first candidate must be from savedata_prospero on PS5
+    EXPECT_NE(candidates[0].find("savedata_prospero"), std::string::npos);
 }
 
 } // namespace hui::testing

@@ -110,14 +110,21 @@ inline std::vector<std::string> get_savedata_db_candidates(std::uint32_t user_id
     std::snprintf(uid_clean, sizeof(uid_clean), "%x", user_id);
 
     std::vector<std::string> paths;
-    paths.push_back(std::string("/system_data/savedata/") + uid_8 + "/db/user/savedata.db");
-    paths.push_back(std::string("/system_data/savedata/") + uid_clean + "/db/user/savedata.db");
+    // En PS5, priorizar SIEMPRE savedata_prospero para obtener el Account ID autentico del sistema
     paths.push_back(std::string("/system_data/savedata_prospero/") + uid_8 + "/db/user/savedata.db");
     paths.push_back(std::string("/system_data/savedata_prospero/") + uid_clean + "/db/user/savedata.db");
-    paths.push_back(std::string("/system_data/savedata/") + uid_8 + "/db/savedata.db");
-    paths.push_back(std::string("/system_data/savedata/") + uid_clean + "/db/savedata.db");
     paths.push_back(std::string("/system_data/savedata_prospero/") + uid_8 + "/db/savedata.db");
     paths.push_back(std::string("/system_data/savedata_prospero/") + uid_clean + "/db/savedata.db");
+    paths.push_back("/system_data/savedata_prospero/db/user/savedata.db");
+    paths.push_back("/system_data/savedata_prospero/db/savedata.db");
+    paths.push_back(std::string("/system_data/savedata_prospero/") + uid_8 + "/savedata.db");
+    paths.push_back(std::string("/system_data/savedata_prospero/") + uid_clean + "/savedata.db");
+
+    // Despues consultar savedata de PS4
+    paths.push_back(std::string("/system_data/savedata/") + uid_8 + "/db/user/savedata.db");
+    paths.push_back(std::string("/system_data/savedata/") + uid_clean + "/db/user/savedata.db");
+    paths.push_back(std::string("/system_data/savedata/") + uid_8 + "/db/savedata.db");
+    paths.push_back(std::string("/system_data/savedata/") + uid_clean + "/db/savedata.db");
     paths.push_back(std::string("/system_data/savedata/") + uid_8 + "/savedata.db");
     paths.push_back(std::string("/system_data/savedata/") + uid_clean + "/savedata.db");
     paths.push_back(std::string("/user/home/") + uid_8 + "/savedata.db");
@@ -318,12 +325,15 @@ inline bool update_or_register_ps4_savedata_db(std::uint32_t user_id,
             "cloud_revision INTEGER, game_title_id TEXT, PRIMARY KEY (title_id, dir_name));";
         (void)adapter.exec(db, create_tbl, nullptr, nullptr, nullptr);
 
-        // Eliminar cualquier fila obsoleta con prefijo sdimg_ o sce_bu_ en dir_name para este titulo
-        char sql_clean_sdimg[512];
-        std::snprintf(sql_clean_sdimg, sizeof(sql_clean_sdimg),
-                      "DELETE FROM savedata WHERE title_id = '%s' AND (dir_name = 'sdimg_%s' OR dir_name LIKE 'sce_bu_%%' OR dir_name LIKE 'sdimg_sce_bu_%%');",
+        // Eliminar cualquier fila obsoleta con prefijo sdimg_, sce_bu_, archivos sueltos no-ranura o entradas con blocks = 0
+        char sql_clean_junk[1024];
+        std::snprintf(sql_clean_junk, sizeof(sql_clean_junk),
+                      "DELETE FROM savedata WHERE title_id = '%s' AND ("
+                      "dir_name IN ('keystone', 'param.sfo', 'sce_sys', 'crypto_vault.bin', '.save_info', 'harvested_keystone', 'sealedkey') "
+                      "OR dir_name LIKE '%%.bin' OR dir_name LIKE '%%.sfo' OR dir_name LIKE '%%.png' "
+                      "OR blocks = 0 OR dir_name = 'sdimg_%s' OR dir_name LIKE 'sce_bu_%%' OR dir_name LIKE 'sdimg_sce_bu_%%');",
                       safe_tid.c_str(), safe_slot.c_str());
-        (void)adapter.exec(db, sql_clean_sdimg, nullptr, nullptr, nullptr);
+        (void)adapter.exec(db, sql_clean_junk, nullptr, nullptr, nullptr);
 
         // 2. Eliminar filas duplicadas para (title_id, dir_name), conservando siempre MIN(rowid) (la fila original)
         char sql_dedup[512];
@@ -713,6 +723,42 @@ inline void prune_missing_ps5_slots_in_db(std::uint32_t user_id,
     }
 }
 
+// Purga slots obsoletos de un titulo PS4 en savedata.db que ya no existen en dst_target o que son archivos invalidos
+inline void prune_missing_ps4_slots_in_db(std::uint32_t user_id,
+                                          const std::string &title_id,
+                                          const std::vector<std::string> &active_clean_slots)
+{
+    SqliteAdapter &adapter = SqliteAdapter::instance();
+    if (!adapter.is_available() || title_id.empty())
+        return;
+
+    const auto unique_dbs = filter_existing_unique_dbs(get_ps4_savedata_db_candidates(user_id));
+    for (const auto &dbp : unique_dbs)
+    {
+        void *db = nullptr;
+        if (adapter.open(dbp.c_str(), &db) != 0 || !db)
+            continue;
+
+        (void)adapter.exec(db, "PRAGMA busy_timeout = 3000;", nullptr, nullptr, nullptr);
+        std::string sql = "DELETE FROM savedata WHERE title_id = '" + escape_sql_string(title_id) + "'";
+        if (!active_clean_slots.empty())
+        {
+            sql += " AND dir_name NOT IN (";
+            for (std::size_t i = 0; i < active_clean_slots.size(); ++i)
+            {
+                if (i > 0)
+                    sql += ", ";
+                sql += "'" + escape_sql_string(active_clean_slots[i]) + "'";
+            }
+            sql += ")";
+        }
+        sql += ";";
+        (void)adapter.exec(db, sql.c_str(), nullptr, nullptr, nullptr);
+        (void)adapter.exec(db, "PRAGMA wal_checkpoint(FULL);", nullptr, nullptr, nullptr);
+        adapter.close(db);
+    }
+}
+
 // Purga registros ajenos en bases de datos (elimina PPSA de DBs de PS4 y CUSA de DBs de PS5)
 inline void sanitize_database_architecture_isolation(std::uint32_t user_id)
 {
@@ -823,6 +869,16 @@ inline bool repair_title_corruption_flags(std::uint32_t user_id,
                       safe_tid.c_str());
         (void)adapter.exec(db, sql_diag, log_cb, const_cast<char *>(title_id.c_str()), nullptr);
 
+        // Purgar entradas invalidas no-ranura o bloques cero para este titulo
+        char sql_clean_title[1024];
+        std::snprintf(sql_clean_title, sizeof(sql_clean_title),
+                      "DELETE FROM savedata WHERE title_id = '%s' AND ("
+                      "dir_name IN ('keystone', 'param.sfo', 'sce_sys', 'crypto_vault.bin', '.save_info', 'harvested_keystone', 'sealedkey') "
+                      "OR dir_name LIKE '%%.bin' OR dir_name LIKE '%%.sfo' OR dir_name LIKE '%%.png' "
+                      "OR blocks = 0 OR dir_name LIKE 'sce_bu_%%' OR dir_name LIKE 'sdimg_sce_bu_%%');",
+                      safe_tid.c_str());
+        (void)adapter.exec(db, sql_clean_title, nullptr, nullptr, nullptr);
+
         char sql[512];
         if (account_id != 0)
         {
@@ -882,6 +938,16 @@ inline bool delete_savedata_rows_for_title(std::uint32_t user_id, const std::str
         if (adapter.open(dbp.c_str(), &db) != 0 || !db)
             continue;
         (void)adapter.exec(db, "PRAGMA busy_timeout = 3000;", nullptr, nullptr, nullptr);
+        // Purgar entradas invalidas no-ranura o bloques cero para este titulo
+        char sql_clean_title[1024];
+        std::snprintf(sql_clean_title, sizeof(sql_clean_title),
+                      "DELETE FROM savedata WHERE title_id = '%s' AND ("
+                      "dir_name IN ('keystone', 'param.sfo', 'sce_sys', 'crypto_vault.bin', '.save_info', 'harvested_keystone', 'sealedkey') "
+                      "OR dir_name LIKE '%%.bin' OR dir_name LIKE '%%.sfo' OR dir_name LIKE '%%.png' "
+                      "OR blocks = 0 OR dir_name LIKE 'sce_bu_%%' OR dir_name LIKE 'sdimg_sce_bu_%%');",
+                      safe_tid.c_str());
+        (void)adapter.exec(db, sql_clean_title, nullptr, nullptr, nullptr);
+
         char sql[512];
         std::snprintf(sql, sizeof(sql), "DELETE FROM savedata WHERE title_id = '%s';", safe_tid.c_str());
         if (adapter.exec(db, sql, nullptr, nullptr, nullptr) == 0)

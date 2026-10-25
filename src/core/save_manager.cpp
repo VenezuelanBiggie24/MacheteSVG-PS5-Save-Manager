@@ -18,7 +18,9 @@
 #include <dirent.h>
 #include <memory>
 #include <sys/stat.h>
+#include <sys/time.h>
 #include <unistd.h>
+#include <utime.h>
 #include <vector>
 
 namespace machete::save
@@ -375,6 +377,19 @@ bool copy_file_with_fsync(const std::string &src, const std::string &dst,
     (void)chmod(dst.c_str(), 0666);
     if (owner_uid != 0 || owner_gid != 0)
         (void)chown(dst.c_str(), owner_uid, owner_gid);
+
+    // Preservar la fecha de modificacion original del fichero fuente
+    struct stat st_src{};
+    if (stat(src.c_str(), &st_src) == 0)
+    {
+        struct timeval times[2];
+        times[0].tv_sec = st_src.st_atime;
+        times[0].tv_usec = 0;
+        times[1].tv_sec = st_src.st_mtime;
+        times[1].tv_usec = 0;
+        (void)utimes(dst.c_str(), times);
+    }
+
     MACHETE_LOG("[COPY]", "File completed: %s", dst.c_str());
     return true;
 }
@@ -713,6 +728,14 @@ bool synthesize_ps5_param_json(const std::string &title_id,
     // Escribir descriptores individuales <slot>_param.json y <slot>.json para cada slot en meta_target
     for (const auto &sl : slots)
     {
+        std::uint64_t slot_mtime = now_ms;
+        struct stat st_sl{};
+        const std::string sl_path = dst_target + "/sdimg_" + sl.first;
+        if (stat(sl_path.c_str(), &st_sl) == 0 && st_sl.st_mtime > 0)
+        {
+            slot_mtime = static_cast<std::uint64_t>(st_sl.st_mtime) * 1000ULL;
+        }
+
         char slot_json[1024];
         std::snprintf(slot_json, sizeof(slot_json),
                       "{\n"
@@ -727,7 +750,7 @@ bool synthesize_ps5_param_json(const std::string &title_id,
                       "}\n",
                       title_id.c_str(), sl.first.c_str(),
                       static_cast<unsigned long long>(sl.second),
-                      static_cast<unsigned long long>(now_ms),
+                      static_cast<unsigned long long>(slot_mtime),
                       esc_title.c_str(), sl.first.c_str());
 
         write_string_atomic(meta_target + "/" + sl.first + "_param.json", slot_json, target_uid, target_gid);
@@ -855,6 +878,14 @@ void reconstruct_prospero_metadata(const std::string &title_id,
             const std::string slot_json_file = meta_target + "/" + sl.first + ".json";
             if (access(slot_param_file.c_str(), F_OK) != 0 || access(slot_json_file.c_str(), F_OK) != 0)
             {
+                std::uint64_t slot_mtime = now_ms;
+                struct stat st_sl{};
+                const std::string sl_path = dst_target + "/sdimg_" + sl.first;
+                if (stat(sl_path.c_str(), &st_sl) == 0 && st_sl.st_mtime > 0)
+                {
+                    slot_mtime = static_cast<std::uint64_t>(st_sl.st_mtime) * 1000ULL;
+                }
+
                 char slot_json[1024];
                 std::snprintf(slot_json, sizeof(slot_json),
                               "{\n"
@@ -869,7 +900,7 @@ void reconstruct_prospero_metadata(const std::string &title_id,
                               "}\n",
                               title_id.c_str(), sl.first.c_str(),
                               static_cast<unsigned long long>(sl.second),
-                              static_cast<unsigned long long>(now_ms),
+                              static_cast<unsigned long long>(slot_mtime),
                               esc_title.c_str(), sl.first.c_str());
 
                 write_string_atomic(slot_param_file, slot_json, target_uid, target_gid);
@@ -1184,6 +1215,36 @@ void post_process_restored_save(const scanner::ScannedGame &game,
 
     if (is_ps5)
     {
+        // 1. Asegurar que para cada contenedor PS5 sdimg_<slot> exista su copia espejo de respaldo sdimg_sce_bu_<slot>.
+        // En motores como Decima (Horizon Zero Dawn Remastered, Death Stranding), la ausencia de la imagen
+        // de respaldo sdimg_sce_bu_<slot> provoca que el juego reporte "Datos dañados" al iniciar y al cargar.
+        ScopedDir dslots_ps5(dst_target);
+        if (dslots_ps5.is_valid())
+        {
+            std::vector<std::string> base_slots;
+            while (const dirent *de = readdir(dslots_ps5.get()))
+            {
+                const std::string nm = de->d_name;
+                if (nm.rfind("sdimg_", 0) == 0 && nm.rfind("sdimg_sce_bu_", 0) != 0)
+                {
+                    const std::string slot_base = nm.substr(6);
+                    base_slots.push_back(slot_base);
+                }
+            }
+            for (const auto &bs : base_slots)
+            {
+                const std::string img_path = dst_target + "/sdimg_" + bs;
+                const std::string bu_path = dst_target + "/sdimg_sce_bu_" + bs;
+                if (access(bu_path.c_str(), R_OK) != 0)
+                {
+                    (void)pfs::copy_file_atomic(img_path, bu_path, target_uid, target_gid);
+                    (void)chmod(bu_path.c_str(), 0666);
+                    MACHETE_LOG("[RESTORE]", "Mirrored missing PS5 Decima backup container: %s -> %s",
+                                ("sdimg_" + bs).c_str(), ("sdimg_sce_bu_" + bs).c_str());
+                }
+            }
+        }
+
         // 2. Limpieza de archivos temporales residuales (.tmp)
         ScopedDir ddst(dst_target);
         if (ddst.is_valid())
@@ -1229,6 +1290,23 @@ void post_process_restored_save(const scanner::ScannedGame &game,
 
             reconstruct_prospero_metadata(save_dir_tid, dst_target, meta_target, backup_folder, preserved_dummy_dir, game.title, target_uid, target_gid);
             apply_permissions_recursive(meta_target, target_uid, target_gid);
+        }
+
+        // Inyeccion de Keystone autentico en la carpeta de guardado de PS5 y en sus metadatos
+        const std::string ps5_ks = dst_target + "/keystone";
+        if (access(ps5_ks.c_str(), R_OK) != 0 || !machete::keystone::is_valid_keystone_file(ps5_ks))
+        {
+            const std::string auth_ks = machete::keystone::find_authentic_game_keystone(save_dir_tid, backup_folder, dst_target, game.app_path);
+            if (!auth_ks.empty() && machete::keystone::is_valid_keystone_file(auth_ks))
+            {
+                (void)pfs::copy_file_atomic(auth_ks, ps5_ks, target_uid, target_gid);
+                (void)chmod(ps5_ks.c_str(), 0666);
+                (void)pfs::copy_file_atomic(auth_ks, meta_target_direct + "/keystone", target_uid, target_gid);
+                (void)chmod((meta_target_direct + "/keystone").c_str(), 0666);
+                (void)pfs::copy_file_atomic(auth_ks, meta_target_user + "/keystone", target_uid, target_gid);
+                (void)chmod((meta_target_user + "/keystone").c_str(), 0666);
+                MACHETE_LOG("[KEYSTONE]", "Injected authentic PS5 keystone for %s from %s", save_dir_tid.c_str(), auth_ks.c_str());
+            }
         }
 
         // 4. Asegurar que todos los slots sdimg_* presentes en dst_target esten registrados en savedata_prospero/<uid>/db/user/savedata.db
@@ -1641,6 +1719,7 @@ void post_process_restored_save(const scanner::ScannedGame &game,
                         break;
                 }
             }
+            std::vector<std::string> active_clean_ps4_slots;
             ScopedDir ddst(dst_target);
             if (ddst.is_valid())
             {
@@ -1649,6 +1728,9 @@ void post_process_restored_save(const scanner::ScannedGame &game,
                     const std::string sname = de->d_name;
                     if (machete::pfs::is_valid_ps4_slot_name(dst_target, sname))
                     {
+                        const std::string clean_s = (sname.rfind("sdimg_", 0) == 0) ? sname.substr(6) : sname;
+                        active_clean_ps4_slots.push_back(clean_s);
+
                         struct stat st_s{};
                         std::uint64_t s_size = 0;
                         if (stat((dst_target + "/" + sname).c_str(), &st_s) == 0)
@@ -1660,6 +1742,7 @@ void post_process_restored_save(const scanner::ScannedGame &game,
                     }
                 }
             }
+            db::prune_missing_ps4_slots_in_db(user_id, save_dir_tid, active_clean_ps4_slots);
             db::repair_title_corruption_flags(user_id, save_dir_tid, active_account_id);
         }
 
@@ -2436,12 +2519,27 @@ __attribute__((noinline)) OperationResult restore_from_folder(const scanner::Sca
         res.files_transferred = files_count;
         res.bytes_transferred = bytes_copied > 0 ? bytes_copied : total_dir_bytes;
 
+        bool has_ps4_container_files = false;
+        ScopedDir dchk_ks(dst_target);
+        if (dchk_ks.is_valid())
+        {
+            while (const dirent *de = readdir(dchk_ks.get()))
+            {
+                const std::string fn = de->d_name;
+                if (fn.size() > 4 && fn.substr(fn.size() - 4) == ".bin" && fn != "crypto_vault.bin")
+                {
+                    has_ps4_container_files = true;
+                    break;
+                }
+            }
+        }
+
         const bool has_final_keystone = (access((dst_target + "/keystone").c_str(), R_OK) == 0 &&
                                          machete::keystone::is_valid_keystone_file(dst_target + "/keystone")) ||
                                         (access((dst_target + "/sce_sys/keystone").c_str(), R_OK) == 0 &&
                                          machete::keystone::is_valid_keystone_file(dst_target + "/sce_sys/keystone"));
 
-        if (!is_ps5 && !has_final_keystone)
+        if (!is_ps5 && !has_final_keystone && !has_ps4_container_files)
         {
             if (machete::keystone::inject_fallback_fpkg_keystone(dst_target, game.title_id))
             {

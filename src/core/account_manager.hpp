@@ -69,7 +69,14 @@ inline std::uint64_t detect_active_account_id(std::uint32_t user_id)
         }
     }
 
-    // 2. Probar en metadatos y partidas existentes de PS4 (savedata_meta/user/* y savedata/*)
+    // 2. Probar en savedata.db del usuario (priorizando savedata_prospero) si existe alguna partida registrada en la consola
+    const std::uint64_t db_acc = db::query_account_id_from_savedata_db(user_id);
+    if (db_acc != 0 && db_acc != ~0ULL)
+    {
+        return db_acc;
+    }
+
+    // 3. Probar en metadatos y partidas existentes de PS4 (savedata_meta/user/* y savedata/*)
     for (const std::string &base_sfo_dir : {
              "/user/home/" + std::string(uid_hex) + "/savedata_meta/user",
              "/user/home/" + std::string(uid_hex) + "/savedata"})
@@ -136,13 +143,6 @@ inline std::uint64_t detect_active_account_id(std::uint32_t user_id)
                 }
             }
         }
-    }
-
-    // 4. Probar en savedata.db del usuario si existe alguna partida registrada en la consola
-    const std::uint64_t db_acc = db::query_account_id_from_savedata_db(user_id);
-    if (db_acc != 0 && db_acc != ~0ULL)
-    {
-        return db_acc;
     }
 
     // 5. Si no hay otra referencia, fallback seguro basado en el estándar offline de Apollo/PS5-Activator
