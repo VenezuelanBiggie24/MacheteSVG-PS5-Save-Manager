@@ -8,7 +8,7 @@ set -euo pipefail
 root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
 title_id="PPSA99700"
 app_name="MacheteSaveGameManager"
-version="1.3.0"
+version="1.3.1"
 
 echo "=================================================="
 echo "   Empaquetador de Distribución de MacheteSaveGameManager     "

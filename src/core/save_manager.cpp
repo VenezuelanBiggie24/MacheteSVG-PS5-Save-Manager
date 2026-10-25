@@ -545,6 +545,86 @@ inline std::string read_json_string_field(const std::string &json_path, const st
     return s.substr(q1 + 1, q2 - (q1 + 1));
 }
 
+std::string select_primary_ps5_slot(const std::vector<std::pair<std::string, std::uint64_t>> &slots,
+                                    std::uint64_t *out_size = nullptr)
+{
+    if (slots.empty())
+    {
+        if (out_size) *out_size = 0;
+        return "PROFILE";
+    }
+
+    const char *kGameplayPrefixes[] = {
+        "QUICKSAVE", "MANUALSAVE", "MANUAL", "AUTOSAVE", "SAVEDATA", "SAVE", "GAME", "SLOT", nullptr
+    };
+
+    auto extract_trailing_index = [](const std::string &name, const char *prefix) -> int {
+        const std::size_t plen = std::strlen(prefix);
+        if (name.rfind(prefix, 0) != 0) return -1;
+        const std::string suffix = name.substr(plen);
+        if (suffix.empty()) return 0;
+        char *endp = nullptr;
+        long val = std::strtol(suffix.c_str(), &endp, 10);
+        return (endp && *endp == '\0') ? static_cast<int>(val) : 0;
+    };
+
+    // 1. Probar cada prefijo de guardado en orden de prioridad.
+    // Para un mismo prefijo (ej. QUICKSAVE0, QUICKSAVE1, QUICKSAVE2), seleccionar el indice mas alto.
+    for (int p = 0; kGameplayPrefixes[p]; ++p)
+    {
+        int max_idx = -1;
+        const std::pair<std::string, std::uint64_t> *best = nullptr;
+        for (const auto &sl : slots)
+        {
+            if (sl.first.rfind(kGameplayPrefixes[p], 0) == 0)
+            {
+                int idx = extract_trailing_index(sl.first, kGameplayPrefixes[p]);
+                if (idx > max_idx || best == nullptr)
+                {
+                    max_idx = idx;
+                    best = &sl;
+                }
+            }
+        }
+        if (best)
+        {
+            if (out_size) *out_size = best->second;
+            return best->first;
+        }
+    }
+
+    // 2. Si no coincide con prefijos conocidos, seleccionar la ranura mas grande que NO sea "PROFILE"
+    const std::pair<std::string, std::uint64_t> *largest_non_profile = nullptr;
+    for (const auto &sl : slots)
+    {
+        if (sl.first != "PROFILE")
+        {
+            if (!largest_non_profile || sl.second > largest_non_profile->second)
+            {
+                largest_non_profile = &sl;
+            }
+        }
+    }
+    if (largest_non_profile)
+    {
+        if (out_size) *out_size = largest_non_profile->second;
+        return largest_non_profile->first;
+    }
+
+    // 3. Como ultimo recurso si unicamente existe PROFILE, utilizarlo
+    for (const auto &sl : slots)
+    {
+        if (sl.first == "PROFILE")
+        {
+            if (out_size) *out_size = sl.second;
+            return sl.first;
+        }
+    }
+
+    if (out_size) *out_size = slots[0].second;
+    return slots[0].first;
+}
+
 } // namespace
 
 bool synthesize_ps5_param_json(const std::string &title_id,
@@ -577,60 +657,12 @@ bool synthesize_ps5_param_json(const std::string &title_id,
         slots.push_back({"PROFILE", 3145728ULL});
     }
 
-    // Identificar slot primario:
-    // Si existe una ranura "PROFILE", DEBE ser la primaria. En Decima Engine (Horizon, Death Stranding)
-    // y la mayoria de motores multi-ranura de PS5, "PROFILE" es el indice maestro y catalogo de guardados.
-    // Si dirName en param.json apunta a AUTOSAVE0 en vez de PROFILE, el juego no encuentra el catalogo
-    // de ranuras y muestra "Datos dañados" o unicamente "Nueva partida".
-    std::string primary_slot;
+    // Identificar slot primario de juego:
+    // Priorizar siempre ranuras de juego activas con el indice mas reciente (QUICKSAVE, MANUALSAVE, AUTOSAVE).
+    // "PROFILE" unicamente contiene ajustes/opciones del juego, por lo que NO debe ser el dirName primario
+    // a menos que no exista ninguna otra ranura de juego.
     std::uint64_t primary_size = 0;
-
-    for (const auto &sl : slots)
-    {
-        if (sl.first == "PROFILE")
-        {
-            primary_slot = "PROFILE";
-            primary_size = sl.second;
-            break;
-        }
-    }
-
-    if (primary_slot.empty())
-    {
-        const char *kGameplayPrefixes[] = {
-            "AUTOSAVE", "SAVEDATA", "QUICKSAVE", "MANUAL", "SAVE", "GAME", "SLOT", nullptr
-        };
-        for (int p = 0; kGameplayPrefixes[p] && primary_slot.empty(); ++p)
-        {
-            for (const auto &sl : slots)
-            {
-                if (sl.first.rfind(kGameplayPrefixes[p], 0) == 0)
-                {
-                    primary_slot = sl.first;
-                    primary_size = sl.second;
-                    break;
-                }
-            }
-        }
-    }
-
-    if (primary_slot.empty())
-    {
-        for (const auto &sl : slots)
-        {
-            if (sl.first != "PROFILE" && sl.second > primary_size)
-            {
-                primary_slot = sl.first;
-                primary_size = sl.second;
-            }
-        }
-    }
-
-    if (primary_slot.empty() && !slots.empty())
-    {
-        primary_slot = slots[0].first;
-        primary_size = slots[0].second;
-    }
+    const std::string primary_slot = select_primary_ps5_slot(slots, &primary_size);
 
     std::string safe_title = game_title.empty() ? "Save Data" : game_title;
     std::string esc_title;
@@ -773,64 +805,29 @@ void reconstruct_prospero_metadata(const std::string &title_id,
             }
         }
 
-        if (primary_slot_file.empty())
+        std::vector<std::pair<std::string, std::uint64_t>> target_slots;
+        ScopedDir dir_sd(dst_target);
+        if (dir_sd.is_valid())
         {
-            const char *kGameplayCandidates[] = {
-                "AUTOSAVE0", "SAVEDATA0", "SAVEDATA00", "QUICKSAVE0", "MANUAL0", nullptr
-            };
-            for (int p = 0; kGameplayCandidates[p] && primary_slot_file.empty(); ++p)
+            while (const dirent *ent = readdir(dir_sd.get()))
             {
-                const std::string cand_path = dst_target + "/sdimg_" + kGameplayCandidates[p];
-                if (stat(cand_path.c_str(), &st_sd) == 0 && st_sd.st_size > 0)
+                if (std::strncmp(ent->d_name, "sdimg_", 6) == 0 && std::strncmp(ent->d_name, "sdimg_sce_bu_", 13) != 0)
                 {
-                    primary_slot_file = cand_path;
-                    primary_slot_name = kGameplayCandidates[p];
-                    break;
-                }
-            }
-        }
-        if (primary_slot_file.empty())
-        {
-            std::uint64_t max_non_profile_sz = 0;
-            ScopedDir dir_j(dst_target);
-            if (dir_j.is_valid())
-            {
-                while (const dirent *ent = readdir(dir_j.get()))
-                {
-                    if (std::strncmp(ent->d_name, "sdimg_", 6) == 0 && std::strncmp(ent->d_name, "sdimg_sce_bu_", 13) != 0)
+                    const std::string sname = ent->d_name + 6;
+                    struct stat st_ent{};
+                    if (stat((dst_target + "/" + ent->d_name).c_str(), &st_ent) == 0 && st_ent.st_size > 0)
                     {
-                        const std::string sname = ent->d_name + 6;
-                        if (sname != "PROFILE")
-                        {
-                            struct stat st_ent{};
-                            if (stat((dst_target + "/" + ent->d_name).c_str(), &st_ent) == 0 && st_ent.st_size > 0)
-                            {
-                                if (static_cast<std::uint64_t>(st_ent.st_size) > max_non_profile_sz)
-                                {
-                                    max_non_profile_sz = static_cast<std::uint64_t>(st_ent.st_size);
-                                    primary_slot_file = dst_target + "/" + ent->d_name;
-                                    primary_slot_name = sname;
-                                    st_sd = st_ent;
-                                }
-                            }
-                        }
+                        target_slots.push_back({sname, static_cast<std::uint64_t>(st_ent.st_size)});
                     }
                 }
             }
         }
+
         if (primary_slot_file.empty())
         {
-            const std::string cand_profile = dst_target + "/sdimg_PROFILE";
-            if (stat(cand_profile.c_str(), &st_sd) == 0 && st_sd.st_size > 0)
-            {
-                primary_slot_file = cand_profile;
-                primary_slot_name = "PROFILE";
-            }
-        }
-        if (primary_slot_file.empty())
-        {
-            primary_slot_file = dst_target + "/sdimg_PROFILE";
-            primary_slot_name = "PROFILE";
+            std::uint64_t primary_sz = 0;
+            primary_slot_name = select_primary_ps5_slot(target_slots, &primary_sz);
+            primary_slot_file = dst_target + "/sdimg_" + primary_slot_name;
             (void)stat(primary_slot_file.c_str(), &st_sd);
         }
 
@@ -840,12 +837,49 @@ void reconstruct_prospero_metadata(const std::string &title_id,
             machete::pfs::update_ps5_param_json_size(meta_target + "/param.json", static_cast<std::uint64_t>(st_sd.st_size));
         }
 
-        // Nota: No sobrescribir "titleId" dentro de param.json si el archivo proviene de un respaldo o Save Dummy valido,
-        // ya que en juegos con saveDataTitleId separado (ej. PPSA01969 -> carpeta PPSA01970), el param.json oficial
-        // dentro de savedata_prospero_meta/user/PPSA01970/param.json lleva "titleId": "PPSA01969" (el Title ID del juego).
+        // Asegurar que cada ranura en target_slots tenga sus descriptores <slot>_param.json y <slot>.json en meta_target
+        const std::uint64_t now_ms = static_cast<std::uint64_t>(std::time(nullptr)) * 1000ULL;
+        std::string safe_title = game_title.empty() ? "Save Data" : game_title;
+        std::string esc_title;
+        for (char c : safe_title)
+        {
+            if (c == '"') esc_title += "\\\"";
+            else if (c == '\\') esc_title += "\\\\";
+            else if (static_cast<unsigned char>(c) >= 32) esc_title += c;
+        }
+        if (esc_title.empty()) esc_title = title_id;
 
-        // Limpiar cualquier subdirectorio o archivo *_param.json / *.json espurio dentro de savedata_prospero_meta,
-        // ya que el sistema PS5 espera unicamente param.json e icon0.png / <slot>_icon0.png en este directorio.
+        for (const auto &sl : target_slots)
+        {
+            const std::string slot_param_file = meta_target + "/" + sl.first + "_param.json";
+            const std::string slot_json_file = meta_target + "/" + sl.first + ".json";
+            if (access(slot_param_file.c_str(), F_OK) != 0 || access(slot_json_file.c_str(), F_OK) != 0)
+            {
+                char slot_json[1024];
+                std::snprintf(slot_json, sizeof(slot_json),
+                              "{\n"
+                              "  \"titleId\": \"%s\",\n"
+                              "  \"dirName\": \"%s\",\n"
+                              "  \"fileSize\": %llu,\n"
+                              "  \"mtime\": %llu,\n"
+                              "  \"titleName\": \"%s\",\n"
+                              "  \"subTitle\": \"%s\",\n"
+                              "  \"detail\": \"\",\n"
+                              "  \"userParam\": 0\n"
+                              "}\n",
+                              title_id.c_str(), sl.first.c_str(),
+                              static_cast<unsigned long long>(sl.second),
+                              static_cast<unsigned long long>(now_ms),
+                              esc_title.c_str(), sl.first.c_str());
+
+                write_string_atomic(slot_param_file, slot_json, target_uid, target_gid);
+                write_string_atomic(slot_json_file, slot_json, target_uid, target_gid);
+            }
+        }
+
+        // Limpiar cualquier subdirectorio espurio dentro de savedata_prospero_meta.
+        // Los archivos *.json y *_param.json NO deben eliminarse ya que representan
+        // el catalogo de ranuras individuales que la consola y los motores de juego consultan.
         ScopedDir dir_meta_clean(meta_target);
         if (dir_meta_clean.is_valid())
         {
@@ -861,10 +895,6 @@ void reconstruct_prospero_metadata(const std::string &title_id,
                     if (S_ISDIR(st_m.st_mode))
                     {
                         pfs::remove_dir_recursive_simple(mfull);
-                    }
-                    else if (mname != "param.json" && mname.size() >= 5 && mname.substr(mname.size() - 5) == ".json")
-                    {
-                        (void)unlink(mfull.c_str());
                     }
                 }
             }
@@ -1641,11 +1671,26 @@ void post_process_restored_save(const scanner::ScannedGame &game,
         {
             (void)unlink((dst_target + "/crypto_vault.bin").c_str());
             (void)unlink((dst_target + "/.save_info").c_str());
-            if (pfs_rep.used_pfs_mount)
+            bool has_ps4_containers = false;
+            ScopedDir dchk(dst_target);
+            if (dchk.is_valid())
+            {
+                while (const dirent *de = readdir(dchk.get()))
+                {
+                    const std::string fn = de->d_name;
+                    if (fn.size() > 4 && fn.substr(fn.size() - 4) == ".bin" && fn != "crypto_vault.bin")
+                    {
+                        has_ps4_containers = true;
+                        break;
+                    }
+                }
+            }
+            if (has_ps4_containers || pfs_rep.used_pfs_mount)
             {
                 (void)unlink((dst_target + "/param.sfo").c_str());
                 (void)unlink((dst_target + "/keystone").c_str());
                 pfs::remove_dir_recursive_simple(dst_target + "/sce_sys");
+                MACHETE_LOG("[RESTORE]", "Sanitized PS4 container directory (removed loose files from %s)", dst_target.c_str());
             }
         }
     }

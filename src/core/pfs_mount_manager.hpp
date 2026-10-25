@@ -428,6 +428,11 @@ public:
             dynamic_paths.push_back(std::string("/") + rnd_word + "/common_ex/lib/libSceFsInternalForVsh.sprx");
             dynamic_paths.push_back(std::string("/") + rnd_word + "/priv/lib/libSceFsInternalForVsh.sprx");
             dynamic_paths.push_back(std::string("/") + rnd_word + "/common/lib/libSceFsInternalForVsh.sprx");
+            dynamic_paths.push_back(std::string("/") + rnd_word + "/priv_ex/lib/libSceFsInternal.sprx");
+            dynamic_paths.push_back(std::string("/") + rnd_word + "/common_ex/lib/libSceFsInternal.sprx");
+            dynamic_paths.push_back(std::string("/") + rnd_word + "/common/lib/libSceFsInternal.sprx");
+            dynamic_paths.push_back(std::string("/") + rnd_word + "/common/lib/libSceSaveData.sprx");
+            dynamic_paths.push_back(std::string("/") + rnd_word + "/common_ex/lib/libSceSaveData.sprx");
         }
 #endif
         static const char *static_candidate_paths[] = {
@@ -450,8 +455,14 @@ public:
             "/system/common/lib/libSceFsInternal.sprx",
             "/system/sys/libSceFsInternalForVsh.sprx",
             "/system/sys/libSceFsInternal.sprx",
+            "/system_ex/priv_ex/lib/libSceSaveData.sprx",
+            "/system_ex/common_ex/lib/libSceSaveData.sprx",
+            "/system/common/lib/libSceSaveData.sprx",
+            "/system/priv/lib/libSceSaveData.sprx",
             "libSceFsInternalForVsh.sprx",
             "libSceFsInternal.sprx",
+            "libSceSaveData.sprx",
+            "libSceSaveDataInternal.sprx",
             nullptr
         };
         for (int i = 0; static_candidate_paths[i]; ++i)
@@ -462,6 +473,7 @@ public:
         // Incluir tanto el nombre en texto plano como los NIDs reales en little-endian y big-endian
         static const char *kInitMountSyms[] = {
             "sceFsInitMountSaveDataOpt",
+            "sceSaveDataInitMountOpt",
             "+mPswO7rxKs",
             "-mPswO7rxKs",
             "q8Tr7sDsY/o",
@@ -470,6 +482,8 @@ public:
         };
         static const char *kMountSyms[] = {
             "sceFsMountSaveData",
+            "sceSaveDataMount",
+            "sceSaveDataMountInternal",
             "c7YjLnWxw/4",
             "c7YjLnWxw-4",
             "/sOxdS4jtnM",
@@ -478,6 +492,7 @@ public:
         };
         static const char *kInitUmountSyms[] = {
             "sceFsInitUmountSaveDataOpt",
+            "sceSaveDataInitUmountOpt",
             "udWWfVZ5cPg",
             "+HB5Vn2W1bk",
             "+HB5Vn2W1bk=",
@@ -485,6 +500,8 @@ public:
         };
         static const char *kUmountSyms[] = {
             "sceFsUmountSaveData",
+            "sceSaveDataUmount",
+            "sceSaveDataUmountInternal",
             "Ck7qGp2MjI4",
             "joyMnRrqTgo",
             "joyMnRrqTgo=",
@@ -549,9 +566,6 @@ public:
         for (const std::string &cand_str : dynamic_paths)
         {
             const char *cand = cand_str.c_str();
-            if (cand[0] == '/' && access(cand, R_OK) != 0)
-                continue;
-
             (void)dlerror();
             void *h = dlopen(cand, RTLD_NOW | RTLD_GLOBAL);
             if (!h)
@@ -692,15 +706,19 @@ public:
             base_name = "sdimg_staged";
 
         const std::string clean_slot = (base_name.rfind("sdimg_", 0) == 0) ? base_name.substr(6) : base_name;
-        // En PS5 sceFsMountSaveData requiere que la imagen tenga prefijo sdimg_<slot>
+        // En PS5 sceFsMountSaveData suele esperar prefijo sdimg_<slot>; en PS4 puede esperar <slot> puro
         const std::string staged_img = std::string(SAVE_STAGING_DIR) + "/sdimg_" + clean_slot;
+        const std::string staged_raw = std::string(SAVE_STAGING_DIR) + "/" + clean_slot;
         (void)unlink(staged_img.c_str());
+        (void)unlink(staged_raw.c_str());
         if (!copy_file_atomic(image_path, staged_img))
         {
             MACHETE_LOG("[PFS]", "Failed to stage PFS image %s -> %s", image_path.c_str(), staged_img.c_str());
             return false;
         }
         (void)chmod(staged_img.c_str(), 0755);
+        (void)copy_file_atomic(image_path, staged_raw);
+        (void)chmod(staged_raw.c_str(), 0755);
 
         // Si existe archivo companion <slot>.bin (PS4/PS5 BC), copiarlo junto a la imagen en staging
         original_bin_path_.clear();
@@ -730,8 +748,23 @@ public:
         mopt.budgetid = "system";
 
         (void)signal(SIGPIPE, SIG_IGN);
-        const int rc = mount_fn_(&mopt, staged_img.c_str(), SAVE_MNT_PATH, key);
+        int rc = mount_fn_(&mopt, staged_img.c_str(), SAVE_MNT_PATH, key);
         bool dev_mounted = (rc >= 0);
+        std::string staged_chosen = staged_img;
+        if (!dev_mounted)
+        {
+            SaveMountOpt mopt_raw{};
+            if (init_mount)
+                init_mount(&mopt_raw);
+            mopt_raw.budgetid = "system";
+            const int rc2 = mount_fn_(&mopt_raw, staged_raw.c_str(), SAVE_MNT_PATH, key);
+            if (rc2 >= 0)
+            {
+                rc = rc2;
+                dev_mounted = true;
+                staged_chosen = staged_raw;
+            }
+        }
         if (dev_mounted)
         {
             struct stat ma{}, mb{};
@@ -746,6 +779,7 @@ public:
             MACHETE_LOG("[PFS]", "sceFsMountSaveData failed on %s (rc=0x%08x)",
                         staged_img.c_str(), static_cast<unsigned int>(rc));
             (void)unlink(staged_img.c_str());
+            (void)unlink(staged_raw.c_str());
             if (!staged_bin_path_.empty())
                 (void)unlink(staged_bin_path_.c_str());
             return false;
@@ -754,7 +788,8 @@ public:
         mounted_ = true;
         write_back_ = write_back;
         original_image_path_ = image_path;
-        staged_image_path_ = staged_img;
+        staged_image_path_ = staged_chosen;
+        staged_raw_path_ = staged_raw;
         MACHETE_LOG("[PFS]", "Mounted PFS container %s at %s (write_back=%d, rc=%d)",
                     image_path.c_str(), SAVE_MNT_PATH, write_back ? 1 : 0, rc);
         return true;
@@ -804,6 +839,8 @@ public:
 
         if (!staged_image_path_.empty())
             (void)unlink(staged_image_path_.c_str());
+        if (!staged_raw_path_.empty())
+            (void)unlink(staged_raw_path_.c_str());
         if (!staged_bin_path_.empty())
             (void)unlink(staged_bin_path_.c_str());
         (void)rmdir(SAVE_MNT_PATH);
@@ -820,6 +857,7 @@ private:
     bool write_back_ = false;
     std::string original_image_path_;
     std::string staged_image_path_;
+    std::string staged_raw_path_;
     std::string original_bin_path_;
     std::string staged_bin_path_;
     int (*mount_fn_)(SaveMountOpt *, const char *, const char *, const void *) = nullptr;
