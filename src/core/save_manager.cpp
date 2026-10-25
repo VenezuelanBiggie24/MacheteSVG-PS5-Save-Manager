@@ -1292,21 +1292,21 @@ void post_process_restored_save(const scanner::ScannedGame &game,
             apply_permissions_recursive(meta_target, target_uid, target_gid);
         }
 
-        // Inyeccion de Keystone autentico en la carpeta de guardado de PS5 y en sus metadatos
-        const std::string ps5_ks = dst_target + "/keystone";
-        if (access(ps5_ks.c_str(), R_OK) != 0 || !machete::keystone::is_valid_keystone_file(ps5_ks))
+        // Inyeccion de Keystone autentico en los metadatos de PS5
+        // En PS5 (savedata_prospero), la carpeta de guardado NO debe contener un archivo keystone suelto,
+        // ya que savedata_prospero/<TitleID>/ solo contiene contenedores sdimg_*.
+        // El keystone pertenece exclusivamente a savedata_prospero_meta/<TitleID>/keystone y
+        // savedata_prospero_meta/user/<TitleID>/keystone.
+        (void)unlink((dst_target + "/keystone").c_str());
+
+        const std::string auth_ks = machete::keystone::find_authentic_game_keystone(save_dir_tid, backup_folder, dst_target, game.app_path);
+        if (!auth_ks.empty() && machete::keystone::is_valid_keystone_file(auth_ks))
         {
-            const std::string auth_ks = machete::keystone::find_authentic_game_keystone(save_dir_tid, backup_folder, dst_target, game.app_path);
-            if (!auth_ks.empty() && machete::keystone::is_valid_keystone_file(auth_ks))
-            {
-                (void)pfs::copy_file_atomic(auth_ks, ps5_ks, target_uid, target_gid);
-                (void)chmod(ps5_ks.c_str(), 0666);
-                (void)pfs::copy_file_atomic(auth_ks, meta_target_direct + "/keystone", target_uid, target_gid);
-                (void)chmod((meta_target_direct + "/keystone").c_str(), 0666);
-                (void)pfs::copy_file_atomic(auth_ks, meta_target_user + "/keystone", target_uid, target_gid);
-                (void)chmod((meta_target_user + "/keystone").c_str(), 0666);
-                MACHETE_LOG("[KEYSTONE]", "Injected authentic PS5 keystone for %s from %s", save_dir_tid.c_str(), auth_ks.c_str());
-            }
+            (void)pfs::copy_file_atomic(auth_ks, meta_target_direct + "/keystone", target_uid, target_gid);
+            (void)chmod((meta_target_direct + "/keystone").c_str(), 0666);
+            (void)pfs::copy_file_atomic(auth_ks, meta_target_user + "/keystone", target_uid, target_gid);
+            (void)chmod((meta_target_user + "/keystone").c_str(), 0666);
+            MACHETE_LOG("[KEYSTONE]", "Injected authentic PS5 keystone for %s from %s into metadata dirs", save_dir_tid.c_str(), auth_ks.c_str());
         }
 
         // 4. Asegurar que todos los slots sdimg_* presentes en dst_target esten registrados en savedata_prospero/<uid>/db/user/savedata.db
@@ -1340,7 +1340,7 @@ void post_process_restored_save(const scanner::ScannedGame &game,
 
                         db::update_or_register_ps5_savedata_db(
                             user_id, active_account_id, save_dir_tid, sname, s_size,
-                            game.title, game.title_id, slot_sub);
+                            game.title, game.title_id, slot_sub, static_cast<std::uint64_t>(st_s.st_mtime));
                     }
                 }
             }
@@ -1426,7 +1426,7 @@ void post_process_restored_save(const scanner::ScannedGame &game,
 
                         db::update_or_register_ps5_savedata_db(
                             user_id, active_account_id, paired_tid, psname, ps_size,
-                            game.title, game.title_id, pslot_sub);
+                            game.title, game.title_id, pslot_sub, static_cast<std::uint64_t>(st_ps.st_mtime));
                     }
                 }
             }
@@ -1775,18 +1775,20 @@ void post_process_restored_save(const scanner::ScannedGame &game,
                 }
             }
 
-            // Solo eliminar sce_sys suelto si el contenedor fue montado y modificado internamente con exito.
-            // Si el montaje PFS no estuvo disponible, conservar sce_sys/param.sfo sintetizado como contingencia.
-            if (pfs_rep.used_pfs_mount)
-            {
-                (void)unlink((dst_target + "/param.sfo").c_str());
-                pfs::remove_dir_recursive_simple(dst_target + "/sce_sys");
-                MACHETE_LOG("[RESTORE]", "Sanitized PS4 container directory (inner PFS container resigned): %s", dst_target.c_str());
-            }
-            else
-            {
-                MACHETE_LOG("[RESTORE]", "Preserved contingency sce_sys/param.sfo and keystone for PS4 save in %s", dst_target.c_str());
-            }
+            // En PS4 / PS5 BC (/user/home/<uid>/savedata/<TitleID>/), el directorio de la partida
+            // debe contener estrictamente los contenedores (<slot>, <slot>.bin, sce_bu_<slot>, etc.) y keystone.
+            // La presencia de param.sfo suelto o de la carpeta sce_sys/ fuera de la imagen PFS viola el estandar
+            // de retrocompatibilidad y provoca que el juego reporte 'no se pudo cargar los datos'.
+            (void)unlink((dst_target + "/param.sfo").c_str());
+            (void)unlink((dst_target + "/PARAM.SFO").c_str());
+            pfs::remove_dir_recursive_simple(dst_target + "/sce_sys");
+
+            // Limpieza estricta en meta_ps4_user: solo debe contener iconos
+            (void)unlink((meta_ps4_user + "/param.sfo").c_str());
+            (void)unlink((meta_ps4_user + "/PARAM.SFO").c_str());
+            pfs::remove_dir_recursive_simple(meta_ps4_user + "/sce_sys");
+
+            MACHETE_LOG("[RESTORE]", "Sanitized PS4 container directory (unlinked loose param.sfo & sce_sys, preserved keystone): %s", dst_target.c_str());
         }
     }
 

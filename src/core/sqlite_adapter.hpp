@@ -456,7 +456,8 @@ inline bool update_or_register_ps5_savedata_db(std::uint32_t user_id,
                                                std::uint64_t file_size_bytes,
                                                const std::string &game_title = "",
                                                const std::string &game_title_id_override = "",
-                                               const std::string &sub_title = "")
+                                               const std::string &sub_title = "",
+                                               std::uint64_t slot_mtime_sec = 0)
 {
     SqliteAdapter &adapter = SqliteAdapter::instance();
     if (!adapter.is_available())
@@ -468,8 +469,22 @@ inline bool update_or_register_ps5_savedata_db(std::uint32_t user_id,
 
     const std::uint32_t size_kib = (file_size_bytes > 0) ? static_cast<std::uint32_t>((file_size_bytes + 1023) / 1024) : 1024;
     const std::uint32_t blocks = (size_kib + 63) / 64; // En PS5 (savedata_prospero) 1 bloque = 64 KiB
-    const std::uint32_t system_blocks = (blocks >= 2) ? (blocks / 2) : 1;
-    const std::uint32_t free_blocks = (blocks > system_blocks) ? ((blocks - system_blocks) / 2) : 1;
+    // En PS5 (savedata_prospero), system_blocks es SIEMPRE 0 en las filas nativas del sistema.
+    // Un valor distinto de cero invalida la verificacion de libSceSaveData provocando 'Datos danados'.
+    const std::uint32_t system_blocks = 0;
+    const std::uint32_t free_blocks = (blocks > 0) ? (blocks / 3) : 0;
+
+    char iso_mtime[32];
+    std::time_t t_mtime = (slot_mtime_sec > 0) ? static_cast<std::time_t>(slot_mtime_sec) : std::time(nullptr);
+    struct tm *tm_utc = std::gmtime(&t_mtime);
+    if (tm_utc)
+    {
+        std::strftime(iso_mtime, sizeof(iso_mtime), "%Y-%m-%dT%H:%M:%S.00Z", tm_utc);
+    }
+    else
+    {
+        std::snprintf(iso_mtime, sizeof(iso_mtime), "2026-10-25T00:00:00.00Z");
+    }
 
     const std::string safe_tid = escape_sql_string(title_id);
     const std::string safe_gtid = escape_sql_string(game_title_id_override.empty() ? title_id : game_title_id_override);
@@ -574,20 +589,21 @@ inline bool update_or_register_ps5_savedata_db(std::uint32_t user_id,
                               "account_id = CASE WHEN %llu != 0 THEN %llu ELSE account_id END, "
                               "user_id = CASE WHEN %u != 0 THEN %u ELSE user_id END, "
                               "blocks = %u, "
-                              "system_blocks = %u, "
-                              "free_blocks = %u, "
+                              "system_blocks = 0, "
+                              "free_blocks = CASE WHEN (free_blocks IS NOT NULL AND free_blocks > 0) THEN free_blocks ELSE %u END, "
                               "size_kib = %u, "
                               "game_title_id = '%s', "
                               "convert_performance = 0, account_id_in_usb_path = '0000000000000000', "
                               "sub_title = '%s', "
                               "main_title = CASE WHEN (main_title IS NULL OR main_title = '' OR main_title = '%s') THEN '%s' ELSE main_title END, "
-                              "mtime = strftime('%%Y-%%m-%%dT%%H:%%M:%%S.00Z', CURRENT_TIMESTAMP) "
+                              "mtime = '%s' "
                               "WHERE title_id = '%s' AND dir_name = '%s';",
                               static_cast<unsigned long long>(account_id), static_cast<unsigned long long>(account_id),
                               user_id, user_id,
-                              blocks, system_blocks, free_blocks, size_kib, effective_gtid.c_str(),
+                              blocks, free_blocks, size_kib, effective_gtid.c_str(),
                               safe_sub.c_str(),
                               safe_tid.c_str(), safe_main.c_str(),
+                              iso_mtime,
                               safe_tid.c_str(), safe_slot.c_str());
             }
             else
@@ -597,18 +613,19 @@ inline bool update_or_register_ps5_savedata_db(std::uint32_t user_id,
                               "account_id = CASE WHEN %llu != 0 THEN %llu ELSE account_id END, "
                               "user_id = CASE WHEN %u != 0 THEN %u ELSE user_id END, "
                               "blocks = %u, "
-                              "free_blocks = %u, "
+                              "free_blocks = CASE WHEN (free_blocks IS NOT NULL AND free_blocks > 0) THEN free_blocks ELSE %u END, "
                               "size_kib = %u, "
                               "game_title_id = '%s', "
                               "sub_title = '%s', "
                               "main_title = CASE WHEN (main_title IS NULL OR main_title = '' OR main_title = '%s') THEN '%s' ELSE main_title END, "
-                              "mtime = strftime('%%Y-%%m-%%dT%%H:%%M:%%S.00Z', CURRENT_TIMESTAMP) "
+                              "mtime = '%s' "
                               "WHERE title_id = '%s' AND dir_name = '%s';",
                               static_cast<unsigned long long>(account_id), static_cast<unsigned long long>(account_id),
                               user_id, user_id,
                               blocks, free_blocks, size_kib, effective_gtid.c_str(),
                               safe_sub.c_str(),
                               safe_tid.c_str(), safe_main.c_str(),
+                              iso_mtime,
                               safe_tid.c_str(), safe_slot.c_str());
             }
             rc = adapter.exec(db, sql_update, nullptr, nullptr, &errmsg);
@@ -627,14 +644,14 @@ inline bool update_or_register_ps5_savedata_db(std::uint32_t user_id,
                               "account_id_in_usb_path"
                               ") VALUES ("
                               "'%s', '%s', '%s', '%s', '', '', "
-                              "0, 0, %u, %u, %u, strftime('%%Y-%%m-%%dT%%H:%%M:%%S.00Z', CURRENT_TIMESTAMP), "
+                              "0, 0, %u, %u, %u, '%s', "
                               "0, %llu, %u, 0, '', "
-                              "0, '%s', %u, 0, '0000000000000000');",
+                              "0, '%s', 0, 0, '0000000000000000');",
                               safe_tid.c_str(), safe_slot.c_str(),
                               safe_main.c_str(), safe_sub.c_str(),
-                              blocks, free_blocks, size_kib,
+                              blocks, free_blocks, size_kib, iso_mtime,
                               static_cast<unsigned long long>(account_id), user_id,
-                              effective_gtid.c_str(), system_blocks);
+                              effective_gtid.c_str());
             }
             else
             {
@@ -646,12 +663,12 @@ inline bool update_or_register_ps5_savedata_db(std::uint32_t user_id,
                               "cloud_revision, game_title_id"
                               ") VALUES ("
                               "'%s', '%s', '%s', '%s', '', '', "
-                              "0, 0, %u, %u, %u, strftime('%%Y-%%m-%%dT%%H:%%M:%%S.00Z', CURRENT_TIMESTAMP), "
+                              "0, 0, %u, %u, %u, '%s', "
                               "0, %llu, %u, 0, '', "
                               "0, '%s');",
                               safe_tid.c_str(), safe_slot.c_str(),
                               safe_main.c_str(), safe_sub.c_str(),
-                              blocks, free_blocks, size_kib,
+                              blocks, free_blocks, size_kib, iso_mtime,
                               static_cast<unsigned long long>(account_id), user_id,
                               effective_gtid.c_str());
             }
@@ -900,7 +917,7 @@ inline bool repair_title_corruption_flags(std::uint32_t user_id,
             char sql_p5[1024];
             std::snprintf(sql_p5, sizeof(sql_p5),
                           "UPDATE savedata SET "
-                          "system_blocks = CASE WHEN (system_blocks IS NULL OR system_blocks <= 0) THEN (CASE WHEN blocks >= 2 THEN blocks / 2 ELSE 1 END) ELSE system_blocks END, "
+                          "system_blocks = 0, "
                           "free_blocks = CASE WHEN (free_blocks IS NULL OR free_blocks <= 0) THEN (CASE WHEN blocks >= 2 THEN blocks / 4 ELSE 1 END) ELSE free_blocks END, "
                           "convert_performance = 0, account_id_in_usb_path = '0000000000000000' "
                           "WHERE title_id = '%s';",

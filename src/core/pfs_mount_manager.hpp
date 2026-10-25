@@ -1500,11 +1500,8 @@ inline PfsRestoreReport inject_and_resign_save(const std::string &title_id,
         for (const auto &slot : dummy_slots)
         {
             const std::string slot_label = (slot.rfind("sdimg_", 0) == 0) ? slot.substr(6) : slot;
-            const bool is_profile_slot = (slot_label == "PROFILE" || slot_label == "SAVEDATAPROFILE");
-            // En PS5 solo pisar con el dummy aquellos slots para los que tengamos datos desencriptados correspondientes,
-            // excepto PROFILE: en perfiles de usuario siempre restaurar el dummy local valido de esta consola
-            // para evitar que el motor del juego reporte perfil danado en el arranque.
-            if (is_ps5 && !is_profile_slot && resolve_decrypted_slot_dir(effective_dec_source, slot_label).empty())
+            // En PS5 solo pisar con el dummy aquellos slots para los que tengamos datos desencriptados correspondientes
+            if (is_ps5 && resolve_decrypted_slot_dir(effective_dec_source, slot_label).empty())
                 continue;
 
             (void)copy_file_atomic(preserved_dummy_dir + "/" + slot,

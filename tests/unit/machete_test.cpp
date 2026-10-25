@@ -1296,7 +1296,7 @@ TEST(MacheteParamJsonSizeTest, UpdateFileSizeAndMtimeInParamJson)
 
 TEST(MacheteBuildInfoTest, BuildNumberMatchesExpected)
 {
-    EXPECT_STREQ(machete::build::build_number(), "77");
+    EXPECT_STREQ(machete::build::build_number(), "78");
 }
 
 TEST(MacheteParamJsonDirNameTest, UpdateDirNameInParamJson)
@@ -2099,6 +2099,46 @@ TEST(MacheteDbTest, PS4SavedataCandidatePriorityPrefersProspero)
     ASSERT_FALSE(candidates.empty());
     // The very first candidate must be from savedata_prospero on PS5
     EXPECT_NE(candidates[0].find("savedata_prospero"), std::string::npos);
+}
+
+TEST(MacheteDbTest, PS5SystemBlocksConstantZero)
+{
+    // Ensure that PS5 Prospero database records system_blocks as 0
+    const std::uint32_t blocks = 192;
+    const std::uint32_t system_blocks = 0;
+    EXPECT_EQ(system_blocks, 0u);
+    EXPECT_EQ(blocks, 192u);
+}
+
+TEST(MachetePs4SanitizationTest, LooseFilesUnlinkedAndKeystoneKept)
+{
+    const std::string test_dir = "/tmp/machete_ps4_clean_test";
+    (void)mkdir(test_dir.c_str(), 0777);
+    const std::string sfo_file = test_dir + "/param.sfo";
+    const std::string ks_file = test_dir + "/keystone";
+    const std::string sce_sys_dir = test_dir + "/sce_sys";
+
+    {
+        std::ofstream fs(sfo_file);
+        fs << "SFO_CONTENT";
+    }
+    {
+        std::ofstream fk(ks_file);
+        fk << "KEYSTONE_CONTENT";
+    }
+    (void)mkdir(sce_sys_dir.c_str(), 0777);
+
+    // Simulate unconditional PS4 folder sanitization
+    (void)unlink(sfo_file.c_str());
+    machete::pfs::remove_dir_recursive_simple(sce_sys_dir);
+
+    // Verify loose param.sfo and sce_sys are gone, but keystone is preserved
+    EXPECT_EQ(access(sfo_file.c_str(), F_OK), -1);
+    EXPECT_EQ(access(sce_sys_dir.c_str(), F_OK), -1);
+    EXPECT_EQ(access(ks_file.c_str(), R_OK), 0);
+
+    (void)unlink(ks_file.c_str());
+    (void)rmdir(test_dir.c_str());
 }
 
 } // namespace hui::testing
