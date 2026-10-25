@@ -769,7 +769,7 @@ constexpr std::string_view kWebUiHtml = R"rawhtml(<!DOCTYPE html>
       <div>
         <div class="brand-title">
           <span>MacheteSaveGameManager</span>
-          <span class="version-tag" id="main-header-version">PPSA99700 v1.3.2</span>
+          <span class="version-tag" id="main-header-version">PPSA99700 v1.3.3</span>
         </div>
         <div class="brand-subtitle">Estación Web Local & Gestor de Partidas PS5 / PS4</div>
       </div>
@@ -960,7 +960,7 @@ constexpr std::string_view kWebUiHtml = R"rawhtml(<!DOCTYPE html>
         <div>
           <h3 style="display:flex; align-items:center; gap:0.6rem;">
             <span>Actualizador Remoto de MacheteSVG</span>
-            <span class="version-tag" id="updater-curr-version">v1.3.2</span>
+            <span class="version-tag" id="updater-curr-version">v1.3.3</span>
           </h3>
           <p>Instalacion automatica de paquetes de actualizacion .zip sin necesidad de cliente FTP</p>
         </div>

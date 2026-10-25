@@ -8,7 +8,7 @@ set -euo pipefail
 root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
 title_id="PPSA99700"
 app_name="MacheteSaveGameManager"
-version="1.3.2"
+version="1.3.3"
 
 echo "=================================================="
 echo "   Empaquetador de Distribución de MacheteSaveGameManager     "
@@ -58,7 +58,7 @@ rm -rf "$root/dist/lapy_jb" "$root/dist/PPSA00001"
 # 3. Crear guía de instalación bilingüe (Nombre en inglés: INSTRUCTIONS.txt, Inglés primero, Español después)
 cat << 'EOF' > "$dist_dir/INSTRUCTIONS.txt"
 =====================================================
-   MacheteSaveGameManager v1.3.0 - PS5 & PS4 Savegame Manager
+   MacheteSaveGameManager v1.3.3 - PS5 & PS4 Savegame Manager
 =====================================================
 
 [ENGLISH GUIDE]

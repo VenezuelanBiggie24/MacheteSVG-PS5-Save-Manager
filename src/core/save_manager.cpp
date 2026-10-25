@@ -1754,26 +1754,38 @@ void post_process_restored_save(const scanner::ScannedGame &game,
         {
             (void)unlink((dst_target + "/crypto_vault.bin").c_str());
             (void)unlink((dst_target + "/.save_info").c_str());
-            bool has_ps4_containers = false;
-            ScopedDir dchk(dst_target);
-            if (dchk.is_valid())
+            // En PS4 / PS5 BC, keystone es el token criptografico que el emulador y SAMU verifican obligatoriamente.
+            // Asegurar que el keystone autentico este presente en el directorio del guardado.
+            const std::string ks_path = dst_target + "/keystone";
+            if (access(ks_path.c_str(), R_OK) != 0 || !machete::keystone::is_valid_keystone_file(ks_path))
             {
-                while (const dirent *de = readdir(dchk.get()))
+                for (const std::string &cand_ks : {
+                         preserved_dummy_dir + "/keystone",
+                         preserved_dummy_dir + "/.meta_dummy/keystone",
+                         backup_folder + "/keystone",
+                         "/data/MacheteSVG/keystones/" + save_dir_tid + ".keystone"})
                 {
-                    const std::string fn = de->d_name;
-                    if (fn.size() > 4 && fn.substr(fn.size() - 4) == ".bin" && fn != "crypto_vault.bin")
+                    if (access(cand_ks.c_str(), R_OK) == 0 && machete::keystone::is_valid_keystone_file(cand_ks))
                     {
-                        has_ps4_containers = true;
+                        (void)pfs::copy_file_atomic(cand_ks, ks_path, target_uid, target_gid);
+                        (void)chmod(ks_path.c_str(), 0666);
+                        MACHETE_LOG("[KEYSTONE]", "Restored authentic keystone for PS4 save in %s", ks_path.c_str());
                         break;
                     }
                 }
             }
-            if (has_ps4_containers || pfs_rep.used_pfs_mount)
+
+            // Solo eliminar sce_sys suelto si el contenedor fue montado y modificado internamente con exito.
+            // Si el montaje PFS no estuvo disponible, conservar sce_sys/param.sfo sintetizado como contingencia.
+            if (pfs_rep.used_pfs_mount)
             {
                 (void)unlink((dst_target + "/param.sfo").c_str());
-                (void)unlink((dst_target + "/keystone").c_str());
                 pfs::remove_dir_recursive_simple(dst_target + "/sce_sys");
-                MACHETE_LOG("[RESTORE]", "Sanitized PS4 container directory (removed loose files from %s)", dst_target.c_str());
+                MACHETE_LOG("[RESTORE]", "Sanitized PS4 container directory (inner PFS container resigned): %s", dst_target.c_str());
+            }
+            else
+            {
+                MACHETE_LOG("[RESTORE]", "Preserved contingency sce_sys/param.sfo and keystone for PS4 save in %s", dst_target.c_str());
             }
         }
     }

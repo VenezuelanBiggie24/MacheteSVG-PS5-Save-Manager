@@ -416,7 +416,9 @@ public:
 
 #if defined(__PROSPERO__) || defined(__Prospero__) || defined(__PS5__)
         // Pre-cargar el modulo interno SCE_SYSMODULE_INTERNAL_FS_INTERNAL (0x80000066)
-        (void)sceSysmoduleLoadModuleInternal(0x80000066U);
+        int sys_rc = sceSysmoduleLoadModuleInternal(0x80000066U);
+        MACHETE_LOG("[PFS]", "sceSysmoduleLoadModuleInternal(0x80000066) -> 0x%08x",
+                    static_cast<unsigned int>(sys_rc));
 #endif
 
         std::vector<std::string> dynamic_paths;
@@ -570,8 +572,12 @@ public:
             void *h = dlopen(cand, RTLD_NOW | RTLD_GLOBAL);
             if (!h)
                 h = dlopen(cand, RTLD_LAZY | RTLD_GLOBAL);
-            if (h && probe_handle(h, cand))
-                return true;
+            if (h)
+            {
+                MACHETE_LOG("[PFS]", "dlopen('%s') succeeded (handle=%p)", cand, h);
+                if (probe_handle(h, cand))
+                    return true;
+            }
         }
 
 #if defined(__PROSPERO__) || defined(__Prospero__) || defined(__PS5__)
@@ -643,8 +649,22 @@ public:
             const char *cand = cand_str.c_str();
             int res_out = 0;
             int mod_handle = sceKernelLoadStartModule(cand, 0, nullptr, 0, nullptr, &res_out);
-            if (mod_handle >= 0 && probe_kernel_mod(mod_handle, cand))
-                return true;
+            if (mod_handle >= 0 || static_cast<unsigned int>(mod_handle) == 0x80020023U)
+            {
+                MACHETE_LOG("[PFS]", "sceKernelLoadStartModule('%s') -> 0x%08x (res_out=%d)",
+                            cand, static_cast<unsigned int>(mod_handle), res_out);
+                void *h = dlopen(cand, RTLD_NOW | RTLD_GLOBAL);
+                if (!h)
+                    h = dlopen(cand, RTLD_LAZY | RTLD_GLOBAL);
+                if (!h)
+                    h = dlopen("libSceFsInternalForVsh.sprx", RTLD_NOW | RTLD_GLOBAL);
+                if (!h)
+                    h = dlopen("libSceFsInternalForVsh.sprx", RTLD_LAZY | RTLD_GLOBAL);
+                if (h && probe_handle(h, cand))
+                    return true;
+                if (mod_handle >= 0 && probe_kernel_mod(mod_handle, cand))
+                    return true;
+            }
         }
 
         // 4. Escanear todos los modulos ya cargados en el proceso mediante sceKernelGetModuleList
@@ -1480,8 +1500,11 @@ inline PfsRestoreReport inject_and_resign_save(const std::string &title_id,
         for (const auto &slot : dummy_slots)
         {
             const std::string slot_label = (slot.rfind("sdimg_", 0) == 0) ? slot.substr(6) : slot;
-            // En PS5 solo pisar con el dummy aquellos slots para los que tengamos datos desencriptados correspondientes
-            if (is_ps5 && resolve_decrypted_slot_dir(effective_dec_source, slot_label).empty())
+            const bool is_profile_slot = (slot_label == "PROFILE" || slot_label == "SAVEDATAPROFILE");
+            // En PS5 solo pisar con el dummy aquellos slots para los que tengamos datos desencriptados correspondientes,
+            // excepto PROFILE: en perfiles de usuario siempre restaurar el dummy local valido de esta consola
+            // para evitar que el motor del juego reporte perfil danado en el arranque.
+            if (is_ps5 && !is_profile_slot && resolve_decrypted_slot_dir(effective_dec_source, slot_label).empty())
                 continue;
 
             (void)copy_file_atomic(preserved_dummy_dir + "/" + slot,
