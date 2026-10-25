@@ -74,15 +74,22 @@ inline bool is_valid_ps4_slot_name(const std::string &save_dir, const std::strin
         return false;
     if (name.size() > 4 && (name.substr(name.size() - 4) == ".bin" || name.substr(name.size() - 4) == ".tmp"))
         return false;
-    if (name.rfind("sce_bu_", 0) == 0)
+    if (name.rfind("sce_bu_", 0) == 0 || name.rfind("sdimg_sce_bu_", 0) == 0)
         return false;
     if (name == "sealedkey" || name == "keystone" || name == "param.sfo" || name == "PARAM.SFO" || name == "icon0.png")
         return false;
 
-    // En PS4 el contenedor de guardado debe tener un companion <name>.bin o sealedkey
-    const std::string bin_path = save_dir + "/" + name + ".bin";
+    const std::string clean_name = (name.rfind("sdimg_", 0) == 0) ? name.substr(6) : name;
+    if (clean_name.empty() || clean_name.rfind("sce_bu_", 0) == 0)
+        return false;
+
+    // En PS4/PS5 BC el contenedor de guardado (ej. sdimg_Book o Book) tiene un companion <slot>.bin (ej. Book.bin)
+    const std::string bin_path_clean = save_dir + "/" + clean_name + ".bin";
+    const std::string bin_path_raw = save_dir + "/" + name + ".bin";
     const std::string sealed_path = save_dir + "/sealedkey";
-    return (access(bin_path.c_str(), R_OK) == 0 || access(sealed_path.c_str(), R_OK) == 0);
+    return (access(bin_path_clean.c_str(), R_OK) == 0 ||
+            access(bin_path_raw.c_str(), R_OK) == 0 ||
+            access(sealed_path.c_str(), R_OK) == 0);
 }
 
 inline bool is_valid_slot_name(const std::string &save_dir, const std::string &name, bool is_ps5)
@@ -328,7 +335,7 @@ inline bool decrypt_pfs_key_for_slot(const std::string &save_dir,
         }
     }
 
-    if (blob_read && vault::decrypt_blob_via_pfsmgr(sealed_blob, out_key))
+    if (blob_read && vault::decrypt_blob_via_pfsmgr(sealed_blob, out_key, is_ps5))
     {
         return true;
     }
@@ -357,6 +364,8 @@ extern "C"
                                  std::uint32_t flags, void *opt, int *pRes);
     int sceKernelDlsym(int handle, const char *symbol, void **addrp);
     int sceKernelGetModuleList(int * handles, std::size_t num_handles, std::size_t *out_count);
+    int sceSysmoduleLoadModuleInternal(std::uint32_t id);
+    const char *sceKernelGetFsSandboxRandomWord(void);
 }
 #endif
 
@@ -405,9 +414,25 @@ public:
             return true;
         }
 
-        static const char *candidate_paths[] = {
-            "/system_ex/common_ex/lib/libSceFsInternalForVsh.sprx",
+#if defined(__PROSPERO__) || defined(__Prospero__) || defined(__PS5__)
+        // Pre-cargar el modulo interno SCE_SYSMODULE_INTERNAL_FS_INTERNAL (0x80000066)
+        (void)sceSysmoduleLoadModuleInternal(0x80000066U);
+#endif
+
+        std::vector<std::string> dynamic_paths;
+#if defined(__PROSPERO__) || defined(__Prospero__) || defined(__PS5__)
+        const char *rnd_word = sceKernelGetFsSandboxRandomWord();
+        if (rnd_word && rnd_word[0] != '\0')
+        {
+            dynamic_paths.push_back(std::string("/") + rnd_word + "/priv_ex/lib/libSceFsInternalForVsh.sprx");
+            dynamic_paths.push_back(std::string("/") + rnd_word + "/common_ex/lib/libSceFsInternalForVsh.sprx");
+            dynamic_paths.push_back(std::string("/") + rnd_word + "/priv/lib/libSceFsInternalForVsh.sprx");
+            dynamic_paths.push_back(std::string("/") + rnd_word + "/common/lib/libSceFsInternalForVsh.sprx");
+        }
+#endif
+        static const char *static_candidate_paths[] = {
             "/system_ex/priv_ex/lib/libSceFsInternalForVsh.sprx",
+            "/system_ex/common_ex/lib/libSceFsInternalForVsh.sprx",
             "/system_ex/vsh_ex/lib/libSceFsInternalForVsh.sprx",
             "/system_ex/common/lib/libSceFsInternalForVsh.sprx",
             "/system_ex/priv/lib/libSceFsInternalForVsh.sprx",
@@ -429,27 +454,38 @@ public:
             "libSceFsInternal.sprx",
             nullptr
         };
+        for (int i = 0; static_candidate_paths[i]; ++i)
+        {
+            dynamic_paths.push_back(static_candidate_paths[i]);
+        }
 
+        // Incluir tanto el nombre en texto plano como los NIDs reales en little-endian y big-endian
         static const char *kInitMountSyms[] = {
             "sceFsInitMountSaveDataOpt",
+            "+mPswO7rxKs",
+            "-mPswO7rxKs",
             "q8Tr7sDsY/o",
             "q8Tr7sDsY/o=",
             nullptr
         };
         static const char *kMountSyms[] = {
             "sceFsMountSaveData",
+            "c7YjLnWxw/4",
+            "c7YjLnWxw-4",
             "/sOxdS4jtnM",
             "/sOxdS4jtnM=",
             nullptr
         };
         static const char *kInitUmountSyms[] = {
             "sceFsInitUmountSaveDataOpt",
+            "udWWfVZ5cPg",
             "+HB5Vn2W1bk",
             "+HB5Vn2W1bk=",
             nullptr
         };
         static const char *kUmountSyms[] = {
             "sceFsUmountSaveData",
+            "Ck7qGp2MjI4",
             "joyMnRrqTgo",
             "joyMnRrqTgo=",
             nullptr
@@ -510,9 +546,9 @@ public:
         #endif
 
         // 2. Probar cargando con dlopen las rutas candidatas del sistema
-        for (int i = 0; candidate_paths[i]; ++i)
+        for (const std::string &cand_str : dynamic_paths)
         {
-            const char *cand = candidate_paths[i];
+            const char *cand = cand_str.c_str();
             if (cand[0] == '/' && access(cand, R_OK) != 0)
                 continue;
 
@@ -525,70 +561,87 @@ public:
         }
 
 #if defined(__PROSPERO__) || defined(__Prospero__) || defined(__PS5__)
-        // 3. Probar mediante sceKernelLoadStartModule de libkernel (para modulos del sistema priv)
-        for (int i = 0; candidate_paths[i]; ++i)
+        auto probe_kernel_mod = [&](int mod_handle, const char *tag) -> bool {
+            if (mod_handle < 0)
+                return false;
+            int (*found_init_m)(SaveMountOpt *) = nullptr;
+            int (*found_m)(SaveMountOpt *, const char *, const char *, const void *) = nullptr;
+            int (*found_init_u)(SaveMountOpt *) = nullptr;
+            int (*found_u)(SaveMountOpt *, const char *, void *, int) = nullptr;
+
+            for (int k = 0; kInitMountSyms[k]; ++k)
+            {
+                void *s = nullptr;
+                if (sceKernelDlsym(mod_handle, kInitMountSyms[k], &s) == 0 && s)
+                {
+                    found_init_m = reinterpret_cast<int (*)(SaveMountOpt *)>(s);
+                    break;
+                }
+            }
+            for (int k = 0; kMountSyms[k]; ++k)
+            {
+                void *s = nullptr;
+                if (sceKernelDlsym(mod_handle, kMountSyms[k], &s) == 0 && s)
+                {
+                    found_m = reinterpret_cast<int (*)(SaveMountOpt *, const char *, const char *, const void *)>(s);
+                    break;
+                }
+            }
+            for (int k = 0; kInitUmountSyms[k]; ++k)
+            {
+                void *s = nullptr;
+                if (sceKernelDlsym(mod_handle, kInitUmountSyms[k], &s) == 0 && s)
+                {
+                    found_init_u = reinterpret_cast<int (*)(SaveMountOpt *)>(s);
+                    break;
+                }
+            }
+            for (int k = 0; kUmountSyms[k]; ++k)
+            {
+                void *s = nullptr;
+                if (sceKernelDlsym(mod_handle, kUmountSyms[k], &s) == 0 && s)
+                {
+                    found_u = reinterpret_cast<int (*)(SaveMountOpt *, const char *, void *, int)>(s);
+                    break;
+                }
+            }
+
+            if (found_m && found_u)
+            {
+                s_init_mount = found_init_m;
+                s_mount_fn = found_m;
+                s_init_umount = found_init_u;
+                s_umount_fn = found_u;
+                s_already_resolved = true;
+                if (out_init_mount) *out_init_mount = s_init_mount;
+                if (out_mount) *out_mount = s_mount_fn;
+                if (out_init_umount) *out_init_umount = s_init_umount;
+                if (out_umount) *out_umount = s_umount_fn;
+                MACHETE_LOG("[PFS]", "Resolved PFS mount symbols via kernel module: %s (handle=%d)", tag, mod_handle);
+                return true;
+            }
+            return false;
+        };
+
+        // 3. Probar mediante sceKernelLoadStartModule de libkernel
+        for (const std::string &cand_str : dynamic_paths)
         {
-            const char *cand = candidate_paths[i];
+            const char *cand = cand_str.c_str();
             int res_out = 0;
             int mod_handle = sceKernelLoadStartModule(cand, 0, nullptr, 0, nullptr, &res_out);
-            if (mod_handle >= 0)
+            if (mod_handle >= 0 && probe_kernel_mod(mod_handle, cand))
+                return true;
+        }
+
+        // 4. Escanear todos los modulos ya cargados en el proceso mediante sceKernelGetModuleList
+        int handles[256] = {0};
+        std::size_t num_loaded = 0;
+        if (sceKernelGetModuleList(handles, 256, &num_loaded) == 0 && num_loaded > 0)
+        {
+            for (std::size_t m = 0; m < num_loaded && m < 256; ++m)
             {
-                int (*found_init_m)(SaveMountOpt *) = nullptr;
-                int (*found_m)(SaveMountOpt *, const char *, const char *, const void *) = nullptr;
-                int (*found_init_u)(SaveMountOpt *) = nullptr;
-                int (*found_u)(SaveMountOpt *, const char *, void *, int) = nullptr;
-
-                for (int k = 0; kInitMountSyms[k]; ++k)
-                {
-                    void *s = nullptr;
-                    if (sceKernelDlsym(mod_handle, kInitMountSyms[k], &s) == 0 && s)
-                    {
-                        found_init_m = reinterpret_cast<int (*)(SaveMountOpt *)>(s);
-                        break;
-                    }
-                }
-                for (int k = 0; kMountSyms[k]; ++k)
-                {
-                    void *s = nullptr;
-                    if (sceKernelDlsym(mod_handle, kMountSyms[k], &s) == 0 && s)
-                    {
-                        found_m = reinterpret_cast<int (*)(SaveMountOpt *, const char *, const char *, const void *)>(s);
-                        break;
-                    }
-                }
-                for (int k = 0; kInitUmountSyms[k]; ++k)
-                {
-                    void *s = nullptr;
-                    if (sceKernelDlsym(mod_handle, kInitUmountSyms[k], &s) == 0 && s)
-                    {
-                        found_init_u = reinterpret_cast<int (*)(SaveMountOpt *)>(s);
-                        break;
-                    }
-                }
-                for (int k = 0; kUmountSyms[k]; ++k)
-                {
-                    void *s = nullptr;
-                    if (sceKernelDlsym(mod_handle, kUmountSyms[k], &s) == 0 && s)
-                    {
-                        found_u = reinterpret_cast<int (*)(SaveMountOpt *, const char *, void *, int)>(s);
-                        break;
-                    }
-                }
-
-                if (found_m && found_u)
-                {
-                    s_init_mount = found_init_m;
-                    s_mount_fn = found_m;
-                    s_init_umount = found_init_u;
-                    s_umount_fn = found_u;
-                    s_already_resolved = true;
-                    if (out_init_mount) *out_init_mount = s_init_mount;
-                    if (out_mount) *out_mount = s_mount_fn;
-                    if (out_init_umount) *out_init_umount = s_init_umount;
-                    if (out_umount) *out_umount = s_umount_fn;
-                    MACHETE_LOG("[PFS]", "Resolved PFS mount symbols via sceKernelLoadStartModule: %s", cand);
+                if (probe_kernel_mod(handles[m], "sceKernelGetModuleList"))
                     return true;
-                }
             }
         }
 #endif
@@ -628,13 +681,19 @@ public:
         }
 
         std::string base_name = image_path;
+        std::string parent_dir;
         const std::size_t last_slash = image_path.find_last_of('/');
         if (last_slash != std::string::npos)
+        {
+            parent_dir = image_path.substr(0, last_slash);
             base_name = image_path.substr(last_slash + 1);
+        }
         if (base_name.empty())
             base_name = "sdimg_staged";
 
-        const std::string staged_img = std::string(SAVE_STAGING_DIR) + "/" + base_name;
+        const std::string clean_slot = (base_name.rfind("sdimg_", 0) == 0) ? base_name.substr(6) : base_name;
+        // En PS5 sceFsMountSaveData requiere que la imagen tenga prefijo sdimg_<slot>
+        const std::string staged_img = std::string(SAVE_STAGING_DIR) + "/sdimg_" + clean_slot;
         (void)unlink(staged_img.c_str());
         if (!copy_file_atomic(image_path, staged_img))
         {
@@ -643,19 +702,25 @@ public:
         }
         (void)chmod(staged_img.c_str(), 0755);
 
-        // Si existe archivo companion <slot>.bin (PS4), copiarlo junto a la imagen en staging
+        // Si existe archivo companion <slot>.bin (PS4/PS5 BC), copiarlo junto a la imagen en staging
         original_bin_path_.clear();
         staged_bin_path_.clear();
-        const std::string src_bin = image_path + ".bin";
+        std::string src_bin = parent_dir.empty() ? (clean_slot + ".bin") : (parent_dir + "/" + clean_slot + ".bin");
+        if (access(src_bin.c_str(), R_OK) != 0)
+            src_bin = image_path + ".bin";
         if (access(src_bin.c_str(), R_OK) == 0)
         {
-            const std::string dst_bin = staged_img + ".bin";
-            (void)unlink(dst_bin.c_str());
-            if (copy_file_atomic(src_bin, dst_bin))
+            const std::string dst_bin_clean = std::string(SAVE_STAGING_DIR) + "/" + clean_slot + ".bin";
+            const std::string dst_bin_sdimg = staged_img + ".bin";
+            (void)unlink(dst_bin_clean.c_str());
+            (void)unlink(dst_bin_sdimg.c_str());
+            if (copy_file_atomic(src_bin, dst_bin_clean))
             {
-                (void)chmod(dst_bin.c_str(), 0755);
+                (void)chmod(dst_bin_clean.c_str(), 0755);
+                (void)copy_file_atomic(src_bin, dst_bin_sdimg);
+                (void)chmod(dst_bin_sdimg.c_str(), 0755);
                 original_bin_path_ = src_bin;
-                staged_bin_path_ = dst_bin;
+                staged_bin_path_ = dst_bin_clean;
             }
         }
 
@@ -1090,6 +1155,7 @@ inline bool preserve_local_save_dummy(const std::string &dst_target, const std::
         for (const std::string &bin_cand : {
                  sname + ".bin", slot + ".bin",
                  "sce_bu_" + sname, "sce_bu_" + sname + ".bin",
+                 "sdimg_sce_bu_" + sname, "sdimg_sce_bu_" + sname + ".bin",
                  std::string("sealedkey")})
         {
             if (access((dst_target + "/" + bin_cand).c_str(), R_OK) == 0)
@@ -1346,6 +1412,7 @@ inline PfsRestoreReport inject_and_resign_save(const std::string &title_id,
             for (const std::string &bin_cand : {
                      sname + ".bin", slot + ".bin",
                      "sce_bu_" + sname, "sce_bu_" + sname + ".bin",
+                     "sdimg_sce_bu_" + sname, "sdimg_sce_bu_" + sname + ".bin",
                      std::string("sealedkey")})
             {
                 if (access((preserved_dummy_dir + "/" + bin_cand).c_str(), R_OK) == 0)
@@ -1413,53 +1480,8 @@ inline PfsRestoreReport inject_and_resign_save(const std::string &title_id,
                 if (stat(image_path.c_str(), &st_f) == 0)
                     fsz = static_cast<std::uint64_t>(st_f.st_size);
 
-                sfo::SfoSaveMetadata in_place_meta{};
-                if (!is_ps5)
-                {
-                    std::vector<std::uint8_t> extracted_sfo;
-                    if (crypto::resign_ps4_pfs_container_sectors(image_path, plain_key, rp, &extracted_sfo))
-                    {
-                        report.sfo_resigned = true;
-                        if (!extracted_sfo.empty())
-                        {
-                            (void)sfo::read_sfo_metadata_from_buffer(extracted_sfo.data(), extracted_sfo.size(), in_place_meta);
-                            char uid_hex[32];
-                            std::snprintf(uid_hex, sizeof(uid_hex), "%x", user_id);
-                            const std::string meta_ps4 = std::string("/user/home/") + uid_hex + "/savedata_meta/user/" + title_id;
-                            ensure_dir_tree(meta_ps4, owner_uid, owner_gid);
-
-                            const std::string out_sfo = meta_ps4 + "/param.sfo";
-                            const std::string out_slot_sfo = meta_ps4 + "/" + slot_name + "_param.sfo";
-                            std::FILE *sf = std::fopen(out_sfo.c_str(), "wb");
-                            if (sf) {
-                                std::fwrite(extracted_sfo.data(), 1, extracted_sfo.size(), sf);
-                                std::fclose(sf);
-                                (void)chmod(out_sfo.c_str(), 0666);
-                            }
-                            std::FILE *ssf = std::fopen(out_slot_sfo.c_str(), "wb");
-                            if (ssf) {
-                                std::fwrite(extracted_sfo.data(), 1, extracted_sfo.size(), ssf);
-                                std::fclose(ssf);
-                                (void)chmod(out_slot_sfo.c_str(), 0666);
-                            }
-                            ensure_dir_tree(dst_target + "/sce_sys", owner_uid, owner_gid);
-                            std::FILE *dsf = std::fopen((dst_target + "/sce_sys/param.sfo").c_str(), "wb");
-                            if (dsf) {
-                                std::fwrite(extracted_sfo.data(), 1, extracted_sfo.size(), dsf);
-                                std::fclose(dsf);
-                                (void)chmod((dst_target + "/sce_sys/param.sfo").c_str(), 0666);
-                            }
-                        }
-
-                        // Sincronizar tambien el backup slot sce_bu_<slot>
-                        const std::string bu_img = dst_target + "/sce_bu_" + slot_name;
-                        if (access(bu_img.c_str(), R_OK) == 0)
-                        {
-                            (void)crypto::resign_ps4_pfs_container_sectors(bu_img, plain_key, rp);
-                        }
-                    }
-                }
-
+                // No alterar sectores crudos de contenedores PFS sin montar, ya que un contenedor PFS
+                // con flags 0x000D (Merkle HMAC) quedaria invalidado ante el kernel si se modifica fuera de sceFsMountSaveData.
                 if (is_ps5)
                 {
                     db::update_or_register_ps5_savedata_db(user_id, active_account_id, title_id, slot_name, fsz);
@@ -1467,7 +1489,7 @@ inline PfsRestoreReport inject_and_resign_save(const std::string &title_id,
                 else
                 {
                     db::update_or_register_ps4_savedata_db(user_id, active_account_id, title_id, slot_name, fsz,
-                                                           in_place_meta.valid ? &in_place_meta : (dummy_sfo_meta.valid ? &dummy_sfo_meta : nullptr));
+                                                           dummy_sfo_meta.valid ? &dummy_sfo_meta : nullptr);
                 }
                 continue;
             }
@@ -1573,6 +1595,35 @@ inline PfsRestoreReport inject_and_resign_save(const std::string &title_id,
             else
             {
                 // Flujo PS4 (Modo Apollo Save Tool + Inyeccion en Save Dummy)
+                // Si el contenedor montado es el Save Dummy local, cosechar su psid_hmac, account_id, user_id
+                // y su keystone autentico ANTES de sobrescribir param.sfo con el del backup
+                if (report.used_save_dummy)
+                {
+                    if (inner_meta.valid)
+                    {
+                        dummy_sfo_meta = inner_meta;
+                        if (dummy_sfo_meta.has_psid_hmac)
+                            rp.exact_psid_hmac = dummy_sfo_meta.psid_hmac;
+                        if (active_account_id == 0 && dummy_sfo_meta.account_id != 0)
+                        {
+                            active_account_id = dummy_sfo_meta.account_id;
+                            rp.target_account_id = active_account_id;
+                        }
+                        if (rp.target_user_id == 0 && dummy_sfo_meta.user_id != 0)
+                            rp.target_user_id = dummy_sfo_meta.user_id;
+                    }
+                    const std::string inner_ks = mnt.mount_point() + "/sce_sys/keystone";
+                    if (harvested_keystone_path.empty() && keystone::is_valid_keystone_file(inner_ks))
+                    {
+                        harvested_keystone_path = std::string(SAVE_STAGING_DIR) + "/harvested_ks_" + title_id;
+                        (void)copy_file_atomic(inner_ks, harvested_keystone_path);
+                        ensure_dir_tree("/data/MacheteSVG/keystones");
+                        (void)copy_file_atomic(inner_ks, "/data/MacheteSVG/keystones/" + title_id + ".keystone");
+                        MACHETE_LOG("[KEYSTONE]", "Harvested authentic keystone from mounted PS4 Save Dummy (%s)",
+                                    slot_name.c_str());
+                    }
+                }
+
                 const std::string slot_dec_dir = resolve_decrypted_slot_dir(effective_dec_source, slot_label);
                 if (!slot_dec_dir.empty())
                 {
@@ -1624,9 +1675,6 @@ inline PfsRestoreReport inject_and_resign_save(const std::string &title_id,
                     {
                         report.sfo_resigned = true;
                         resigned_meta = sfo::read_sfo_metadata(inner_sfo);
-                        // Exportar el param.sfo de guardado autentico (CATEGORY="sd") hacia dst_target/sce_sys/param.sfo
-                        ensure_dir_tree(dst_target + "/sce_sys", owner_uid, owner_gid);
-                        (void)copy_file_atomic(inner_sfo, dst_target + "/sce_sys/param.sfo", owner_uid, owner_gid);
                         MACHETE_LOG("[PFS]", "Resigned inner PS4 param.sfo inside PFS mount: %s (Account ID: 0x%04llx...%04llx)",
                                     inner_sfo.c_str(),
                                     static_cast<unsigned long long>((active_account_id >> 48) & 0xffff),
@@ -1634,11 +1682,15 @@ inline PfsRestoreReport inject_and_resign_save(const std::string &title_id,
                     }
                 }
 
+                // Exportar <slot>_icon0.png hacia savedata_meta/user/<TitleID>/ antes de desmontar
                 const std::string inner_icon = mnt.mount_point() + "/sce_sys/icon0.png";
                 if (access(inner_icon.c_str(), R_OK) == 0)
                 {
-                    ensure_dir_tree(dst_target + "/sce_sys", owner_uid, owner_gid);
-                    (void)copy_file_atomic(inner_icon, dst_target + "/sce_sys/icon0.png", owner_uid, owner_gid);
+                    char uid_hex[32];
+                    std::snprintf(uid_hex, sizeof(uid_hex), "%x", user_id);
+                    const std::string meta_ps4 = std::string("/user/home/") + uid_hex + "/savedata_meta/user/" + title_id;
+                    ensure_dir_tree(meta_ps4, owner_uid, owner_gid);
+                    (void)copy_file_atomic(inner_icon, meta_ps4 + "/" + slot_label + "_icon0.png", owner_uid, owner_gid);
                 }
 
                 // Desmontar para que el kernel recalcule el arbol Merkle y selle el contenedor
@@ -1647,25 +1699,46 @@ inline PfsRestoreReport inject_and_resign_save(const std::string &title_id,
                 struct stat st_sd{};
                 if (stat(image_path.c_str(), &st_sd) == 0 && st_sd.st_size > 0)
                 {
-                    // Sincronizar el backup slot sce_bu_<slot> con el contenedor recien sellado
-                    const std::string bu_img = dst_target + "/sce_bu_" + slot_name;
-                    const std::string bu_bin = dst_target + "/sce_bu_" + slot_name + ".bin";
-                    const std::string main_bin = dst_target + "/" + slot_name + ".bin";
-                    if (access(bu_img.c_str(), F_OK) == 0)
+                    // Sincronizar el backup slot sdimg_sce_bu_<slot> (PS5 BC) o sce_bu_<slot> (PS4)
+                    const std::string bu_sdimg = dst_target + "/sdimg_sce_bu_" + slot_label;
+                    const std::string bu_plain = dst_target + "/sce_bu_" + slot_label;
+                    const std::string bu_bin = dst_target + "/sce_bu_" + slot_label + ".bin";
+                    const std::string main_bin = dst_target + "/" + slot_label + ".bin";
+                    if (access(bu_sdimg.c_str(), F_OK) == 0 || slot_name.rfind("sdimg_", 0) == 0)
                     {
-                        (void)copy_file_atomic(image_path, bu_img, owner_uid, owner_gid);
-                        if (access(main_bin.c_str(), R_OK) == 0)
-                            (void)copy_file_atomic(main_bin, bu_bin, owner_uid, owner_gid);
+                        (void)copy_file_atomic(image_path, bu_sdimg, owner_uid, owner_gid);
+                    }
+                    else if (access(bu_plain.c_str(), F_OK) == 0)
+                    {
+                        (void)copy_file_atomic(image_path, bu_plain, owner_uid, owner_gid);
+                    }
+                    if (access(main_bin.c_str(), R_OK) == 0)
+                    {
+                        (void)copy_file_atomic(main_bin, bu_bin, owner_uid, owner_gid);
                     }
 
                     // Actualizar savedata.db preservando metadatos reales de la partida (main_title, sub_title, user_param, free_blocks=0)
                     db::update_or_register_ps4_savedata_db(
-                        user_id, active_account_id, title_id, slot_name,
+                        user_id, active_account_id, title_id, slot_label,
                         static_cast<std::uint64_t>(st_sd.st_size),
                         resigned_meta.valid ? &resigned_meta : (dummy_sfo_meta.valid ? &dummy_sfo_meta : nullptr));
                 }
             }
         }
+
+#if defined(__PROSPERO__) || defined(__Prospero__) || defined(__PS5__)
+        // Si es una partida de PS5, tenemos los simbolos de montaje PFS resueltos, pero NINGUN contenedor sdimg_*
+        // pudo ser montado por el kernel y el respaldo tampoco incluye carpeta decrypted/ en texto plano,
+        // entonces los contenedores sdimg_* estan sellados con la clave SAMU de otra consola y no pueden usarse crudos.
+        if (is_ps5 && !report.used_pfs_mount && !have_any_decrypted &&
+            ScopedPfsMount::ensure_pfs_symbols_resolved(nullptr, nullptr, nullptr, nullptr))
+        {
+            report.cross_console_detected = true;
+            report.missing_save_dummy_error = true;
+            MACHETE_LOG("[PFS]", "Foreign encrypted PS5 containers in %s cannot be mounted on this console without decrypted/ payload",
+                        backup_folder.c_str());
+        }
+#endif
     }
 
     // Limpieza final de banderas de corrupcion (is_broken, fake_broken) y sincronizacion de account_id en savedata.db

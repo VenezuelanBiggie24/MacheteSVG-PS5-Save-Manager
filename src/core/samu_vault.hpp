@@ -114,7 +114,8 @@ inline bool read_ps5_sealed_blob(const std::string &sdimg_path, std::uint8_t out
 }
 
 // Descifra el blob sellado a traves del driver de kernel /dev/pfsmgr utilizando SAMU
-inline bool decrypt_blob_via_pfsmgr(const std::uint8_t in_blob[96], std::uint8_t out_plain_key[32])
+inline bool decrypt_blob_via_pfsmgr(const std::uint8_t in_blob[96], std::uint8_t out_plain_key[32],
+                                    bool allow_zero_key_for_ps5 = false)
 {
     if (!in_blob || !out_plain_key)
         return false;
@@ -158,6 +159,13 @@ inline bool decrypt_blob_via_pfsmgr(const std::uint8_t in_blob[96], std::uint8_t
     {
         std::int32_t status_80 = 0;
         std::memcpy(&status_80, keybuf.data() + 0x80, sizeof(status_80));
+        if (allow_zero_key_for_ps5)
+        {
+            std::memcpy(out_plain_key, keybuf.data() + 0x60, 32);
+            MACHETE_LOG("[VAULT]", "pfsmgr ioctl returned %d for PS5 container (status_0x80=%d); proceeding with kernel buffer at +0x60",
+                        r, status_80);
+            return true;
+        }
         MACHETE_LOG("[VAULT]", "pfsmgr ioctl returned %d but key at +0x60 is zero (status_0x80=%d, hdr=%02x%02x%02x%02x)",
                     r, status_80, in_blob[0], in_blob[1], in_blob[2], in_blob[3]);
         return false;

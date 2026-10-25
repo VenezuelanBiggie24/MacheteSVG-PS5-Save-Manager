@@ -260,14 +260,18 @@ inline bool update_or_register_ps4_savedata_db(std::uint32_t user_id,
                                                    ? account_id
                                                    : sfo::get_apollo_synthetic_account_id(user_id);
 
+    const std::string clean_slot = (slot_name.rfind("sdimg_", 0) == 0) ? slot_name.substr(6) : slot_name;
+    if (clean_slot.empty() || clean_slot.rfind("sce_bu_", 0) == 0)
+        return false;
+
     const std::string safe_tid = escape_sql_string(title_id);
-    const std::string safe_slot = escape_sql_string(slot_name);
+    const std::string safe_slot = escape_sql_string(clean_slot);
     std::string raw_main = (sfo_meta && sfo_meta->valid && !sfo_meta->main_title.empty())
                                ? sfo_meta->main_title
                                : (!fallback_game_title.empty() ? fallback_game_title : title_id);
     std::string raw_sub = (sfo_meta && sfo_meta->valid && !sfo_meta->sub_title.empty())
                               ? sfo_meta->sub_title
-                              : slot_name;
+                              : clean_slot;
     std::string raw_detail = (sfo_meta && sfo_meta->valid) ? sfo_meta->detail : "";
 
     const std::string safe_main = escape_sql_string(raw_main);
@@ -293,7 +297,7 @@ inline bool update_or_register_ps4_savedata_db(std::uint32_t user_id,
 
     for (const auto &dbp : unique_dbs)
     {
-        MACHETE_LOG("[DB]", "Attempting to index PS4 save in %s: %s/%s", dbp.c_str(), title_id.c_str(), slot_name.c_str());
+        MACHETE_LOG("[DB]", "Attempting to index PS4 save in %s: %s/%s", dbp.c_str(), title_id.c_str(), clean_slot.c_str());
 
         void *db = nullptr;
         if (adapter.open(dbp.c_str(), &db) != 0 || !db)
@@ -313,6 +317,13 @@ inline bool update_or_register_ps4_savedata_db(std::uint32_t user_id,
             "account_id INTEGER, user_id INTEGER, faked_owner INTEGER, cloud_icon_url TEXT, "
             "cloud_revision INTEGER, game_title_id TEXT, PRIMARY KEY (title_id, dir_name));";
         (void)adapter.exec(db, create_tbl, nullptr, nullptr, nullptr);
+
+        // Eliminar cualquier fila obsoleta con prefijo sdimg_ o sce_bu_ en dir_name para este titulo
+        char sql_clean_sdimg[512];
+        std::snprintf(sql_clean_sdimg, sizeof(sql_clean_sdimg),
+                      "DELETE FROM savedata WHERE title_id = '%s' AND (dir_name = 'sdimg_%s' OR dir_name LIKE 'sce_bu_%%' OR dir_name LIKE 'sdimg_sce_bu_%%');",
+                      safe_tid.c_str(), safe_slot.c_str());
+        (void)adapter.exec(db, sql_clean_sdimg, nullptr, nullptr, nullptr);
 
         // 2. Eliminar filas duplicadas para (title_id, dir_name), conservando siempre MIN(rowid) (la fila original)
         char sql_dedup[512];
@@ -348,12 +359,12 @@ inline bool update_or_register_ps4_savedata_db(std::uint32_t user_id,
                               "UPDATE savedata SET is_broken = 0, fake_broken = 0, faked_owner = 0, "
                               "account_id = %llu, user_id = %u, main_title = '%s', sub_title = '%s', "
                               "detail = '%s', user_param = %u, blocks = %u, "
-                              "free_blocks = CASE WHEN (free_blocks IS NULL OR free_blocks <= 0) THEN %u ELSE free_blocks END, size_kib = %u, "
+                              "free_blocks = 0, size_kib = %u, "
                               "mtime = strftime('%%Y-%%m-%%dT%%H:%%M:%%S.00Z', CURRENT_TIMESTAMP) "
                               "WHERE title_id = '%s' AND dir_name = '%s';",
                               static_cast<unsigned long long>(effective_account_id), user_id,
                               safe_main.c_str(), safe_sub.c_str(), safe_detail.c_str(),
-                              user_param, blocks, blocks, size_kib,
+                              user_param, blocks, size_kib,
                               safe_tid.c_str(), safe_slot.c_str());
             }
             else
@@ -363,14 +374,14 @@ inline bool update_or_register_ps4_savedata_db(std::uint32_t user_id,
                               "UPDATE savedata SET is_broken = 0, fake_broken = 0, faked_owner = 0, "
                               "account_id = %llu, user_id = %u, "
                               "main_title = CASE WHEN (main_title IS NULL OR main_title = '' OR main_title = '%s') THEN '%s' ELSE main_title END, "
-                              "blocks = CASE WHEN blocks <= 0 THEN %u ELSE blocks END, "
-                              "free_blocks = CASE WHEN (free_blocks IS NULL OR free_blocks <= 0) THEN %u ELSE free_blocks END, "
-                              "size_kib = CASE WHEN size_kib <= 0 THEN %u ELSE size_kib END, "
+                              "blocks = %u, "
+                              "free_blocks = 0, "
+                              "size_kib = %u, "
                               "mtime = strftime('%%Y-%%m-%%dT%%H:%%M:%%S.00Z', CURRENT_TIMESTAMP) "
                               "WHERE title_id = '%s' AND dir_name = '%s';",
                               static_cast<unsigned long long>(effective_account_id), user_id,
                               safe_tid.c_str(), safe_main.c_str(),
-                              blocks, blocks, size_kib,
+                              blocks, size_kib,
                               safe_tid.c_str(), safe_slot.c_str());
             }
             rc = adapter.exec(db, sql_update, nullptr, nullptr, &errmsg);
@@ -386,12 +397,12 @@ inline bool update_or_register_ps4_savedata_db(std::uint32_t user_id,
                           "cloud_revision, game_title_id"
                           ") VALUES ("
                           "'%s', '%s', '%s', '%s', '%s', '', "
-                          "0, %u, %u, %u, %u, strftime('%%Y-%%m-%%dT%%H:%%M:%%S.00Z', CURRENT_TIMESTAMP), "
+                          "0, %u, %u, 0, %u, strftime('%%Y-%%m-%%dT%%H:%%M:%%S.00Z', CURRENT_TIMESTAMP), "
                           "0, %llu, %u, 0, '', "
                           "0, '%s');",
                           safe_tid.c_str(), safe_slot.c_str(),
                           safe_main.c_str(), safe_sub.c_str(), safe_detail.c_str(),
-                          user_param, blocks, blocks, size_kib,
+                          user_param, blocks, size_kib,
                           static_cast<unsigned long long>(effective_account_id), user_id,
                           safe_tid.c_str());
             rc = adapter.exec(db, sql_insert, nullptr, nullptr, &errmsg);
@@ -400,7 +411,7 @@ inline bool update_or_register_ps4_savedata_db(std::uint32_t user_id,
         if (rc == 0)
         {
             MACHETE_LOG("[DB]", "Indexed PS4 save in %s: %s/%s (existing=%d, is_broken=0, acc=0x%04llx...%04llx, blocks=%u, user_param=%u)",
-                        dbp.c_str(), title_id.c_str(), slot_name.c_str(), existing_count,
+                        dbp.c_str(), title_id.c_str(), clean_slot.c_str(), existing_count,
                         static_cast<unsigned long long>((account_id >> 48) & 0xffff),
                         static_cast<unsigned long long>(account_id & 0xffff),
                         blocks, user_param);
@@ -494,7 +505,7 @@ inline bool update_or_register_ps5_savedata_db(std::uint32_t user_id,
                       safe_tid.c_str(), safe_slot.c_str(), safe_tid.c_str(), safe_slot.c_str());
         (void)adapter.exec(db, sql_dedup, nullptr, nullptr, nullptr);
 
-        // 2. Comprobar si la fila existe
+        // 2. Comprobar si la fila existe y si el titulo ya tiene un game_title_id registrado (ej. PPSA01970 -> PPSA01969)
         int existing_count = 0;
         auto count_cb = [](void *arg, int argc, char **argv, char **) -> int {
             if (argc > 0 && argv && argv[0])
@@ -506,6 +517,24 @@ inline bool update_or_register_ps5_savedata_db(std::uint32_t user_id,
                       "SELECT COUNT(*) FROM savedata WHERE title_id = '%s' AND dir_name = '%s';",
                       safe_tid.c_str(), safe_slot.c_str());
         (void)adapter.exec(db, sql_check, count_cb, &existing_count, nullptr);
+
+        std::string effective_gtid = safe_gtid;
+        if (game_title_id_override.empty() || game_title_id_override == title_id)
+        {
+            std::string existing_gtid;
+            auto gtid_cb = [](void *arg, int argc, char **argv, char **) -> int {
+                if (argc > 0 && argv && argv[0] && argv[0][0] != '\0')
+                    *reinterpret_cast<std::string *>(arg) = argv[0];
+                return 0;
+            };
+            char sql_gtid[512];
+            std::snprintf(sql_gtid, sizeof(sql_gtid),
+                          "SELECT game_title_id FROM savedata WHERE title_id = '%s' AND game_title_id IS NOT NULL AND game_title_id != '' LIMIT 1;",
+                          safe_tid.c_str());
+            (void)adapter.exec(db, sql_gtid, gtid_cb, &existing_gtid, nullptr);
+            if (!existing_gtid.empty())
+                effective_gtid = escape_sql_string(existing_gtid);
+        }
 
         bool has_ps5_cols = (dbp.find("savedata_prospero") != std::string::npos);
         if (!has_ps5_cols)
@@ -532,17 +561,17 @@ inline bool update_or_register_ps5_savedata_db(std::uint32_t user_id,
                               "UPDATE savedata SET is_broken = 0, fake_broken = 0, faked_owner = 0, "
                               "account_id = CASE WHEN %llu != 0 THEN %llu ELSE account_id END, "
                               "user_id = CASE WHEN %u != 0 THEN %u ELSE user_id END, "
-                              "blocks = CASE WHEN blocks <= 0 THEN %u ELSE blocks END, "
-                              "system_blocks = CASE WHEN (system_blocks IS NULL OR system_blocks <= 0) THEN %u ELSE system_blocks END, "
-                              "free_blocks = CASE WHEN (free_blocks IS NULL OR free_blocks <= 0) THEN %u ELSE free_blocks END, "
-                              "size_kib = CASE WHEN size_kib <= 0 THEN %u ELSE size_kib END, "
+                              "blocks = %u, "
+                              "system_blocks = %u, "
+                              "free_blocks = %u, "
+                              "size_kib = %u, "
                               "game_title_id = '%s', "
                               "convert_performance = 0, account_id_in_usb_path = '0000000000000000', "
                               "mtime = strftime('%%Y-%%m-%%dT%%H:%%M:%%S.00Z', CURRENT_TIMESTAMP) "
                               "WHERE title_id = '%s' AND dir_name = '%s';",
                               static_cast<unsigned long long>(account_id), static_cast<unsigned long long>(account_id),
                               user_id, user_id,
-                              blocks, system_blocks, free_blocks, size_kib, safe_gtid.c_str(),
+                              blocks, system_blocks, free_blocks, size_kib, effective_gtid.c_str(),
                               safe_tid.c_str(), safe_slot.c_str());
             }
             else
@@ -551,15 +580,15 @@ inline bool update_or_register_ps5_savedata_db(std::uint32_t user_id,
                               "UPDATE savedata SET is_broken = 0, fake_broken = 0, faked_owner = 0, "
                               "account_id = CASE WHEN %llu != 0 THEN %llu ELSE account_id END, "
                               "user_id = CASE WHEN %u != 0 THEN %u ELSE user_id END, "
-                              "blocks = CASE WHEN blocks <= 0 THEN %u ELSE blocks END, "
-                              "free_blocks = CASE WHEN (free_blocks IS NULL OR free_blocks <= 0) THEN %u ELSE free_blocks END, "
-                              "size_kib = CASE WHEN size_kib <= 0 THEN %u ELSE size_kib END, "
+                              "blocks = %u, "
+                              "free_blocks = %u, "
+                              "size_kib = %u, "
                               "game_title_id = '%s', "
                               "mtime = strftime('%%Y-%%m-%%dT%%H:%%M:%%S.00Z', CURRENT_TIMESTAMP) "
                               "WHERE title_id = '%s' AND dir_name = '%s';",
                               static_cast<unsigned long long>(account_id), static_cast<unsigned long long>(account_id),
                               user_id, user_id,
-                              blocks, free_blocks, size_kib, safe_gtid.c_str(),
+                              blocks, free_blocks, size_kib, effective_gtid.c_str(),
                               safe_tid.c_str(), safe_slot.c_str());
             }
             rc = adapter.exec(db, sql_update, nullptr, nullptr, &errmsg);
@@ -585,7 +614,7 @@ inline bool update_or_register_ps5_savedata_db(std::uint32_t user_id,
                               safe_main.c_str(), "",
                               blocks, free_blocks, size_kib,
                               static_cast<unsigned long long>(account_id), user_id,
-                              safe_gtid.c_str(), system_blocks);
+                              effective_gtid.c_str(), system_blocks);
             }
             else
             {
@@ -604,7 +633,7 @@ inline bool update_or_register_ps5_savedata_db(std::uint32_t user_id,
                               safe_main.c_str(), "",
                               blocks, free_blocks, size_kib,
                               static_cast<unsigned long long>(account_id), user_id,
-                              safe_gtid.c_str());
+                              effective_gtid.c_str());
             }
             rc = adapter.exec(db, sql_insert, nullptr, nullptr, &errmsg);
         }
@@ -615,7 +644,7 @@ inline bool update_or_register_ps5_savedata_db(std::uint32_t user_id,
                         dbp.c_str(), title_id.c_str(), clean_slot.c_str(), existing_count,
                         static_cast<unsigned long long>((account_id >> 48) & 0xffff),
                         static_cast<unsigned long long>(account_id & 0xffff),
-                        blocks, system_blocks, free_blocks, size_kib, safe_gtid.c_str());
+                        blocks, system_blocks, free_blocks, size_kib, effective_gtid.c_str());
             any_updated = true;
         }
         else
@@ -789,6 +818,33 @@ inline bool repair_title_corruption_flags(std::uint32_t user_id,
         (void)chmod((dbp + "-shm").c_str(), 0666);
     }
     return any_cleared;
+}
+
+inline bool delete_savedata_rows_for_title(std::uint32_t user_id, const std::string &title_id, bool is_ps5)
+{
+    SqliteAdapter &adapter = SqliteAdapter::instance();
+    if (!adapter.is_available() || title_id.empty())
+        return false;
+
+    const std::string safe_tid = escape_sql_string(title_id);
+    const auto dbs = filter_existing_unique_dbs(is_ps5 ? get_ps5_savedata_db_candidates(user_id)
+                                                       : get_ps4_savedata_db_candidates(user_id));
+    bool any_deleted = false;
+    for (const auto &dbp : dbs)
+    {
+        void *db = nullptr;
+        if (adapter.open(dbp.c_str(), &db) != 0 || !db)
+            continue;
+        (void)adapter.exec(db, "PRAGMA busy_timeout = 3000;", nullptr, nullptr, nullptr);
+        char sql[512];
+        std::snprintf(sql, sizeof(sql), "DELETE FROM savedata WHERE title_id = '%s';", safe_tid.c_str());
+        if (adapter.exec(db, sql, nullptr, nullptr, nullptr) == 0)
+            any_deleted = true;
+        (void)adapter.exec(db, "PRAGMA wal_checkpoint(FULL);", nullptr, nullptr, nullptr);
+        adapter.close(db);
+        (void)chmod(dbp.c_str(), 0666);
+    }
+    return any_deleted;
 }
 
 } // namespace machete::db

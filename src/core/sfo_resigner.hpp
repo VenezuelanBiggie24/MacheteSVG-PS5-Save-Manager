@@ -55,8 +55,8 @@ struct SfoIndexEntry
 struct SfoParamsField
 {
     std::uint32_t unk1;
-    std::uint32_t user_id;       // Offset 0x04: Local User ID (ej. 0x105f615a)
-    std::uint8_t psid_hmac[32];  // Offset 0x08: HMAC-SHA256 del OpenPSID
+    std::uint8_t psid_hmac[32];  // Offset 0x04: HMAC-SHA256 del OpenPSID
+    std::uint32_t user_id;       // Offset 0x24: Local User ID (ej. 0x105f615a)
     std::uint32_t unk3;          // Offset 0x28
     char title_id_1[16];         // Offset 0x2C: Title ID principal
     char title_id_2[16];         // Offset 0x3C: Copia de Title ID
