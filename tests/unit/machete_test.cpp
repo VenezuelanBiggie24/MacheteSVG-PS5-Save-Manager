@@ -1309,7 +1309,7 @@ TEST(MacheteParamJsonSizeTest, UpdateFileSizeAndMtimeInParamJson)
 
 TEST(MacheteBuildInfoTest, BuildNumberMatchesExpected)
 {
-    EXPECT_STREQ(machete::build::build_number(), "79");
+    EXPECT_STREQ(machete::build::build_number(), "80");
 }
 
 TEST(MacheteParamJsonDirNameTest, UpdateDirNameInParamJson)
@@ -1424,7 +1424,7 @@ TEST(MachetePs5ParamJsonSynthesisTest, SynthesizeParamJsonFromSlots)
     EXPECT_EQ(access(slot_meta_param.c_str(), F_OK), 0);
     EXPECT_EQ(access(slot_auto_param.c_str(), F_OK), 0);
 
-    // Leer pj_meta y validar contenido (PROFILE debe ser el slot primario de perfil, no AUTOSAVE0)
+    // Leer pj_meta y validar contenido (AUTOSAVE0 debe ser el slot primario de juego activo)
     {
         std::FILE *f = std::fopen(pj_meta.c_str(), "rb");
         ASSERT_NE(f, nullptr);
@@ -1434,7 +1434,7 @@ TEST(MachetePs5ParamJsonSynthesisTest, SynthesizeParamJsonFromSlots)
         ASSERT_GT(n, 0u);
         const std::string content(buf, n);
         EXPECT_NE(content.find("\"titleId\": \"PPSA01969\""), std::string::npos);
-        EXPECT_NE(content.find("\"dirName\": \"PROFILE\""), std::string::npos);
+        EXPECT_NE(content.find("\"dirName\": \"AUTOSAVE0\""), std::string::npos);
         EXPECT_NE(content.find("DEATH STRANDING"), std::string::npos);
     }
 
@@ -2152,6 +2152,30 @@ TEST(MachetePs4SanitizationTest, LooseFilesAndLooseKeystoneUnlinked)
     EXPECT_EQ(access(ks_file.c_str(), F_OK), -1);
 
     (void)rmdir(test_dir.c_str());
+}
+
+TEST(MacheteSfoSynthTest, ExactPsidHmacPreserved)
+{
+    const std::string tmp_sfo = "/tmp/machete_test_synth_exact_hmac.sfo";
+    const std::uint8_t exact_hmac[32] = {
+        0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88,
+        0x99, 0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0xff, 0x00,
+        0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08,
+        0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f, 0x10
+    };
+
+    EXPECT_TRUE(machete::sfo::synthesize_ps4_save_param_sfo(
+        tmp_sfo, "CUSA18600", "Book", "Dragon Quest XI S", "Adventure Log",
+        "", 0x105f615a, 0x37c80d2e21ead98cULL, 325, 0, nullptr, exact_hmac));
+
+    machete::sfo::SfoSaveMetadata meta{};
+    EXPECT_TRUE(machete::sfo::read_sfo_metadata(tmp_sfo, meta));
+    EXPECT_TRUE(meta.has_psid_hmac);
+    EXPECT_EQ(std::memcmp(meta.psid_hmac, exact_hmac, 32), 0);
+    EXPECT_EQ(meta.account_id, 0x37c80d2e21ead98cULL);
+    EXPECT_EQ(meta.user_id, 0x105f615a);
+
+    (void)std::remove(tmp_sfo.c_str());
 }
 
 } // namespace hui::testing

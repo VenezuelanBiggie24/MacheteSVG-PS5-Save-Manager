@@ -416,7 +416,15 @@ inline bool resign_ps4_pfs_container_sectors(const std::string &image_path,
 
                                     if (out_extracted_sfo)
                                     {
-                                        *out_extracted_sfo = sfo_buf;
+                                        std::size_t max_sfo_end = hdr->data_table_offset;
+                                        const auto *entries = reinterpret_cast<const sfo::SfoIndexEntry *>(dec_sector.data() + offset + sizeof(sfo::SfoHeader));
+                                        for (std::uint32_t ei = 0; ei < hdr->num_entries; ++ei)
+                                        {
+                                            std::size_t end = hdr->data_table_offset + entries[ei].data_offset + entries[ei].param_max_length;
+                                            if (end > max_sfo_end && end <= sfo_buf.size())
+                                                max_sfo_end = end;
+                                        }
+                                        out_extracted_sfo->assign(sfo_buf.begin(), sfo_buf.begin() + max_sfo_end);
                                     }
                                 }
                             }

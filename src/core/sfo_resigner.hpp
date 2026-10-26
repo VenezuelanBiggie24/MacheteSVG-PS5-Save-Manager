@@ -465,7 +465,8 @@ inline bool synthesize_ps4_save_param_sfo(const std::string &out_sfo_path,
                                           std::uint64_t account_id,
                                           std::uint64_t savedata_blocks,
                                           std::uint32_t user_param = 0,
-                                          const std::uint8_t *psid = nullptr)
+                                          const std::uint8_t *psid = nullptr,
+                                          const std::uint8_t *exact_psid_hmac = nullptr)
 {
     struct RawEntry
     {
@@ -513,7 +514,11 @@ inline bool synthesize_ps4_save_param_sfo(const std::string &out_sfo_path,
     params_struct.user_id = user_id;
     std::strncpy(params_struct.title_id_1, title_id.c_str(), sizeof(params_struct.title_id_1) - 1);
     std::strncpy(params_struct.title_id_2, title_id.c_str(), sizeof(params_struct.title_id_2) - 1);
-    if (psid != nullptr)
+    if (exact_psid_hmac != nullptr)
+    {
+        std::memcpy(params_struct.psid_hmac, exact_psid_hmac, 32);
+    }
+    else if (psid != nullptr)
     {
         crypto::hmac_sha256(PSID_HMAC_KEY, sizeof(PSID_HMAC_KEY), psid, 16, params_struct.psid_hmac);
     }

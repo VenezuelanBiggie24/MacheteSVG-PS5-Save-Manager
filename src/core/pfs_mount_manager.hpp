@@ -1284,6 +1284,25 @@ inline bool preserve_local_save_dummy(const std::string &dst_target, const std::
             else if (access(meta_direct.c_str(), F_OK) == 0)
                 (void)copy_tree_simple(meta_direct, staging_backup_dir + "/.meta_dummy", false);
         }
+
+        std::string save_tid;
+        const std::size_t slash = dst_target.find_last_of('/');
+        if (slash != std::string::npos)
+            save_tid = dst_target.substr(slash + 1);
+        if (save_tid.size() == 9)
+        {
+            const std::string vault_dummy = std::string("/data/MacheteSVG/authentic_dummies/") + save_tid;
+            ensure_dir_tree(vault_dummy);
+            if (access((dst_target + "/sdimg_PROFILE").c_str(), R_OK) == 0)
+            {
+                (void)copy_file_atomic(dst_target + "/sdimg_PROFILE", vault_dummy + "/sdimg_PROFILE");
+                MACHETE_LOG("[PFS]", "Persisted authentic PS5 sdimg_PROFILE to persistent vault: %s/sdimg_PROFILE", vault_dummy.c_str());
+            }
+            if (access((staging_backup_dir + "/.meta_dummy/PROFILE_param.json").c_str(), R_OK) == 0)
+            {
+                (void)copy_file_atomic(staging_backup_dir + "/.meta_dummy/PROFILE_param.json", vault_dummy + "/PROFILE_param.json");
+            }
+        }
     }
     else
     {
@@ -1294,6 +1313,28 @@ inline bool preserve_local_save_dummy(const std::string &dst_target, const std::
             meta_path.replace(pos, 10, "/savedata_meta/user/");
             if (access(meta_path.c_str(), F_OK) == 0)
                 (void)copy_tree_simple(meta_path, staging_backup_dir + "/.meta_dummy", false);
+        }
+
+        std::string save_tid;
+        const std::size_t slash = dst_target.find_last_of('/');
+        if (slash != std::string::npos)
+            save_tid = dst_target.substr(slash + 1);
+        if (save_tid.size() == 9)
+        {
+            const std::string vault_dummy = std::string("/data/MacheteSVG/authentic_dummies/") + save_tid;
+            ensure_dir_tree(vault_dummy);
+            for (const std::string &sfo_c : {
+                     dst_target + "/param.sfo",
+                     dst_target + "/sce_sys/param.sfo",
+                     staging_backup_dir + "/.meta_dummy/param.sfo"})
+            {
+                if (access(sfo_c.c_str(), R_OK) == 0)
+                {
+                    (void)copy_file_atomic(sfo_c, vault_dummy + "/param.sfo");
+                    MACHETE_LOG("[PFS]", "Persisted authentic PS4 param.sfo to persistent vault: %s/param.sfo", vault_dummy.c_str());
+                    break;
+                }
+            }
         }
     }
     return true;
@@ -1578,16 +1619,49 @@ inline PfsRestoreReport inject_and_resign_save(const std::string &title_id,
                 if (stat(image_path.c_str(), &st_f) == 0)
                     fsz = static_cast<std::uint64_t>(st_f.st_size);
 
-                // No alterar sectores crudos de contenedores PFS sin montar, ya que un contenedor PFS
-                // con flags 0x000D (Merkle HMAC) quedaria invalidado ante el kernel si se modifica fuera de sceFsMountSaveData.
                 if (is_ps5)
                 {
                     db::update_or_register_ps5_savedata_db(user_id, active_account_id, title_id, slot_name, fsz);
                 }
                 else
                 {
+                    // Contenedor PS4: re-firmar sectores in-place usando la clave plana AES-128-XTS descifrada por SAMU
+                    std::vector<std::uint8_t> ext_sfo;
+                    if (crypto::resign_ps4_pfs_container_sectors(image_path, plain_key, rp, &ext_sfo))
+                    {
+                        report.used_pfs_mount = true;
+                        report.sfo_resigned = true;
+                        MACHETE_LOG("[PFS]", "Resigned PS4 container %s in-place via SAMU plain key (AES-128-XTS)", image_path.c_str());
+
+                        if (!ext_sfo.empty())
+                        {
+                            char uid_hex[32];
+                            std::snprintf(uid_hex, sizeof(uid_hex), "%x", user_id);
+                            const std::string meta_ps4_user = std::string("/user/home/") + uid_hex + "/savedata_meta/user/" + title_id;
+                            ensure_dir_tree(meta_ps4_user, owner_uid, owner_gid);
+                            const std::string meta_sfo = meta_ps4_user + "/param.sfo";
+                            std::FILE *fsfo = std::fopen(meta_sfo.c_str(), "wb");
+                            if (fsfo)
+                            {
+                                (void)std::fwrite(ext_sfo.data(), 1, ext_sfo.size(), fsfo);
+                                std::fclose(fsfo);
+                                (void)chmod(meta_sfo.c_str(), 0666);
+                                if (owner_uid != 0 || owner_gid != 0)
+                                    (void)chown(meta_sfo.c_str(), owner_uid, owner_gid);
+                                MACHETE_LOG("[PFS]", "Synchronized authentic resigned SFO to %s", meta_sfo.c_str());
+                            }
+                            const std::string vault_dummy = std::string("/data/MacheteSVG/authentic_dummies/") + title_id;
+                            ensure_dir_tree(vault_dummy);
+                            (void)copy_file_atomic(meta_sfo, vault_dummy + "/param.sfo");
+                        }
+                    }
+                    sfo::SfoSaveMetadata meta_from_ext{};
+                    if (!ext_sfo.empty())
+                    {
+                        (void)sfo::read_sfo_metadata_from_buffer(ext_sfo.data(), ext_sfo.size(), meta_from_ext);
+                    }
                     db::update_or_register_ps4_savedata_db(user_id, active_account_id, title_id, slot_name, fsz,
-                                                           dummy_sfo_meta.valid ? &dummy_sfo_meta : nullptr);
+                                                           meta_from_ext.valid ? &meta_from_ext : (dummy_sfo_meta.valid ? &dummy_sfo_meta : nullptr));
                 }
                 continue;
             }
