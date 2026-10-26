@@ -569,9 +569,20 @@ std::string select_primary_ps5_slot(const std::vector<std::pair<std::string, std
         return "PROFILE";
     }
 
+    // 0. Si existe PROFILE, es la ranura principal raiz por definicion para Decima Engine (Horizon, Death Stranding),
+    // Capcom RE Engine y la mayoria de motores PS5 que estructuran opciones/partidas bajo un perfil de usuario.
+    for (const auto &sl : slots)
+    {
+        if (sl.first == "PROFILE")
+        {
+            if (out_size) *out_size = sl.second;
+            return "PROFILE";
+        }
+    }
+
     // 1. Probar cada prefijo de ranura de juego en orden de prioridad (QUICKSAVE, MANUALSAVE, AUTOSAVE).
-    // Para motores como Decima (Horizon) o Insomniac (Spider-Man), el dirName principal en param.json
-    // DEBE ser la ranura de juego activa (ej. MANUALSAVE0 o AUTOSAVE0), NO el archivo PROFILE auxiliar.
+    // Para motores sin PROFILE (ej. Insomniac en Spider-Man 2), el dirName principal en param.json
+    // es la ranura de juego activa con el indice mas alto (ej. slot0, MANUALSAVE0 o AUTOSAVE0).
     const char *kGameplayPrefixes[] = {
         "QUICKSAVE", "MANUALSAVE", "MANUAL", "AUTOSAVE", "SAVEDATA", "SAVE", "GAME", "SLOT", nullptr
     };
@@ -813,22 +824,33 @@ void reconstruct_prospero_metadata(const std::string &title_id,
         }
 
         // 1. Identificar el slot primario para param.json:
-        // Si found_param_json ya contiene un dirName valido presente en disco, PRESERVARLO estrictamente.
-        // Solo si dirName esta vacio o apunta a un slot inexistente, determinar la ranura primaria mediante escaneo.
+        // Si existe sdimg_PROFILE en el destino, ese DEBE ser el dirName primario absoluto
+        // (imprescindible para Decima Engine en PS5: Horizon, Death Stranding).
+        // Si no existe PROFILE, respetar existing_dirname si es valido en disco y no es un slot huerfano,
+        // o determinar la ranura primaria mediante escaneo.
         std::string primary_slot_file;
         std::string primary_slot_name;
         struct stat st_sd{};
 
-        // Leer dirName previo de param.json si existiera
-        const std::string existing_dirname = read_json_string_field(meta_target + "/param.json", "dirName");
-
-        if (!existing_dirname.empty())
+        const std::string profile_cand = dst_target + "/sdimg_PROFILE";
+        if (stat(profile_cand.c_str(), &st_sd) == 0 && st_sd.st_size > 0)
         {
-            const std::string cand_existing = dst_target + "/sdimg_" + existing_dirname;
-            if (stat(cand_existing.c_str(), &st_sd) == 0 && st_sd.st_size > 0)
+            primary_slot_file = profile_cand;
+            primary_slot_name = "PROFILE";
+        }
+        else
+        {
+            // Leer dirName previo de param.json si existiera
+            const std::string existing_dirname = read_json_string_field(meta_target + "/param.json", "dirName");
+
+            if (!existing_dirname.empty() && existing_dirname != "PROFILE")
             {
-                primary_slot_file = cand_existing;
-                primary_slot_name = existing_dirname;
+                const std::string cand_existing = dst_target + "/sdimg_" + existing_dirname;
+                if (stat(cand_existing.c_str(), &st_sd) == 0 && st_sd.st_size > 0)
+                {
+                    primary_slot_file = cand_existing;
+                    primary_slot_name = existing_dirname;
+                }
             }
         }
 
@@ -862,6 +884,10 @@ void reconstruct_prospero_metadata(const std::string &title_id,
         {
             machete::pfs::update_ps5_param_json_dir_name(meta_target + "/param.json", primary_slot_name);
             machete::pfs::update_ps5_param_json_size(meta_target + "/param.json", static_cast<std::uint64_t>(st_sd.st_size));
+            if (primary_slot_name == "PROFILE")
+            {
+                machete::pfs::update_ps5_param_json_subtitle(meta_target + "/param.json", "");
+            }
         }
 
         // Asegurar que cada ranura en target_slots tenga sus descriptores <slot>_param.json y <slot>.json en meta_target
@@ -2349,6 +2375,7 @@ __attribute__((noinline)) OperationResult restore_from_folder(const scanner::Sca
         // Preservar el Save Dummy local antes de copiar archivos
         const std::string preserved_dummy_dir =
             std::string(pfs::SAVE_STAGING_DIR) + "/preserved_dummy_" + game.title_id;
+        pfs::remove_dir_recursive_simple(std::string(pfs::SAVE_STAGING_DIR) + "/on_the_fly_dec_" + game.title_id);
         if (had_local_dummy)
         {
             pfs::remove_dir_recursive_simple(preserved_dummy_dir);

@@ -1197,7 +1197,7 @@ TEST(MachetePfsTest, PS4SlotDetection)
     }
 
     EXPECT_TRUE(machete::pfs::is_valid_ps4_slot_name(test_dir, "Book"));
-    EXPECT_TRUE(machete::pfs::is_valid_ps4_slot_name(test_dir, "sce_bu_Book"));
+    EXPECT_FALSE(machete::pfs::is_valid_ps4_slot_name(test_dir, "sce_bu_Book"));
     EXPECT_FALSE(machete::pfs::is_valid_ps4_slot_name(test_dir, "Book.bin"));
     EXPECT_FALSE(machete::pfs::is_valid_ps4_slot_name(test_dir, "sce_bu_Book.bin"));
     EXPECT_FALSE(machete::pfs::is_valid_ps4_slot_name(test_dir, "keystone"));
@@ -1205,7 +1205,7 @@ TEST(MachetePfsTest, PS4SlotDetection)
 
     std::vector<std::string> slots;
     EXPECT_TRUE(machete::pfs::has_local_save_dummy(test_dir, false, &slots));
-    ASSERT_EQ(slots.size(), 2u);
+    ASSERT_EQ(slots.size(), 1u);
 
     std::remove((test_dir + "/Book").c_str());
     std::remove((test_dir + "/Book.bin").c_str());
@@ -1312,7 +1312,7 @@ TEST(MacheteParamJsonSizeTest, UpdateFileSizeAndMtimeInParamJson)
 
 TEST(MacheteBuildInfoTest, BuildNumberMatchesExpected)
 {
-    EXPECT_STREQ(machete::build::build_number(), "84");
+    EXPECT_STREQ(machete::build::build_number(), "85");
 }
 
 TEST(MacheteParamJsonDirNameTest, UpdateDirNameInParamJson)
@@ -1427,7 +1427,7 @@ TEST(MachetePs5ParamJsonSynthesisTest, SynthesizeParamJsonFromSlots)
     EXPECT_EQ(access(slot_meta_param.c_str(), F_OK), 0);
     EXPECT_EQ(access(slot_auto_param.c_str(), F_OK), 0);
 
-    // Leer pj_meta y validar contenido (AUTOSAVE0 debe ser el slot primario de juego activo)
+    // Leer pj_meta y validar contenido (PROFILE debe ser el slot primario para Decima Engine y motores con perfil)
     {
         std::FILE *f = std::fopen(pj_meta.c_str(), "rb");
         ASSERT_NE(f, nullptr);
@@ -1437,7 +1437,7 @@ TEST(MachetePs5ParamJsonSynthesisTest, SynthesizeParamJsonFromSlots)
         ASSERT_GT(n, 0u);
         const std::string content(buf, n);
         EXPECT_NE(content.find("\"titleId\": \"PPSA01969\""), std::string::npos);
-        EXPECT_NE(content.find("\"dirName\": \"AUTOSAVE0\""), std::string::npos);
+        EXPECT_NE(content.find("\"dirName\": \"PROFILE\""), std::string::npos);
         EXPECT_NE(content.find("DEATH STRANDING"), std::string::npos);
     }
 

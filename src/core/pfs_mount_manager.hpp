@@ -75,7 +75,7 @@ inline bool is_valid_ps4_slot_name(const std::string &save_dir, const std::strin
         return false;
     if (name.size() > 4 && (name.substr(name.size() - 4) == ".bin" || name.substr(name.size() - 4) == ".tmp"))
         return false;
-    if (name.rfind("sdimg_sce_bu_", 0) == 0)
+    if (name.rfind("sce_bu_", 0) == 0 || name.rfind("sdimg_sce_bu_", 0) == 0)
         return false;
     if (name == "sealedkey" || name == "keystone" || name == "param.sfo" || name == "PARAM.SFO" || name == "icon0.png")
         return false;
@@ -1145,6 +1145,61 @@ inline void update_ps5_param_json_dir_name(const std::string &param_json_path, c
             if (q2 != std::string::npos)
             {
                 content.replace(q1 + 1, q2 - (q1 + 1), new_dir_name);
+                const std::string tmp = param_json_path + ".tmp";
+                std::FILE *out = std::fopen(tmp.c_str(), "wb");
+                if (out)
+                {
+                    std::fwrite(content.data(), 1, content.size(), out);
+                    std::fflush(out);
+                    int fd = fileno(out);
+                    if (fd >= 0)
+                        (void)::fsync(fd);
+                    std::fclose(out);
+                    (void)unlink(param_json_path.c_str());
+                    (void)std::rename(tmp.c_str(), param_json_path.c_str());
+                    (void)chmod(param_json_path.c_str(), 0666);
+                }
+            }
+        }
+    }
+}
+
+// Actualiza subTitle dentro de param.json (ej. "" para PROFILE)
+inline void update_ps5_param_json_subtitle(const std::string &param_json_path, const std::string &new_subtitle)
+{
+    if (access(param_json_path.c_str(), R_OK) != 0)
+        return;
+
+    std::FILE *f = std::fopen(param_json_path.c_str(), "rb");
+    if (!f)
+        return;
+
+    std::fseek(f, 0, SEEK_END);
+    const long fsize = std::ftell(f);
+    std::fseek(f, 0, SEEK_SET);
+    if (fsize <= 0 || fsize > 256 * 1024)
+    {
+        std::fclose(f);
+        return;
+    }
+
+    std::string content(static_cast<std::size_t>(fsize), '\0');
+    const std::size_t r = std::fread(&content[0], 1, content.size(), f);
+    std::fclose(f);
+    if (r != content.size())
+        return;
+
+    const std::string needle = "\"subTitle\":";
+    std::size_t pos = content.find(needle);
+    if (pos != std::string::npos)
+    {
+        std::size_t q1 = content.find('"', pos + needle.size());
+        if (q1 != std::string::npos)
+        {
+            std::size_t q2 = content.find('"', q1 + 1);
+            if (q2 != std::string::npos)
+            {
+                content.replace(q1 + 1, q2 - (q1 + 1), new_subtitle);
                 const std::string tmp = param_json_path + ".tmp";
                 std::FILE *out = std::fopen(tmp.c_str(), "wb");
                 if (out)
