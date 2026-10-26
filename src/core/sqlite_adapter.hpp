@@ -268,7 +268,7 @@ inline bool update_or_register_ps4_savedata_db(std::uint32_t user_id,
                                                    : sfo::get_apollo_synthetic_account_id(user_id);
 
     const std::string clean_slot = (slot_name.rfind("sdimg_", 0) == 0) ? slot_name.substr(6) : slot_name;
-    if (clean_slot.empty() || clean_slot.rfind("sce_bu_", 0) == 0)
+    if (clean_slot.empty() || clean_slot.rfind("sdimg_sce_bu_", 0) == 0)
         return false;
 
     const std::string safe_tid = escape_sql_string(title_id);
@@ -325,13 +325,13 @@ inline bool update_or_register_ps4_savedata_db(std::uint32_t user_id,
             "cloud_revision INTEGER, game_title_id TEXT, PRIMARY KEY (title_id, dir_name));";
         (void)adapter.exec(db, create_tbl, nullptr, nullptr, nullptr);
 
-        // Eliminar cualquier fila obsoleta con prefijo sdimg_, sce_bu_, archivos sueltos no-ranura o entradas con blocks = 0
+        // Eliminar cualquier fila obsoleta con prefijo sdimg_, archivos sueltos no-ranura o entradas con blocks = 0
         char sql_clean_junk[1024];
         std::snprintf(sql_clean_junk, sizeof(sql_clean_junk),
                       "DELETE FROM savedata WHERE title_id = '%s' AND ("
                       "dir_name IN ('keystone', 'param.sfo', 'sce_sys', 'crypto_vault.bin', '.save_info', 'harvested_keystone', 'sealedkey') "
                       "OR dir_name LIKE '%%.bin' OR dir_name LIKE '%%.sfo' OR dir_name LIKE '%%.png' "
-                      "OR blocks = 0 OR dir_name = 'sdimg_%s' OR dir_name LIKE 'sce_bu_%%' OR dir_name LIKE 'sdimg_sce_bu_%%');",
+                      "OR blocks = 0 OR dir_name = 'sdimg_%s' OR dir_name LIKE 'sdimg_sce_bu_%%');",
                       safe_tid.c_str(), safe_slot.c_str());
         (void)adapter.exec(db, sql_clean_junk, nullptr, nullptr, nullptr);
 
@@ -464,7 +464,7 @@ inline bool update_or_register_ps5_savedata_db(std::uint32_t user_id,
         return false;
 
     const std::string clean_slot = (slot_name.rfind("sdimg_", 0) == 0) ? slot_name.substr(6) : slot_name;
-    if (clean_slot.empty() || clean_slot.rfind("sce_bu_", 0) == 0)
+    if (clean_slot.empty() || clean_slot.rfind("sce_bu_", 0) == 0 || clean_slot.rfind("sdimg_sce_bu_", 0) == 0)
         return false;
 
     const std::uint32_t size_kib = (file_size_bytes > 0) ? static_cast<std::uint32_t>((file_size_bytes + 1023) / 1024) : 1024;
@@ -892,7 +892,7 @@ inline bool repair_title_corruption_flags(std::uint32_t user_id,
                       "DELETE FROM savedata WHERE title_id = '%s' AND ("
                       "dir_name IN ('keystone', 'param.sfo', 'sce_sys', 'crypto_vault.bin', '.save_info', 'harvested_keystone', 'sealedkey') "
                       "OR dir_name LIKE '%%.bin' OR dir_name LIKE '%%.sfo' OR dir_name LIKE '%%.png' "
-                      "OR blocks = 0 OR dir_name LIKE 'sce_bu_%%' OR dir_name LIKE 'sdimg_sce_bu_%%');",
+                      "OR blocks = 0 OR dir_name LIKE 'sdimg_sce_bu_%%');",
                       safe_tid.c_str());
         (void)adapter.exec(db, sql_clean_title, nullptr, nullptr, nullptr);
 
@@ -961,7 +961,7 @@ inline bool delete_savedata_rows_for_title(std::uint32_t user_id, const std::str
                       "DELETE FROM savedata WHERE title_id = '%s' AND ("
                       "dir_name IN ('keystone', 'param.sfo', 'sce_sys', 'crypto_vault.bin', '.save_info', 'harvested_keystone', 'sealedkey') "
                       "OR dir_name LIKE '%%.bin' OR dir_name LIKE '%%.sfo' OR dir_name LIKE '%%.png' "
-                      "OR blocks = 0 OR dir_name LIKE 'sce_bu_%%' OR dir_name LIKE 'sdimg_sce_bu_%%');",
+                      "OR blocks = 0 OR dir_name LIKE 'sdimg_sce_bu_%%');",
                       safe_tid.c_str());
         (void)adapter.exec(db, sql_clean_title, nullptr, nullptr, nullptr);
 

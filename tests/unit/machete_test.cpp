@@ -1170,7 +1170,7 @@ TEST(MachetePfsTest, PS4SlotDetection)
     const std::string test_dir = "/tmp/machete_slot_test";
     mkdir(test_dir.c_str(), 0777);
 
-    // Crear archivo Book y Book.bin
+    // Crear archivo Book y Book.bin, asi como sce_bu_Book y sce_bu_Book.bin
     {
         FILE *f1 = std::fopen((test_dir + "/Book").c_str(), "wb");
         ASSERT_NE(f1, nullptr);
@@ -1181,20 +1181,33 @@ TEST(MachetePfsTest, PS4SlotDetection)
         ASSERT_NE(f2, nullptr);
         std::fputs("SEALED_KEY", f2);
         std::fclose(f2);
+
+        FILE *f3 = std::fopen((test_dir + "/sce_bu_Book").c_str(), "wb");
+        ASSERT_NE(f3, nullptr);
+        std::fputs("PFS_BU_CONTAINER_DATA", f3);
+        std::fclose(f3);
+
+        FILE *f4 = std::fopen((test_dir + "/sce_bu_Book.bin").c_str(), "wb");
+        ASSERT_NE(f4, nullptr);
+        std::fputs("SEALED_BU_KEY", f4);
+        std::fclose(f4);
     }
 
     EXPECT_TRUE(machete::pfs::is_valid_ps4_slot_name(test_dir, "Book"));
+    EXPECT_TRUE(machete::pfs::is_valid_ps4_slot_name(test_dir, "sce_bu_Book"));
     EXPECT_FALSE(machete::pfs::is_valid_ps4_slot_name(test_dir, "Book.bin"));
+    EXPECT_FALSE(machete::pfs::is_valid_ps4_slot_name(test_dir, "sce_bu_Book.bin"));
     EXPECT_FALSE(machete::pfs::is_valid_ps4_slot_name(test_dir, "keystone"));
     EXPECT_FALSE(machete::pfs::is_valid_ps4_slot_name(test_dir, "sealedkey"));
 
     std::vector<std::string> slots;
     EXPECT_TRUE(machete::pfs::has_local_save_dummy(test_dir, false, &slots));
-    ASSERT_EQ(slots.size(), 1u);
-    EXPECT_EQ(slots[0], "Book");
+    ASSERT_EQ(slots.size(), 2u);
 
     std::remove((test_dir + "/Book").c_str());
     std::remove((test_dir + "/Book.bin").c_str());
+    std::remove((test_dir + "/sce_bu_Book").c_str());
+    std::remove((test_dir + "/sce_bu_Book.bin").c_str());
     rmdir(test_dir.c_str());
 }
 
@@ -1296,7 +1309,7 @@ TEST(MacheteParamJsonSizeTest, UpdateFileSizeAndMtimeInParamJson)
 
 TEST(MacheteBuildInfoTest, BuildNumberMatchesExpected)
 {
-    EXPECT_STREQ(machete::build::build_number(), "78");
+    EXPECT_STREQ(machete::build::build_number(), "79");
 }
 
 TEST(MacheteParamJsonDirNameTest, UpdateDirNameInParamJson)
@@ -1411,7 +1424,7 @@ TEST(MachetePs5ParamJsonSynthesisTest, SynthesizeParamJsonFromSlots)
     EXPECT_EQ(access(slot_meta_param.c_str(), F_OK), 0);
     EXPECT_EQ(access(slot_auto_param.c_str(), F_OK), 0);
 
-    // Leer pj_meta y validar contenido (AUTOSAVE0 debe ser el slot primario de juego, no PROFILE)
+    // Leer pj_meta y validar contenido (PROFILE debe ser el slot primario de perfil, no AUTOSAVE0)
     {
         std::FILE *f = std::fopen(pj_meta.c_str(), "rb");
         ASSERT_NE(f, nullptr);
@@ -1421,7 +1434,7 @@ TEST(MachetePs5ParamJsonSynthesisTest, SynthesizeParamJsonFromSlots)
         ASSERT_GT(n, 0u);
         const std::string content(buf, n);
         EXPECT_NE(content.find("\"titleId\": \"PPSA01969\""), std::string::npos);
-        EXPECT_NE(content.find("\"dirName\": \"AUTOSAVE0\""), std::string::npos);
+        EXPECT_NE(content.find("\"dirName\": \"PROFILE\""), std::string::npos);
         EXPECT_NE(content.find("DEATH STRANDING"), std::string::npos);
     }
 
@@ -2110,7 +2123,7 @@ TEST(MacheteDbTest, PS5SystemBlocksConstantZero)
     EXPECT_EQ(blocks, 192u);
 }
 
-TEST(MachetePs4SanitizationTest, LooseFilesUnlinkedAndKeystoneKept)
+TEST(MachetePs4SanitizationTest, LooseFilesAndLooseKeystoneUnlinked)
 {
     const std::string test_dir = "/tmp/machete_ps4_clean_test";
     (void)mkdir(test_dir.c_str(), 0777);
@@ -2130,14 +2143,14 @@ TEST(MachetePs4SanitizationTest, LooseFilesUnlinkedAndKeystoneKept)
 
     // Simulate unconditional PS4 folder sanitization
     (void)unlink(sfo_file.c_str());
+    (void)unlink(ks_file.c_str());
     machete::pfs::remove_dir_recursive_simple(sce_sys_dir);
 
-    // Verify loose param.sfo and sce_sys are gone, but keystone is preserved
+    // Verify loose param.sfo, sce_sys and loose keystone are gone from container dir
     EXPECT_EQ(access(sfo_file.c_str(), F_OK), -1);
     EXPECT_EQ(access(sce_sys_dir.c_str(), F_OK), -1);
-    EXPECT_EQ(access(ks_file.c_str(), R_OK), 0);
+    EXPECT_EQ(access(ks_file.c_str(), F_OK), -1);
 
-    (void)unlink(ks_file.c_str());
     (void)rmdir(test_dir.c_str());
 }
 

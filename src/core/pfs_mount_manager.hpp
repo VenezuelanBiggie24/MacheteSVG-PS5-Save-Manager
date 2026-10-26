@@ -74,16 +74,16 @@ inline bool is_valid_ps4_slot_name(const std::string &save_dir, const std::strin
         return false;
     if (name.size() > 4 && (name.substr(name.size() - 4) == ".bin" || name.substr(name.size() - 4) == ".tmp"))
         return false;
-    if (name.rfind("sce_bu_", 0) == 0 || name.rfind("sdimg_sce_bu_", 0) == 0)
+    if (name.rfind("sdimg_sce_bu_", 0) == 0)
         return false;
     if (name == "sealedkey" || name == "keystone" || name == "param.sfo" || name == "PARAM.SFO" || name == "icon0.png")
         return false;
 
     const std::string clean_name = (name.rfind("sdimg_", 0) == 0) ? name.substr(6) : name;
-    if (clean_name.empty() || clean_name.rfind("sce_bu_", 0) == 0)
+    if (clean_name.empty())
         return false;
 
-    // En PS4/PS5 BC el contenedor de guardado (ej. sdimg_Book o Book) tiene un companion <slot>.bin (ej. Book.bin)
+    // En PS4/PS5 BC el contenedor de guardado (ej. sdimg_Book, Book o sce_bu_Book) tiene un companion <slot>.bin (ej. Book.bin o sce_bu_Book.bin)
     const std::string bin_path_clean = save_dir + "/" + clean_name + ".bin";
     const std::string bin_path_raw = save_dir + "/" + name + ".bin";
     const std::string sealed_path = save_dir + "/sealedkey";

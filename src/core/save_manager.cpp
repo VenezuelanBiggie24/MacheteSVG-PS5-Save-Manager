@@ -569,6 +569,17 @@ std::string select_primary_ps5_slot(const std::vector<std::pair<std::string, std
         return "PROFILE";
     }
 
+    // 1. En arquitecturas basadas en perfil (ej. Decima Engine en Horizon Zero Dawn Remastered y Death Stranding),
+    // PROFILE es la ranura maestra requerida por el ejecutable y el sistema al inicializar.
+    for (const auto &sl : slots)
+    {
+        if (sl.first == "PROFILE")
+        {
+            if (out_size) *out_size = sl.second;
+            return "PROFILE";
+        }
+    }
+
     const char *kGameplayPrefixes[] = {
         "QUICKSAVE", "MANUALSAVE", "MANUAL", "AUTOSAVE", "SAVEDATA", "SAVE", "GAME", "SLOT", nullptr
     };
@@ -583,7 +594,7 @@ std::string select_primary_ps5_slot(const std::vector<std::pair<std::string, std
         return (endp && *endp == '\0') ? static_cast<int>(val) : 0;
     };
 
-    // 1. Probar cada prefijo de guardado en orden de prioridad.
+    // 2. Si no existe PROFILE, probar cada prefijo de guardado en orden de prioridad.
     // Para un mismo prefijo (ej. QUICKSAVE0, QUICKSAVE1, QUICKSAVE2), seleccionar el indice mas alto.
     for (int p = 0; kGameplayPrefixes[p]; ++p)
     {
@@ -608,32 +619,19 @@ std::string select_primary_ps5_slot(const std::vector<std::pair<std::string, std
         }
     }
 
-    // 2. Si no coincide con prefijos conocidos, seleccionar la ranura mas grande que NO sea "PROFILE"
-    const std::pair<std::string, std::uint64_t> *largest_non_profile = nullptr;
+    // 3. Si no coincide con prefijos conocidos, seleccionar la ranura mas grande
+    const std::pair<std::string, std::uint64_t> *largest = nullptr;
     for (const auto &sl : slots)
     {
-        if (sl.first != "PROFILE")
+        if (!largest || sl.second > largest->second)
         {
-            if (!largest_non_profile || sl.second > largest_non_profile->second)
-            {
-                largest_non_profile = &sl;
-            }
+            largest = &sl;
         }
     }
-    if (largest_non_profile)
+    if (largest)
     {
-        if (out_size) *out_size = largest_non_profile->second;
-        return largest_non_profile->first;
-    }
-
-    // 3. Como ultimo recurso si unicamente existe PROFILE, utilizarlo
-    for (const auto &sl : slots)
-    {
-        if (sl.first == "PROFILE")
-        {
-            if (out_size) *out_size = sl.second;
-            return sl.first;
-        }
+        if (out_size) *out_size = largest->second;
+        return largest->first;
     }
 
     if (out_size) *out_size = slots[0].second;
@@ -1215,32 +1213,24 @@ void post_process_restored_save(const scanner::ScannedGame &game,
 
     if (is_ps5)
     {
-        // 1. Asegurar que para cada contenedor PS5 sdimg_<slot> exista su copia espejo de respaldo sdimg_sce_bu_<slot>.
-        // En motores como Decima (Horizon Zero Dawn Remastered, Death Stranding), la ausencia de la imagen
-        // de respaldo sdimg_sce_bu_<slot> provoca que el juego reporte "Datos dañados" al iniciar y al cargar.
+        // 1. Limpieza de contenedores de respaldo sinteticos (sdimg_sce_bu_*)
+        // Motores modernos de PS5 como Decima 2.0 (Horizon Zero Dawn Remastered) no admiten
+        // contenedores espejo no registrados, provocando 'Datos dañados: PROFILE'.
         ScopedDir dslots_ps5(dst_target);
         if (dslots_ps5.is_valid())
         {
-            std::vector<std::string> base_slots;
             while (const dirent *de = readdir(dslots_ps5.get()))
             {
                 const std::string nm = de->d_name;
-                if (nm.rfind("sdimg_", 0) == 0 && nm.rfind("sdimg_sce_bu_", 0) != 0)
+                if (nm.rfind("sdimg_sce_bu_", 0) == 0)
                 {
-                    const std::string slot_base = nm.substr(6);
-                    base_slots.push_back(slot_base);
-                }
-            }
-            for (const auto &bs : base_slots)
-            {
-                const std::string img_path = dst_target + "/sdimg_" + bs;
-                const std::string bu_path = dst_target + "/sdimg_sce_bu_" + bs;
-                if (access(bu_path.c_str(), R_OK) != 0)
-                {
-                    (void)pfs::copy_file_atomic(img_path, bu_path, target_uid, target_gid);
-                    (void)chmod(bu_path.c_str(), 0666);
-                    MACHETE_LOG("[RESTORE]", "Mirrored missing PS5 Decima backup container: %s -> %s",
-                                ("sdimg_" + bs).c_str(), ("sdimg_sce_bu_" + bs).c_str());
+                    const std::string backup_equiv = backup_folder + "/" + nm;
+                    if (access(backup_equiv.c_str(), F_OK) != 0)
+                    {
+                        const std::string to_del = dst_target + "/" + nm;
+                        (void)unlink(to_del.c_str());
+                        MACHETE_LOG("[RESTORE]", "Purged synthetic backup container from PS5 save dir: %s", nm.c_str());
+                    }
                 }
             }
         }
@@ -1640,15 +1630,12 @@ void post_process_restored_save(const scanner::ScannedGame &game,
 
             if (!valid_sfo.empty())
             {
-                (void)pfs::copy_file_atomic(valid_sfo, dst_target + "/param.sfo", target_uid, target_gid);
-                (void)pfs::copy_file_atomic(valid_sfo, dst_target + "/sce_sys/param.sfo", target_uid, target_gid);
-                (void)machete::sfo::resign_param_sfo(dst_target + "/param.sfo", rp);
-                (void)machete::sfo::resign_param_sfo(dst_target + "/sce_sys/param.sfo", rp);
-                (void)chmod((dst_target + "/param.sfo").c_str(), 0666);
-                (void)chmod((dst_target + "/sce_sys/param.sfo").c_str(), 0666);
+                (void)pfs::copy_file_atomic(valid_sfo, meta_ps4_user + "/param.sfo", target_uid, target_gid);
+                (void)machete::sfo::resign_param_sfo(meta_ps4_user + "/param.sfo", rp);
+                (void)chmod((meta_ps4_user + "/param.sfo").c_str(), 0666);
 
                 MACHETE_LOG("[RESTORE]", "Synchronized and resigned PS4 save param.sfo in %s (from %s)",
-                            dst_target.c_str(), valid_sfo.c_str());
+                            meta_ps4_user.c_str(), valid_sfo.c_str());
             }
             else
             {
@@ -1668,33 +1655,27 @@ void post_process_restored_save(const scanner::ScannedGame &game,
                         }
                     }
                 }
-                const std::string synth_sfo = dst_target + "/sce_sys/param.sfo";
+                const std::string synth_sfo = meta_ps4_user + "/param.sfo";
                 if (machete::sfo::synthesize_ps4_save_param_sfo(synth_sfo, save_dir_tid, primary_slot,
                                                                  game.title, "", "", user_id, active_account_id, 325, 0, nullptr))
                 {
                     (void)chmod(synth_sfo.c_str(), 0666);
-                    (void)pfs::copy_file_atomic(synth_sfo, dst_target + "/param.sfo", target_uid, target_gid);
-                    (void)chmod((dst_target + "/param.sfo").c_str(), 0666);
                     MACHETE_LOG("[RESTORE]", "Synthesized contingency PS4 param.sfo for slot %s in %s",
-                                primary_slot.c_str(), dst_target.c_str());
+                                primary_slot.c_str(), meta_ps4_user.c_str());
                 }
             }
 
-            // Purgar cualquier archivo .sfo residual en meta_ps4_user para dejar UNICAMENTE los iconos oficiales
-            ScopedDir dmeta(meta_ps4_user);
-            if (dmeta.is_valid())
+            // Inyectar keystone autentico en meta_ps4_user
+            const std::string auth_ks = machete::keystone::find_authentic_game_keystone(save_dir_tid, backup_folder, dst_target, game.app_path);
+            if (!auth_ks.empty() && machete::keystone::is_valid_keystone_file(auth_ks))
             {
-                while (const dirent *me = readdir(dmeta.get()))
-                {
-                    const std::string mname = me->d_name;
-                    if (mname.size() >= 4 && mname.substr(mname.size() - 4) == ".sfo")
-                    {
-                        (void)unlink((meta_ps4_user + "/" + mname).c_str());
-                    }
-                }
+                (void)pfs::copy_file_atomic(auth_ks, meta_ps4_user + "/keystone", target_uid, target_gid);
+                (void)chmod((meta_ps4_user + "/keystone").c_str(), 0666);
+                MACHETE_LOG("[KEYSTONE]", "Injected authentic PS4 keystone for %s into %s/keystone",
+                            save_dir_tid.c_str(), meta_ps4_user.c_str());
             }
-            (void)unlink((meta_ps4_user + "/param.sfo").c_str());
-            (void)unlink((meta_ps4_user + "/keystone").c_str());
+
+            // Limpieza en meta_ps4_user: eliminar residuos sce_sys si existieran, pero PRESERVAR param.sfo, keystone e iconos
             (void)unlink((meta_ps4_user + "/sce_sys/param.sfo").c_str());
             (void)unlink((meta_ps4_user + "/sce_sys/icon0.png").c_str());
             (void)rmdir((meta_ps4_user + "/sce_sys").c_str());
@@ -1707,6 +1688,7 @@ void post_process_restored_save(const scanner::ScannedGame &game,
         {
             sfo::SfoSaveMetadata fallback_meta{};
             for (const std::string &cand_sfo : {
+                     meta_ps4_user + "/param.sfo",
                      dst_target + "/param.sfo",
                      dst_target + "/sce_sys/param.sfo",
                      backup_folder + "/param.sfo",
@@ -1747,48 +1729,19 @@ void post_process_restored_save(const scanner::ScannedGame &game,
         }
 
         // En PS5 (retrocompatibilidad PS4 bajo /user/home/<uid>/savedata/<TitleID>), el directorio de guardado
-        // contiene exclusivamente sdimg_<slot>, <slot>.bin, sdimg_sce_bu_<slot> y sce_bu_<slot>.bin.
-        // Si el contenedor PFS fue montado y sellado por el kernel (o si estamos en /user/home/),
-        // eliminar archivos sueltos (crypto_vault.bin, .save_info, param.sfo, keystone, sce_sys/) del directorio externo.
+        // contiene exclusivamente contenedores <slot>, <slot>.bin, sce_bu_<slot> y sce_bu_<slot>.bin.
+        // Archivos sueltos como keystone, param.sfo o sce_sys violan la arquitectura de almacenamiento
+        // de PS4 y provocan que el escaneador del sistema marque la partida como dañada (is_broken = 1).
         if (dst_target.find("/user/home/") == 0)
         {
             (void)unlink((dst_target + "/crypto_vault.bin").c_str());
             (void)unlink((dst_target + "/.save_info").c_str());
-            // En PS4 / PS5 BC, keystone es el token criptografico que el emulador y SAMU verifican obligatoriamente.
-            // Asegurar que el keystone autentico este presente en el directorio del guardado.
-            const std::string ks_path = dst_target + "/keystone";
-            if (access(ks_path.c_str(), R_OK) != 0 || !machete::keystone::is_valid_keystone_file(ks_path))
-            {
-                for (const std::string &cand_ks : {
-                         preserved_dummy_dir + "/keystone",
-                         preserved_dummy_dir + "/.meta_dummy/keystone",
-                         backup_folder + "/keystone",
-                         "/data/MacheteSVG/keystones/" + save_dir_tid + ".keystone"})
-                {
-                    if (access(cand_ks.c_str(), R_OK) == 0 && machete::keystone::is_valid_keystone_file(cand_ks))
-                    {
-                        (void)pfs::copy_file_atomic(cand_ks, ks_path, target_uid, target_gid);
-                        (void)chmod(ks_path.c_str(), 0666);
-                        MACHETE_LOG("[KEYSTONE]", "Restored authentic keystone for PS4 save in %s", ks_path.c_str());
-                        break;
-                    }
-                }
-            }
-
-            // En PS4 / PS5 BC (/user/home/<uid>/savedata/<TitleID>/), el directorio de la partida
-            // debe contener estrictamente los contenedores (<slot>, <slot>.bin, sce_bu_<slot>, etc.) y keystone.
-            // La presencia de param.sfo suelto o de la carpeta sce_sys/ fuera de la imagen PFS viola el estandar
-            // de retrocompatibilidad y provoca que el juego reporte 'no se pudo cargar los datos'.
+            (void)unlink((dst_target + "/keystone").c_str());
             (void)unlink((dst_target + "/param.sfo").c_str());
             (void)unlink((dst_target + "/PARAM.SFO").c_str());
             pfs::remove_dir_recursive_simple(dst_target + "/sce_sys");
 
-            // Limpieza estricta en meta_ps4_user: solo debe contener iconos
-            (void)unlink((meta_ps4_user + "/param.sfo").c_str());
-            (void)unlink((meta_ps4_user + "/PARAM.SFO").c_str());
-            pfs::remove_dir_recursive_simple(meta_ps4_user + "/sce_sys");
-
-            MACHETE_LOG("[RESTORE]", "Sanitized PS4 container directory (unlinked loose param.sfo & sce_sys, preserved keystone): %s", dst_target.c_str());
+            MACHETE_LOG("[RESTORE]", "Sanitized PS4 container directory (unlinked loose files and loose keystone from %s)", dst_target.c_str());
         }
     }
 

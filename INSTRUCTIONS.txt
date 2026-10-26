@@ -1,5 +1,5 @@
 =====================================================
-   MacheteSaveGameManager v1.3.4 - PS5 & PS4 Savegame Manager
+   MacheteSaveGameManager v1.3.5 - PS5 & PS4 Savegame Manager
 =====================================================
 
 [ENGLISH GUIDE]
