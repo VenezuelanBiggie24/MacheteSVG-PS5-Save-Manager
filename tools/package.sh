@@ -8,7 +8,7 @@ set -euo pipefail
 root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
 title_id="PPSA99700"
 app_name="MacheteSaveGameManager"
-version="1.3.8"
+version="1.3.9"
 
 echo "=================================================="
 echo "   Empaquetador de Distribución de MacheteSaveGameManager     "
@@ -47,6 +47,14 @@ mkdir -p "$dist_dir/daemon"
 if [[ -d "$root/payloads/lapy_jb" ]]; then
     cp -r "$root/payloads/lapy_jb/"* "$dist_dir/daemon/"
     chmod 0777 "$dist_dir/daemon/lapy_jb_daemon.elf" 2>/dev/null || true
+fi
+
+# Compilar y empaquetar Machete PFS Helper Daemon
+echo "==> Compilando Machete PFS Helper Daemon..."
+if [[ -d "$root/payloads/machete_pfs_helper" ]]; then
+    make -C "$root/payloads/machete_pfs_helper" all
+    cp "$root/payloads/machete_pfs_helper/machete_pfs_helper.elf" "$dist_dir/daemon/"
+    chmod 0777 "$dist_dir/daemon/machete_pfs_helper.elf" 2>/dev/null || true
 fi
 rm -f "$dist_dir/lapy.elf"
 chmod -R 0777 "$dist_dir"

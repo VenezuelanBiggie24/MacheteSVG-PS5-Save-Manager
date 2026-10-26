@@ -8,6 +8,7 @@
 #include "core/aes_xts.hpp"
 #include "core/keystone_manager.hpp"
 #include "core/logger.hpp"
+#include "core/pfs_helper_client.hpp"
 #include "core/samu_vault.hpp"
 #include "core/sfo_resigner.hpp"
 #include "core/sqlite_adapter.hpp"
@@ -792,6 +793,18 @@ public:
 
         if (!dev_mounted)
         {
+            // Delegar montaje al demonio helper de Machete (ejecutado fuera del sandbox de aplicacion)
+            if (helper::mount_container(staged_chosen, SAVE_MNT_PATH, key))
+            {
+                rc = 0;
+                dev_mounted = true;
+                used_helper_ = true;
+                MACHETE_LOG("[PFS]", "Container %s mounted via Machete PFS Helper daemon", staged_chosen.c_str());
+            }
+        }
+
+        if (!dev_mounted)
+        {
             MACHETE_LOG("[PFS]", "sceFsMountSaveData failed on %s (rc=0x%08x)",
                         staged_img.c_str(), static_cast<unsigned int>(rc));
             (void)unlink(staged_img.c_str());
@@ -807,8 +820,8 @@ public:
         original_image_path_ = image_path;
         staged_image_path_ = staged_chosen;
         staged_raw_path_ = staged_raw;
-        MACHETE_LOG("[PFS]", "Mounted PFS container %s at %s (write_back=%d, rc=%d)",
-                    image_path.c_str(), SAVE_MNT_PATH, write_back ? 1 : 0, rc);
+        MACHETE_LOG("[PFS]", "Mounted PFS container %s at %s (write_back=%d, rc=%d, helper=%d)",
+                    image_path.c_str(), SAVE_MNT_PATH, write_back ? 1 : 0, rc, used_helper_ ? 1 : 0);
         return true;
     }
 
@@ -823,7 +836,18 @@ public:
             init_umount_fn_(&uopt);
 
         int rc = 0;
-        if (umount_fn_)
+        if (used_helper_)
+        {
+            if (helper::unmount_container(SAVE_MNT_PATH))
+            {
+                rc = 0;
+            }
+            else
+            {
+                rc = -1;
+            }
+        }
+        else if (umount_fn_)
         {
             rc = umount_fn_(&uopt, SAVE_MNT_PATH, nullptr, mount_handle_);
         }
@@ -873,6 +897,7 @@ public:
 private:
     bool mounted_ = false;
     bool write_back_ = false;
+    bool used_helper_ = false;
     int mount_handle_ = 0;
     std::string original_image_path_;
     std::string staged_image_path_;

@@ -1312,7 +1312,7 @@ TEST(MacheteParamJsonSizeTest, UpdateFileSizeAndMtimeInParamJson)
 
 TEST(MacheteBuildInfoTest, BuildNumberMatchesExpected)
 {
-    EXPECT_STREQ(machete::build::build_number(), "82");
+    EXPECT_STREQ(machete::build::build_number(), "83");
 }
 
 TEST(MacheteParamJsonDirNameTest, UpdateDirNameInParamJson)
@@ -1437,7 +1437,7 @@ TEST(MachetePs5ParamJsonSynthesisTest, SynthesizeParamJsonFromSlots)
         ASSERT_GT(n, 0u);
         const std::string content(buf, n);
         EXPECT_NE(content.find("\"titleId\": \"PPSA01969\""), std::string::npos);
-        EXPECT_NE(content.find("\"dirName\": \"PROFILE\""), std::string::npos);
+        EXPECT_NE(content.find("\"dirName\": \"AUTOSAVE0\""), std::string::npos);
         EXPECT_NE(content.find("DEATH STRANDING"), std::string::npos);
     }
 

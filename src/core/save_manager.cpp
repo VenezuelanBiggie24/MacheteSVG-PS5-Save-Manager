@@ -569,19 +569,9 @@ std::string select_primary_ps5_slot(const std::vector<std::pair<std::string, std
         return "PROFILE";
     }
 
-    // 1. Si existe PROFILE (motores Decima como Horizon Zero Dawn Remastered y Death Stranding),
-    // el sistema operativo Prospero y el motor del juego exigen que el descriptor maestro
-    // param.json apunte obligatoriamente a dirName = "PROFILE". De lo contrario, el juego
-    // detecta PROFILE como contenedor huerfano y arroja "Datos danados: PROFILE".
-    for (const auto &sl : slots)
-    {
-        if (sl.first == "PROFILE")
-        {
-            if (out_size) *out_size = sl.second;
-            return "PROFILE";
-        }
-    }
-
+    // 1. Probar cada prefijo de ranura de juego en orden de prioridad (QUICKSAVE, MANUALSAVE, AUTOSAVE).
+    // Para motores como Decima (Horizon) o Insomniac (Spider-Man), el dirName principal en param.json
+    // DEBE ser la ranura de juego activa (ej. MANUALSAVE0 o AUTOSAVE0), NO el archivo PROFILE auxiliar.
     const char *kGameplayPrefixes[] = {
         "QUICKSAVE", "MANUALSAVE", "MANUAL", "AUTOSAVE", "SAVEDATA", "SAVE", "GAME", "SLOT", nullptr
     };
@@ -2983,6 +2973,56 @@ OperationResult resign_local_ps4_save(const scanner::ScannedGame &game,
 
     bool sfo_modified = false;
     resign_sfo_directory_recursive(save_dir, rp, sfo_modified);
+
+    // 2b. Montar y resignar contenedores PFS de PS4 (ej. Book, savedata.bin) via ScopedPfsMount
+    ScopedDir dir_pfs(save_dir);
+    if (dir_pfs.is_valid())
+    {
+        while (const dirent *ent = readdir(dir_pfs.get()))
+        {
+            if (ent->d_name[0] == '.') continue;
+            const std::string sname = ent->d_name;
+            if (sname == "param.sfo" || sname == "icon0.png" || sname == "keystone" || sname == "sce_sys")
+                continue;
+            if (sname.size() > 4 && sname.substr(sname.size() - 4) == ".bin")
+                continue;
+
+            const std::string c_path = save_dir + "/" + sname;
+            struct stat st_c{};
+            if (stat(c_path.c_str(), &st_c) == 0 && S_ISREG(st_c.st_mode) && st_c.st_size > 0)
+            {
+                std::uint8_t plain_key[32] = {0};
+                (void)pfs::decrypt_pfs_key_for_slot(save_dir, sname, false, plain_key);
+
+                pfs::ScopedPfsMount mnt;
+                if (mnt.mount(c_path, plain_key, true))
+                {
+                    for (const std::string &inner_sfo : {
+                             mnt.mount_point() + "/sce_sys/param.sfo",
+                             mnt.mount_point() + "/sce_sys/PARAM.SFO",
+                             mnt.mount_point() + "/param.sfo"})
+                    {
+                        if (access(inner_sfo.c_str(), F_OK) == 0 && sfo::resign_param_sfo(inner_sfo, rp))
+                        {
+                            MACHETE_LOG("[RESIGN]", "Resigned inner param.sfo inside %s via PFS mount", sname.c_str());
+                        }
+                    }
+                    mnt.unmount();
+                    MACHETE_LOG("[RESIGN]", "Container %s successfully unmounted and sealed with active SAMU credentials", sname.c_str());
+
+                    const std::string bu_slot = save_dir + "/sce_bu_" + sname;
+                    if (access(bu_slot.c_str(), F_OK) == 0)
+                    {
+                        (void)pfs::copy_file_atomic(c_path, bu_slot, target_uid, target_gid);
+                        if (access((c_path + ".bin").c_str(), R_OK) == 0)
+                        {
+                            (void)pfs::copy_file_atomic(c_path + ".bin", bu_slot + ".bin", target_uid, target_gid);
+                        }
+                    }
+                }
+            }
+        }
+    }
 
     if (progress_cb)
     {
