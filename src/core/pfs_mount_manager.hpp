@@ -689,8 +689,7 @@ public:
         (void)seteuid(0);
 
         int (*init_mount)(SaveMountOpt *) = nullptr;
-        if (!ensure_pfs_symbols_resolved(&init_mount, &mount_fn_, &init_umount_fn_, &umount_fn_))
-            return false;
+        (void)ensure_pfs_symbols_resolved(&init_mount, &mount_fn_, &init_umount_fn_, &umount_fn_);
 
         ensure_dir_tree(SAVE_STAGING_DIR);
         ensure_dir_tree(SAVE_MNT_PATH);
@@ -705,6 +704,7 @@ public:
                     init_umount_fn_(&clean_opt);
                 if (umount_fn_)
                     (void)umount_fn_(&clean_opt, SAVE_MNT_PATH, nullptr, 0);
+                (void)helper::unmount_container(SAVE_MNT_PATH);
                 ::sync();
             }
         }
@@ -800,6 +800,22 @@ public:
                 dev_mounted = true;
                 used_helper_ = true;
                 MACHETE_LOG("[PFS]", "Container %s mounted via Machete PFS Helper daemon", staged_chosen.c_str());
+            }
+            else if (staged_raw != staged_chosen && helper::mount_container(staged_raw, SAVE_MNT_PATH, key))
+            {
+                rc = 0;
+                dev_mounted = true;
+                used_helper_ = true;
+                staged_chosen = staged_raw;
+                MACHETE_LOG("[PFS]", "Container %s mounted via Machete PFS Helper daemon (raw)", staged_raw.c_str());
+            }
+            else if (helper::mount_container(image_path, SAVE_MNT_PATH, key))
+            {
+                rc = 0;
+                dev_mounted = true;
+                used_helper_ = true;
+                staged_chosen = image_path;
+                MACHETE_LOG("[PFS]", "Container %s mounted via Machete PFS Helper daemon (direct)", image_path.c_str());
             }
         }
 
@@ -1728,15 +1744,24 @@ inline PfsRestoreReport inject_and_resign_save(const std::string &title_id,
                 char uid_hex[32];
                 std::snprintf(uid_hex, sizeof(uid_hex), "%x", user_id);
                 const std::string meta_target_user = std::string("/user/home/") + uid_hex + "/savedata_prospero_meta/user/" + title_id;
+                const std::string meta_target_direct = std::string("/user/home/") + uid_hex + "/savedata_prospero_meta/" + title_id;
                 ensure_dir_tree(meta_target_user, owner_uid, owner_gid);
+                ensure_dir_tree(meta_target_direct, owner_uid, owner_gid);
 
                 const std::string inner_json = mnt.mount_point() + "/sce_sys/param.json";
                 if (access(inner_json.c_str(), R_OK) == 0)
                 {
                     (void)copy_file_atomic(inner_json, meta_target_user + "/param.json", owner_uid, owner_gid);
+                    (void)copy_file_atomic(inner_json, meta_target_direct + "/param.json", owner_uid, owner_gid);
                 }
                 const std::string inner_icon = mnt.mount_point() + "/sce_sys/icon0.png";
-                if (access(inner_icon.c_str(), R_OK) == 0 && access((meta_target_user + "/icon0.png").c_str(), R_OK) != 0)
+                if (access(inner_icon.c_str(), R_OK) == 0)
+                {
+                    if (access((meta_target_user + "/icon0.png").c_str(), R_OK) != 0)
+                        (void)copy_file_atomic(inner_icon, meta_target_user + "/icon0.png", owner_uid, owner_gid);
+                    if (access((meta_target_direct + "/icon0.png").c_str(), R_OK) != 0)
+                        (void)copy_file_atomic(inner_icon, meta_target_direct + "/icon0.png", owner_uid, owner_gid);
+                }
                 {
                     (void)copy_file_atomic(inner_icon, meta_target_user + "/icon0.png", owner_uid, owner_gid);
                 }

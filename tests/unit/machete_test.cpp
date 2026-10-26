@@ -1312,7 +1312,7 @@ TEST(MacheteParamJsonSizeTest, UpdateFileSizeAndMtimeInParamJson)
 
 TEST(MacheteBuildInfoTest, BuildNumberMatchesExpected)
 {
-    EXPECT_STREQ(machete::build::build_number(), "83");
+    EXPECT_STREQ(machete::build::build_number(), "84");
 }
 
 TEST(MacheteParamJsonDirNameTest, UpdateDirNameInParamJson)

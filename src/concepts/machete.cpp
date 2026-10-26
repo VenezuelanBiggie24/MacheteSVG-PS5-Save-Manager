@@ -10,6 +10,7 @@
 #include "core/i18n.hpp"
 #include "core/jailbreak.hpp"
 #include "core/logger.hpp"
+#include "core/pfs_helper_client.hpp"
 #include "core/save_manager.hpp"
 #include "core/storage.hpp"
 #include "core/tween.hpp"
@@ -914,6 +915,12 @@ class Machete final : public app::Concept
                 MACHETE_BREADCRUMB("jb_thread: root access granted");
                 root_active_.store(true);
                 jb_needs_refresh_.store(true);
+
+                // Inicializar y verificar proactivamente el demonio PFS Helper en segundo plano
+                std::thread helper_th([]() {
+                    (void)machete::pfs::helper::ensure_helper_ready();
+                });
+                helper_th.detach();
             }
             else
             {

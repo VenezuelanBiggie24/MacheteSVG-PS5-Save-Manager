@@ -787,7 +787,11 @@ void reconstruct_prospero_metadata(const std::string &title_id,
         backup_folder + "/meta/param.json",
         backup_folder + "/meta/sce_sys/param.json",
         backup_folder + "/sce_sys/param.json",
-        backup_folder + "/param.json"
+        backup_folder + "/param.json",
+        preserved_dummy_dir + "/.meta_dummy/param.json",
+        preserved_dummy_dir + "/.meta_dummy/sce_sys/param.json",
+        preserved_dummy_dir + "/param.json",
+        preserved_dummy_dir + "/sce_sys/param.json"
     };
 
     for (const auto &jc : json_candidates)

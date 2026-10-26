@@ -6,7 +6,7 @@ SDK_DIR ?= $(CURDIR)/../../.deps/native/ps5-payload-sdk
 PS5_PAYLOAD_SDK ?= $(SDK_DIR)
 
 CC := $(PS5_PAYLOAD_SDK)/bin/prospero-clang
-CFLAGS := -Wall -O2 -g -lSceFsInternalForVsh -lSceNet
+CFLAGS := -Wall -O2 -g -lSceNet
 
 TARGET := machete_pfs_helper.elf
 
@@ -14,6 +14,7 @@ all: $(TARGET)
 
 $(TARGET): main.c
 	PATH="/opt/homebrew/opt/llvm/bin:$(PATH)" $(CC) $(CFLAGS) -o $@ $^
+	PATH="/opt/homebrew/opt/llvm/bin:$(PATH)" /opt/homebrew/opt/llvm/bin/llvm-strip --strip-unneeded $@
 
 clean:
 	rm -f $(TARGET)

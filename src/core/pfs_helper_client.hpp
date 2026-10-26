@@ -55,9 +55,129 @@ constexpr const char *kResDataPath = "/data/machete_pfs_res";
 constexpr const char *kReadyPath = "/download0/machete_pfs_ready";
 constexpr const char *kReadyDataPath = "/data/machete_pfs_ready";
 
-inline bool is_helper_ready_on_disk() noexcept
+inline bool send_command_via_socket(const std::string &cmd, std::string &out_res)
 {
-    return (access(kReadyPath, R_OK) == 0 || access(kReadyDataPath, R_OK) == 0);
+#if defined(__PROSPERO__) || defined(__Prospero__) || defined(__PS5__)
+    const int sock = sceNetSocket("machete_pfs_cli", 2, 1, 6);
+    if (sock < 0)
+        return false;
+
+    constexpr int sock_level = 0xffff;
+    constexpr int timeout_us = 3'000'000;
+    sceNetSetsockopt(sock, sock_level, 0x1105, &timeout_us, sizeof(timeout_us));
+    sceNetSetsockopt(sock, sock_level, 0x1106, &timeout_us, sizeof(timeout_us));
+    sceNetSetsockopt(sock, sock_level, 0x1109, &timeout_us, sizeof(timeout_us));
+
+    const HelperSockaddrIn endpoint{sizeof(HelperSockaddrIn),
+                                    2,
+                                    static_cast<std::uint16_t>((kHelperPort << 8) | (kHelperPort >> 8)),
+                                    0x0100007f, // 127.0.0.1
+                                    0,
+                                    {0}};
+
+    if (sceNetConnect(sock, &endpoint, sizeof(endpoint)) < 0)
+    {
+        sceNetSocketClose(sock);
+        return false;
+    }
+
+    std::string full_cmd = cmd + "\n";
+    if (sceNetSend(sock, full_cmd.c_str(), full_cmd.size(), 0) <= 0)
+    {
+        sceNetSocketClose(sock);
+        return false;
+    }
+
+    char buf[1024] = {0};
+    int r = sceNetRecv(sock, buf, sizeof(buf) - 1, 0);
+    sceNetSocketClose(sock);
+
+    if (r > 0)
+    {
+        buf[r] = '\0';
+        out_res = buf;
+        return true;
+    }
+    return false;
+#else
+    (void)cmd;
+    (void)out_res;
+    return false;
+#endif
+}
+
+inline bool send_command_via_file_ipc(const std::string &cmd, std::string &out_res)
+{
+    const char *cmd_target = kCmdPath;
+    const char *res_target = kResPath;
+
+    if (access("/download0", W_OK) != 0)
+    {
+        cmd_target = kCmdDataPath;
+        res_target = kResDataPath;
+    }
+
+    (void)unlink(res_target);
+
+    std::FILE *fc = std::fopen(cmd_target, "w");
+    if (!fc)
+    {
+        cmd_target = kCmdDataPath;
+        res_target = kResDataPath;
+        fc = std::fopen(cmd_target, "w");
+    }
+
+    if (!fc)
+        return false;
+
+    std::fputs(cmd.c_str(), fc);
+    std::fputc('\n', fc);
+    std::fclose(fc);
+    (void)chmod(cmd_target, 0666);
+
+    for (int i = 0; i < 60; ++i)
+    {
+        std::this_thread::sleep_for(std::chrono::milliseconds(50));
+        if (access(res_target, R_OK) == 0)
+        {
+            std::FILE *fr = std::fopen(res_target, "r");
+            if (fr)
+            {
+                char buf[1024] = {0};
+                if (std::fgets(buf, sizeof(buf), fr))
+                {
+                    out_res = buf;
+                }
+                std::fclose(fr);
+                (void)unlink(res_target);
+                return !out_res.empty();
+            }
+        }
+    }
+    return false;
+}
+
+inline bool execute_helper_cmd(const std::string &cmd, std::string &out_res)
+{
+    if (send_command_via_socket(cmd, out_res))
+        return true;
+    return send_command_via_file_ipc(cmd, out_res);
+}
+
+inline bool is_helper_alive()
+{
+    std::string res;
+    if (send_command_via_socket("PING", res))
+    {
+        if (res.find("PONG") != std::string::npos)
+            return true;
+    }
+    if (send_command_via_file_ipc("PING", res))
+    {
+        if (res.find("PONG") != std::string::npos)
+            return true;
+    }
+    return false;
 }
 
 inline bool launch_helper_via_elf_loader()
@@ -178,140 +298,38 @@ inline bool launch_helper_via_elf_loader()
 
 inline bool ensure_helper_ready()
 {
-    if (is_helper_ready_on_disk())
+    if (is_helper_alive())
+    {
         return true;
+    }
 
-    MACHETE_LOG("[PFS_HELPER]", "Helper not ready, launching via ELF loader...");
+    MACHETE_LOG("[PFS_HELPER]", "Helper not alive, launching via ELF loader...");
+    (void)unlink(kReadyPath);
+    (void)unlink(kReadyDataPath);
+    (void)unlink(kCmdPath);
+    (void)unlink(kCmdDataPath);
+    (void)unlink(kResPath);
+    (void)unlink(kResDataPath);
+
     if (!launch_helper_via_elf_loader())
     {
         MACHETE_LOG("[PFS_HELPER]", "Failed to transmit helper payload to ELF loader");
         return false;
     }
 
-    // Esperar hasta 2 segundos a que el helper publique su archivo ready
-    for (int i = 0; i < 40; ++i)
+    // Esperar hasta 2.5 segundos a que el helper responda a PING
+    for (int i = 0; i < 50; ++i)
     {
         std::this_thread::sleep_for(std::chrono::milliseconds(50));
-        if (is_helper_ready_on_disk())
+        if (is_helper_alive())
         {
-            MACHETE_LOG("[PFS_HELPER]", "PFS Helper confirmed ready on attempt %d", i + 1);
+            MACHETE_LOG("[PFS_HELPER]", "Machete PFS Helper confirmed ALIVE and responsive on attempt %d", i + 1);
             return true;
         }
     }
 
-    MACHETE_LOG("[PFS_HELPER]", "PFS Helper ready poll timed out");
+    MACHETE_LOG("[PFS_HELPER]", "PFS Helper alive poll timed out");
     return false;
-}
-
-inline bool send_command_via_socket(const std::string &cmd, std::string &out_res)
-{
-#if defined(__PROSPERO__) || defined(__Prospero__) || defined(__PS5__)
-    const int sock = sceNetSocket("machete_pfs_cli", 2, 1, 6);
-    if (sock < 0)
-        return false;
-
-    constexpr int sock_level = 0xffff;
-    constexpr int timeout_us = 3'000'000;
-    sceNetSetsockopt(sock, sock_level, 0x1105, &timeout_us, sizeof(timeout_us));
-    sceNetSetsockopt(sock, sock_level, 0x1106, &timeout_us, sizeof(timeout_us));
-    sceNetSetsockopt(sock, sock_level, 0x1109, &timeout_us, sizeof(timeout_us));
-
-    const HelperSockaddrIn endpoint{sizeof(HelperSockaddrIn),
-                                    2,
-                                    static_cast<std::uint16_t>((kHelperPort << 8) | (kHelperPort >> 8)),
-                                    0x0100007f, // 127.0.0.1
-                                    0,
-                                    {0}};
-
-    if (sceNetConnect(sock, &endpoint, sizeof(endpoint)) < 0)
-    {
-        sceNetSocketClose(sock);
-        return false;
-    }
-
-    std::string full_cmd = cmd + "\n";
-    if (sceNetSend(sock, full_cmd.c_str(), full_cmd.size(), 0) <= 0)
-    {
-        sceNetSocketClose(sock);
-        return false;
-    }
-
-    char buf[1024] = {0};
-    int r = sceNetRecv(sock, buf, sizeof(buf) - 1, 0);
-    sceNetSocketClose(sock);
-
-    if (r > 0)
-    {
-        buf[r] = '\0';
-        out_res = buf;
-        return true;
-    }
-    return false;
-#else
-    (void)cmd;
-    (void)out_res;
-    return false;
-#endif
-}
-
-inline bool send_command_via_file_ipc(const std::string &cmd, std::string &out_res)
-{
-    const char *cmd_target = kCmdPath;
-    const char *res_target = kResPath;
-
-    // Probar primero en /download0, fallback a /data
-    if (access("/download0", W_OK) != 0)
-    {
-        cmd_target = kCmdDataPath;
-        res_target = kResDataPath;
-    }
-
-    (void)unlink(res_target);
-
-    std::FILE *fc = std::fopen(cmd_target, "w");
-    if (!fc)
-    {
-        cmd_target = kCmdDataPath;
-        res_target = kResDataPath;
-        fc = std::fopen(cmd_target, "w");
-    }
-
-    if (!fc)
-        return false;
-
-    std::fputs(cmd.c_str(), fc);
-    std::fputc('\n', fc);
-    std::fclose(fc);
-    (void)chmod(cmd_target, 0666);
-
-    // Esperar respuesta hasta 3 segundos
-    for (int i = 0; i < 60; ++i)
-    {
-        std::this_thread::sleep_for(std::chrono::milliseconds(50));
-        if (access(res_target, R_OK) == 0)
-        {
-            std::FILE *fr = std::fopen(res_target, "r");
-            if (fr)
-            {
-                char buf[1024] = {0};
-                if (std::fgets(buf, sizeof(buf), fr))
-                {
-                    out_res = buf;
-                }
-                std::fclose(fr);
-                (void)unlink(res_target);
-                return !out_res.empty();
-            }
-        }
-    }
-    return false;
-}
-
-inline bool execute_helper_cmd(const std::string &cmd, std::string &out_res)
-{
-    if (send_command_via_socket(cmd, out_res))
-        return true;
-    return send_command_via_file_ipc(cmd, out_res);
 }
 
 inline bool mount_container(const std::string &image_path, const std::string &mount_point, const std::uint8_t *plain_key = nullptr)
@@ -322,7 +340,7 @@ inline bool mount_container(const std::string &image_path, const std::string &mo
         return false;
     }
 
-    std::string cmd = "MOUNT " + image_path + " " + mount_point;
+    std::string cmd = "MOUNT \"" + image_path + "\" \"" + mount_point + "\"";
     if (plain_key)
     {
         char hex[65] = {0};
@@ -353,7 +371,7 @@ inline bool mount_container(const std::string &image_path, const std::string &mo
 
 inline bool unmount_container(const std::string &mount_point)
 {
-    std::string cmd = "UMOUNT " + mount_point;
+    std::string cmd = "UMOUNT \"" + mount_point + "\"";
     std::string res;
     if (execute_helper_cmd(cmd, res))
     {
