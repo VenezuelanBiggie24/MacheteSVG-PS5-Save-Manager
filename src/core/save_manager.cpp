@@ -569,6 +569,19 @@ std::string select_primary_ps5_slot(const std::vector<std::pair<std::string, std
         return "PROFILE";
     }
 
+    // 1. Si existe PROFILE (motores Decima como Horizon Zero Dawn Remastered y Death Stranding),
+    // el sistema operativo Prospero y el motor del juego exigen que el descriptor maestro
+    // param.json apunte obligatoriamente a dirName = "PROFILE". De lo contrario, el juego
+    // detecta PROFILE como contenedor huerfano y arroja "Datos danados: PROFILE".
+    for (const auto &sl : slots)
+    {
+        if (sl.first == "PROFILE")
+        {
+            if (out_size) *out_size = sl.second;
+            return "PROFILE";
+        }
+    }
+
     const char *kGameplayPrefixes[] = {
         "QUICKSAVE", "MANUALSAVE", "MANUAL", "AUTOSAVE", "SAVEDATA", "SAVE", "GAME", "SLOT", nullptr
     };
@@ -1223,9 +1236,12 @@ void post_process_restored_save(const scanner::ScannedGame &game,
                 const std::string nm = de->d_name;
                 if (nm.rfind("sdimg_sce_bu_", 0) == 0)
                 {
-                    const std::string to_del = dst_target + "/" + nm;
-                    (void)unlink(to_del.c_str());
-                    MACHETE_LOG("[RESTORE]", "Purged synthetic backup container from PS5 save dir: %s", nm.c_str());
+                    if (access((backup_folder + "/" + nm).c_str(), F_OK) != 0)
+                    {
+                        const std::string to_del = dst_target + "/" + nm;
+                        (void)unlink(to_del.c_str());
+                        MACHETE_LOG("[RESTORE]", "Purged synthetic backup container from PS5 save dir: %s", nm.c_str());
+                    }
                 }
             }
         }
@@ -1664,17 +1680,9 @@ void post_process_restored_save(const scanner::ScannedGame &game,
                 }
             }
 
-            // Inyectar keystone autentico en meta_ps4_user
-            const std::string auth_ks = machete::keystone::find_authentic_game_keystone(save_dir_tid, backup_folder, dst_target, game.app_path);
-            if (!auth_ks.empty() && machete::keystone::is_valid_keystone_file(auth_ks))
-            {
-                (void)pfs::copy_file_atomic(auth_ks, meta_ps4_user + "/keystone", target_uid, target_gid);
-                (void)chmod((meta_ps4_user + "/keystone").c_str(), 0666);
-                MACHETE_LOG("[KEYSTONE]", "Injected authentic PS4 keystone for %s into %s/keystone",
-                            save_dir_tid.c_str(), meta_ps4_user.c_str());
-            }
-
-            // Limpieza en meta_ps4_user: eliminar residuos sce_sys si existieran, pero PRESERVAR param.sfo, keystone e iconos
+            // En PS4 BC, savedata_meta/user/<TitleID>/ almacena exclusivamente activos de presentacion UI
+            // (param.sfo, icon0.png). El keystone reside internamente dentro del contenedor PFS sellado.
+            (void)unlink((meta_ps4_user + "/keystone").c_str());
             (void)unlink((meta_ps4_user + "/sce_sys/param.sfo").c_str());
             (void)unlink((meta_ps4_user + "/sce_sys/icon0.png").c_str());
             (void)rmdir((meta_ps4_user + "/sce_sys").c_str());
@@ -2407,33 +2415,42 @@ __attribute__((noinline)) OperationResult restore_from_folder(const scanner::Sca
                                                  target_uid, target_gid);
 
         // Para PS5 (ej. Horizon Zero Dawn Remastered en Decima Engine):
-        // Retener el perfil local autentico generado por la consola activa para esta cuenta,
-        // restaurando preserved_dummy_dir/sdimg_PROFILE o /data/MacheteSVG/authentic_dummies/<TitleID>/sdimg_PROFILE
-        // sobre dst_target/sdimg_PROFILE. Esto evita que un perfil foraneo o previo al formateo
-        // provoque 'Datos danados: PROFILE' al iniciar el juego.
+        // Solo recurrir al dummy o vault si el respaldo NO contenia un sdimg_PROFILE autentico
+        // o si proviene de otra consola (cross_console) donde el SAMU no pueda descifrarlo.
+        // Si el respaldo fue tomado en esta misma consola (cross_console == false), su sdimg_PROFILE
+        // contiene la tabla de ranuras y progreso real del usuario, por lo que DEBE preservarse.
         if (is_ps5)
         {
-            const std::string dummy_profile = preserved_dummy_dir + "/sdimg_PROFILE";
-            const std::string vault_profile = std::string("/data/MacheteSVG/authentic_dummies/") + eff_game.title_id + "/sdimg_PROFILE";
-            std::string auth_profile_src;
-            if (access(dummy_profile.c_str(), R_OK) == 0)
+            const bool backup_has_profile = (access((backup_folder + "/sdimg_PROFILE").c_str(), R_OK) == 0);
+            if (!backup_has_profile || cross_console)
             {
-                auth_profile_src = dummy_profile;
+                const std::string dummy_profile = preserved_dummy_dir + "/sdimg_PROFILE";
+                const std::string vault_profile = std::string("/data/MacheteSVG/authentic_dummies/") + eff_game.title_id + "/sdimg_PROFILE";
+                std::string auth_profile_src;
+                if (access(dummy_profile.c_str(), R_OK) == 0)
+                {
+                    auth_profile_src = dummy_profile;
+                }
+                else if (access(vault_profile.c_str(), R_OK) == 0)
+                {
+                    auth_profile_src = vault_profile;
+                }
+
+                if (!auth_profile_src.empty())
+                {
+                    (void)pfs::copy_file_atomic(auth_profile_src, dst_target + "/sdimg_PROFILE", target_uid, target_gid);
+                    (void)chmod((dst_target + "/sdimg_PROFILE").c_str(), 0666);
+                    MACHETE_LOG("[RESTORE]", "Retained authentic local PS5 sdimg_PROFILE from %s in %s (contingency)",
+                                auth_profile_src.c_str(), dst_target.c_str());
+                }
             }
-            else if (access(vault_profile.c_str(), R_OK) == 0)
+            else
             {
-                auth_profile_src = vault_profile;
+                MACHETE_LOG("[RESTORE]", "Preserving authentic backup sdimg_PROFILE in %s (same console)", dst_target.c_str());
             }
 
-            if (!auth_profile_src.empty())
-            {
-                (void)pfs::copy_file_atomic(auth_profile_src, dst_target + "/sdimg_PROFILE", target_uid, target_gid);
-                (void)chmod((dst_target + "/sdimg_PROFILE").c_str(), 0666);
-                MACHETE_LOG("[RESTORE]", "Retained authentic local PS5 sdimg_PROFILE from %s in %s",
-                            auth_profile_src.c_str(), dst_target.c_str());
-            }
-
-            // Purgar inmediatamente cualquier contenedor de respaldo sintetico (sdimg_sce_bu_*)
+            // Purgar contenedores de respaldo sinteticos (sdimg_sce_bu_*)
+            // solo si el respaldo original NO los contenia (ej. Horizon no usa twins, Death Stranding si)
             ScopedDir dclean_bu(dst_target);
             if (dclean_bu.is_valid())
             {
@@ -2442,8 +2459,11 @@ __attribute__((noinline)) OperationResult restore_from_folder(const scanner::Sca
                     const std::string nm = de->d_name;
                     if (nm.rfind("sdimg_sce_bu_", 0) == 0)
                     {
-                        (void)unlink((dst_target + "/" + nm).c_str());
-                        MACHETE_LOG("[RESTORE]", "Purged synthetic backup container from PS5 save dir: %s", nm.c_str());
+                        if (access((backup_folder + "/" + nm).c_str(), F_OK) != 0)
+                        {
+                            (void)unlink((dst_target + "/" + nm).c_str());
+                            MACHETE_LOG("[RESTORE]", "Purged synthetic backup container from PS5 save dir: %s", nm.c_str());
+                        }
                     }
                 }
             }

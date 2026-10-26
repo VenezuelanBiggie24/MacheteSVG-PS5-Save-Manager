@@ -313,7 +313,10 @@ TEST_F(MacheteTest, LocalizedParamJsonExtraction)
 TEST_F(MacheteTest, AppIconTextureLifecycle)
 {
     // Probar carga y liberacion de textura PNG desde el icono oficial del proyecto
-    unsigned int tex = machete::scanner::load_texture_from_png("sce_sys/icon0.png");
+    std::string icon_path = "sce_sys/icon0.png";
+    if (access(icon_path.c_str(), R_OK) != 0)
+        icon_path = "/Users/thebigmike/.gemini/antigravity/scratch/MacheteSVG/sce_sys/icon0.png";
+    unsigned int tex = machete::scanner::load_texture_from_png(icon_path.c_str());
     EXPECT_NE(tex, 0u);
     machete::scanner::release_texture(tex);
     EXPECT_EQ(tex, 0u);
@@ -1309,7 +1312,7 @@ TEST(MacheteParamJsonSizeTest, UpdateFileSizeAndMtimeInParamJson)
 
 TEST(MacheteBuildInfoTest, BuildNumberMatchesExpected)
 {
-    EXPECT_STREQ(machete::build::build_number(), "80");
+    EXPECT_STREQ(machete::build::build_number(), "81");
 }
 
 TEST(MacheteParamJsonDirNameTest, UpdateDirNameInParamJson)
@@ -1434,7 +1437,7 @@ TEST(MachetePs5ParamJsonSynthesisTest, SynthesizeParamJsonFromSlots)
         ASSERT_GT(n, 0u);
         const std::string content(buf, n);
         EXPECT_NE(content.find("\"titleId\": \"PPSA01969\""), std::string::npos);
-        EXPECT_NE(content.find("\"dirName\": \"AUTOSAVE0\""), std::string::npos);
+        EXPECT_NE(content.find("\"dirName\": \"PROFILE\""), std::string::npos);
         EXPECT_NE(content.find("DEATH STRANDING"), std::string::npos);
     }
 

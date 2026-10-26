@@ -366,6 +366,22 @@ extern "C"
     int sceKernelGetModuleList(int * handles, std::size_t num_handles, std::size_t *out_count);
     int sceSysmoduleLoadModuleInternal(std::uint32_t id);
     const char *sceKernelGetFsSandboxRandomWord(void);
+
+    struct SceFsMountOpt
+    {
+        std::uint8_t reserved;
+        const char *budgetid;
+    };
+
+    struct SceFsUmountOpt
+    {
+        std::uint8_t dummy;
+    };
+
+    int sceFsInitMountSaveDataOpt(SceFsMountOpt *opt);
+    int sceFsMountSaveData(SceFsMountOpt *opt, const char *path, const char *mount, const void *key);
+    int sceFsInitUmountSaveDataOpt(SceFsUmountOpt *opt);
+    int sceFsUmountSaveData(SceFsUmountOpt *opt, const char *mount, int handle, int ignore);
 }
 #endif
 
@@ -415,10 +431,39 @@ public:
         }
 
 #if defined(__PROSPERO__) || defined(__Prospero__) || defined(__PS5__)
-        // Pre-cargar el modulo interno SCE_SYSMODULE_INTERNAL_FS_INTERNAL (0x80000066)
-        int sys_rc = sceSysmoduleLoadModuleInternal(0x80000066U);
-        MACHETE_LOG("[PFS]", "sceSysmoduleLoadModuleInternal(0x80000066) -> 0x%08x",
-                    static_cast<unsigned int>(sys_rc));
+        s_init_mount = [](SaveMountOpt *opt) -> int {
+            if (!opt) return -1;
+            SceFsMountOpt m{};
+            std::memset(&m, 0, sizeof(m));
+            int r = sceFsInitMountSaveDataOpt(&m);
+            opt->budgetid = m.budgetid;
+            return r;
+        };
+        s_mount_fn = [](SaveMountOpt *opt, const char *path, const char *mount, const void *key) -> int {
+            SceFsMountOpt m{};
+            std::memset(&m, 0, sizeof(m));
+            sceFsInitMountSaveDataOpt(&m);
+            m.budgetid = (opt && opt->budgetid) ? opt->budgetid : "system";
+            return sceFsMountSaveData(&m, path, mount, key);
+        };
+        s_init_umount = [](SaveMountOpt *) -> int {
+            SceFsUmountOpt u{};
+            std::memset(&u, 0, sizeof(u));
+            return sceFsInitUmountSaveDataOpt(&u);
+        };
+        s_umount_fn = [](SaveMountOpt *, const char *mount, void *, int handle) -> int {
+            SceFsUmountOpt u{};
+            std::memset(&u, 0, sizeof(u));
+            sceFsInitUmountSaveDataOpt(&u);
+            return sceFsUmountSaveData(&u, mount, handle, 0);
+        };
+        s_already_resolved = true;
+        if (out_init_mount) *out_init_mount = s_init_mount;
+        if (out_mount) *out_mount = s_mount_fn;
+        if (out_init_umount) *out_init_umount = s_init_umount;
+        if (out_umount) *out_umount = s_umount_fn;
+        MACHETE_LOG("[PFS]", "Native libSceFsInternalForVsh symbols bound directly via prospero linker");
+        return true;
 #endif
 
         std::vector<std::string> dynamic_paths;
@@ -806,6 +851,7 @@ public:
         }
 
         mounted_ = true;
+        mount_handle_ = rc;
         write_back_ = write_back;
         original_image_path_ = image_path;
         staged_image_path_ = staged_chosen;
@@ -828,7 +874,7 @@ public:
         int rc = 0;
         if (umount_fn_)
         {
-            rc = umount_fn_(&uopt, SAVE_MNT_PATH, nullptr, 0);
+            rc = umount_fn_(&uopt, SAVE_MNT_PATH, nullptr, mount_handle_);
         }
         ::sync();
 
@@ -866,6 +912,7 @@ public:
         (void)rmdir(SAVE_MNT_PATH);
 
         mounted_ = false;
+        mount_handle_ = 0;
         return ok;
     }
 
@@ -875,6 +922,7 @@ public:
 private:
     bool mounted_ = false;
     bool write_back_ = false;
+    int mount_handle_ = 0;
     std::string original_image_path_;
     std::string staged_image_path_;
     std::string staged_raw_path_;
