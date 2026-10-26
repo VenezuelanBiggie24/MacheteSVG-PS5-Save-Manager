@@ -366,22 +366,6 @@ extern "C"
     int sceKernelGetModuleList(int * handles, std::size_t num_handles, std::size_t *out_count);
     int sceSysmoduleLoadModuleInternal(std::uint32_t id);
     const char *sceKernelGetFsSandboxRandomWord(void);
-
-    struct SceFsMountOpt
-    {
-        std::uint8_t reserved;
-        const char *budgetid;
-    };
-
-    struct SceFsUmountOpt
-    {
-        std::uint8_t dummy;
-    };
-
-    int sceFsInitMountSaveDataOpt(SceFsMountOpt *opt);
-    int sceFsMountSaveData(SceFsMountOpt *opt, const char *path, const char *mount, const void *key);
-    int sceFsInitUmountSaveDataOpt(SceFsUmountOpt *opt);
-    int sceFsUmountSaveData(SceFsUmountOpt *opt, const char *mount, int handle, int ignore);
 }
 #endif
 
@@ -429,42 +413,6 @@ public:
             if (out_umount) *out_umount = s_umount_fn;
             return true;
         }
-
-#if defined(__PROSPERO__) || defined(__Prospero__) || defined(__PS5__)
-        s_init_mount = [](SaveMountOpt *opt) -> int {
-            if (!opt) return -1;
-            SceFsMountOpt m{};
-            std::memset(&m, 0, sizeof(m));
-            int r = sceFsInitMountSaveDataOpt(&m);
-            opt->budgetid = m.budgetid;
-            return r;
-        };
-        s_mount_fn = [](SaveMountOpt *opt, const char *path, const char *mount, const void *key) -> int {
-            SceFsMountOpt m{};
-            std::memset(&m, 0, sizeof(m));
-            sceFsInitMountSaveDataOpt(&m);
-            m.budgetid = (opt && opt->budgetid) ? opt->budgetid : "system";
-            return sceFsMountSaveData(&m, path, mount, key);
-        };
-        s_init_umount = [](SaveMountOpt *) -> int {
-            SceFsUmountOpt u{};
-            std::memset(&u, 0, sizeof(u));
-            return sceFsInitUmountSaveDataOpt(&u);
-        };
-        s_umount_fn = [](SaveMountOpt *, const char *mount, void *, int handle) -> int {
-            SceFsUmountOpt u{};
-            std::memset(&u, 0, sizeof(u));
-            sceFsInitUmountSaveDataOpt(&u);
-            return sceFsUmountSaveData(&u, mount, handle, 0);
-        };
-        s_already_resolved = true;
-        if (out_init_mount) *out_init_mount = s_init_mount;
-        if (out_mount) *out_mount = s_mount_fn;
-        if (out_init_umount) *out_init_umount = s_init_umount;
-        if (out_umount) *out_umount = s_umount_fn;
-        MACHETE_LOG("[PFS]", "Native libSceFsInternalForVsh symbols bound directly via prospero linker");
-        return true;
-#endif
 
         std::vector<std::string> dynamic_paths;
 #if defined(__PROSPERO__) || defined(__Prospero__) || defined(__PS5__)
@@ -754,7 +702,8 @@ public:
                 SaveMountOpt clean_opt{};
                 if (init_umount_fn_)
                     init_umount_fn_(&clean_opt);
-                (void)umount_fn_(&clean_opt, SAVE_MNT_PATH, nullptr, 0);
+                if (umount_fn_)
+                    (void)umount_fn_(&clean_opt, SAVE_MNT_PATH, nullptr, 0);
                 ::sync();
             }
         }
@@ -813,10 +762,12 @@ public:
         mopt.budgetid = "system";
 
         (void)signal(SIGPIPE, SIG_IGN);
-        int rc = mount_fn_(&mopt, staged_img.c_str(), SAVE_MNT_PATH, key);
+        int rc = -1;
+        if (mount_fn_)
+            rc = mount_fn_(&mopt, staged_img.c_str(), SAVE_MNT_PATH, key);
         bool dev_mounted = (rc >= 0);
         std::string staged_chosen = staged_img;
-        if (!dev_mounted)
+        if (!dev_mounted && mount_fn_)
         {
             SaveMountOpt mopt_raw{};
             if (init_mount)
@@ -1701,6 +1652,21 @@ inline PfsRestoreReport inject_and_resign_save(const std::string &title_id,
                             const std::string vault_dummy = std::string("/data/MacheteSVG/authentic_dummies/") + title_id;
                             ensure_dir_tree(vault_dummy);
                             (void)copy_file_atomic(meta_sfo, vault_dummy + "/param.sfo");
+                        }
+
+                        const std::string clean_s = (slot_name.rfind("sdimg_", 0) == 0) ? slot_name.substr(6) : slot_name;
+                        const std::string bu_plain = dst_target + "/sce_bu_" + clean_s;
+                        if (access(bu_plain.c_str(), F_OK) == 0 && slot_name.rfind("sce_bu_", 0) != 0)
+                        {
+                            (void)copy_file_atomic(image_path, bu_plain, owner_uid, owner_gid);
+                            (void)chmod(bu_plain.c_str(), 0666);
+                        }
+                        const std::string main_bin = dst_target + "/" + clean_s + ".bin";
+                        const std::string bu_bin = dst_target + "/sce_bu_" + clean_s + ".bin";
+                        if (access(main_bin.c_str(), R_OK) == 0 && access(bu_bin.c_str(), F_OK) == 0 && slot_name.rfind("sce_bu_", 0) != 0)
+                        {
+                            (void)copy_file_atomic(main_bin, bu_bin, owner_uid, owner_gid);
+                            (void)chmod(bu_bin.c_str(), 0666);
                         }
                     }
                     sfo::SfoSaveMetadata meta_from_ext{};
