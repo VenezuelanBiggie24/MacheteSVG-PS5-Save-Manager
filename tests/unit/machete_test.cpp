@@ -1316,7 +1316,7 @@ TEST(MacheteParamJsonSizeTest, UpdateFileSizeAndMtimeInParamJson)
 
 TEST(MacheteBuildInfoTest, BuildNumberMatchesExpected)
 {
-    EXPECT_STREQ(machete::build::build_number(), "89");
+    EXPECT_STREQ(machete::build::build_number(), "90");
 }
 
 TEST(MacheteParamJsonDirNameTest, UpdateDirNameInParamJson)
@@ -1590,10 +1590,10 @@ TEST(MacheteApolloResignTest, ResignLocalPs4SaveOperation)
     EXPECT_EQ(stat((save_dir + "/keystone").c_str(), &st1), 0);
     EXPECT_EQ(stat((save_dir + "/sce_sys/keystone").c_str(), &st2), 0);
 
-    // Comprobar que param.sfo fue resignado para 0x105f615a
+    // Comprobar que param.sfo fue resignado para el ID local de usuario de PS4 (1)
     machete::sfo::SfoSaveMetadata meta = machete::sfo::read_sfo_metadata(save_dir + "/sce_sys/param.sfo");
     EXPECT_TRUE(meta.valid);
-    EXPECT_EQ(meta.user_id, 0x105f615au);
+    EXPECT_EQ(meta.user_id, 1u);
 
     // Limpieza
     (void)std::remove((save_dir + "/savedata0").c_str());
@@ -1603,6 +1603,38 @@ TEST(MacheteApolloResignTest, ResignLocalPs4SaveOperation)
     (void)std::remove((save_dir + "/sce_sys/param.sfo").c_str());
     (void)rmdir((save_dir + "/sce_sys").c_str());
     (void)rmdir(save_dir.c_str());
+}
+
+TEST(MachetePs4BcSaveTest, Ps4SavePreservesLocalUserId1AndPurgesMetaSfo)
+{
+    const std::string test_dir = "/tmp/machete_ps4_bc_test";
+    (void)mkdir(test_dir.c_str(), 0777);
+    const std::string sfo_path = test_dir + "/param.sfo";
+
+    // 1. Sintetizar un SFO de PS4 con user_id = 1
+    ASSERT_TRUE(machete::sfo::synthesize_ps4_save_param_sfo(
+        sfo_path, "CUSA18600", "Book", "Dragon Quest XI S", "Adventure Log", "Slot 1",
+        1, 0x37c80d2e21ead98cULL, 325, 0));
+
+    // 2. Resignar con rp para PS4 retrocompatible (target_user_id = 1)
+    machete::sfo::ResignParams rp;
+    rp.target_user_id = 1;
+    rp.target_account_id = 0x37c80d2e21ead98cULL;
+    rp.apply_account_id = true;
+    rp.target_title_id = "CUSA18600";
+
+    EXPECT_TRUE(machete::sfo::resign_param_sfo(sfo_path, rp));
+
+    // 3. Validar que user_id permanece 1 y nunca se contamina con 32-bit PS5 user ID
+    machete::sfo::SfoSaveMetadata meta = machete::sfo::read_sfo_metadata(sfo_path);
+    EXPECT_TRUE(meta.valid);
+    EXPECT_EQ(meta.user_id, 1u);
+    EXPECT_NE(meta.user_id, 0x105f615au);
+    EXPECT_EQ(meta.account_id, 0x37c80d2e21ead98cULL);
+
+    // Limpieza
+    (void)std::remove(sfo_path.c_str());
+    (void)rmdir(test_dir.c_str());
 }
 
 TEST(MacheteKeystonePriorityTest, InstalledGameKeystoneOverridesForeignBackupKeystone)

@@ -1563,7 +1563,8 @@ void post_process_restored_save(const scanner::ScannedGame &game,
         const bool has_psid = machete::vault::get_console_open_psid(console_psid);
 
         machete::sfo::ResignParams rp;
-        rp.target_user_id = user_id;
+        // Para PS4 en retrocompatibilidad, el user_id dentro de param.sfo es 1 (el ID de usuario local de PS4)
+        rp.target_user_id = 1;
         rp.target_account_id = active_account_id;
         rp.apply_account_id = true;
         if (has_psid)
@@ -1673,79 +1674,17 @@ void post_process_restored_save(const scanner::ScannedGame &game,
                 }
             }
 
-            // Sincronizar y resignar param.sfo exclusivamente en dst_target (/user/home/<uid>/savedata/<TitleID>/)
-            // En PS5 para retrocompatibilidad de PS4, savedata_meta/user/<TitleID> solo debe contener los iconos
-            // (system0020_icon0.png e icon0.png). La presencia de un param.sfo en meta_ps4_user genera conflicto
-            // con el daemon de retrocompatibilidad y provoca que la consola marque "Datos dañados".
-            const std::vector<std::string> sfo_candidates = {
-                meta_ps4_user + "/param.sfo",
-                std::string("/data/MacheteSVG/authentic_dummies/") + save_dir_tid + "/param.sfo",
-                std::string("/data/MacheteSVG/authentic_dummies/") + game.title_id + "/param.sfo",
-                backup_folder + "/.meta/param.sfo",
-                backup_folder + "/meta/param.sfo",
-                backup_folder + "/param.sfo",
-                backup_folder + "/sce_sys/param.sfo",
-                preserved_dummy_dir + "/.meta_dummy/param.sfo",
-                preserved_dummy_dir + "/param.sfo",
-                preserved_dummy_dir + "/sce_sys/param.sfo",
-                dst_target + "/param.sfo",
-                dst_target + "/sce_sys/param.sfo"
-            };
-
-            std::string valid_sfo;
-            for (const auto &cand : sfo_candidates)
-            {
-                if (access(cand.c_str(), R_OK) == 0 && machete::sfo::is_valid_save_param_sfo(cand))
-                {
-                    valid_sfo = cand;
-                    break;
-                }
-            }
-
-            ensure_directories_recursive(dst_target + "/sce_sys", target_uid, target_gid);
-
-            if (!valid_sfo.empty())
-            {
-                (void)pfs::copy_file_atomic(valid_sfo, meta_ps4_user + "/param.sfo", target_uid, target_gid);
-                (void)machete::sfo::resign_param_sfo(meta_ps4_user + "/param.sfo", rp);
-                (void)chmod((meta_ps4_user + "/param.sfo").c_str(), 0666);
-
-                MACHETE_LOG("[RESTORE]", "Synchronized and resigned PS4 save param.sfo in %s (from %s)",
-                            meta_ps4_user.c_str(), valid_sfo.c_str());
-            }
-            else
-            {
-                // Si el respaldo carecia de param.sfo externo y la imagen Book/savedata.bin no tenia
-                // un SFO extraible, sintetizamos un descriptor param.sfo con la ranura real detectada
-                std::string primary_slot = save_dir_tid;
-                ScopedDir dslots(dst_target);
-                if (dslots.is_valid())
-                {
-                    while (const dirent *de = readdir(dslots.get()))
-                    {
-                        const std::string sname = de->d_name;
-                        if (machete::pfs::is_valid_ps4_slot_name(dst_target, sname))
-                        {
-                            primary_slot = sname;
-                            break;
-                        }
-                    }
-                }
-                const std::string synth_sfo = meta_ps4_user + "/param.sfo";
-                if (machete::sfo::synthesize_ps4_save_param_sfo(synth_sfo, save_dir_tid, primary_slot,
-                                                                 game.title, "", "", user_id, active_account_id, 325, 0,
-                                                                 rp.psid, rp.exact_psid_hmac))
-                {
-                    (void)chmod(synth_sfo.c_str(), 0666);
-                    MACHETE_LOG("[RESTORE]", "Synthesized contingency PS4 param.sfo for slot %s in %s",
-                                primary_slot.c_str(), meta_ps4_user.c_str());
-                }
-            }
-
-            // En PS4 BC, savedata_meta/user/<TitleID>/ almacena exclusivamente activos de presentacion UI
-            // (param.sfo, icon0.png). El keystone reside internamente dentro del contenedor PFS sellado.
+            // En PS5 para retrocompatibilidad de PS4, savedata_meta/user/<TitleID> almacena exclusivamente
+            // los iconos de presentacion en la interfaz del sistema (system0020_icon0.png e icon0.png).
+            // La presencia de un param.sfo suelto alli genera conflicto con el daemon de retrocompatibilidad
+            // del sistema operativo y provoca que marque "Datos dañados" (is_broken = 1).
+            // El param.sfo auténtico reside de forma protegida dentro del contenedor PFS sellado.
+            (void)unlink((meta_ps4_user + "/param.sfo").c_str());
+            (void)unlink((meta_ps4_user + "/PARAM.SFO").c_str());
             (void)unlink((meta_ps4_user + "/keystone").c_str());
             (void)unlink((meta_ps4_user + "/sce_sys/param.sfo").c_str());
+            (void)unlink((meta_ps4_user + "/sce_sys/PARAM.SFO").c_str());
+            (void)unlink((meta_ps4_user + "/sce_sys/keystone").c_str());
             (void)unlink((meta_ps4_user + "/sce_sys/icon0.png").c_str());
             (void)rmdir((meta_ps4_user + "/sce_sys").c_str());
         }
@@ -3354,7 +3293,8 @@ OperationResult resign_local_ps4_save(const scanner::ScannedGame &game,
     const bool has_psid = machete::vault::get_console_open_psid(console_psid);
 
     machete::sfo::ResignParams rp;
-    rp.target_user_id = user_id;
+    // Para PS4 en retrocompatibilidad, el user_id dentro de param.sfo es 1 (el ID de usuario local de PS4)
+    rp.target_user_id = 1;
     rp.target_account_id = active_account_id;
     rp.apply_account_id = true;
     if (has_psid)

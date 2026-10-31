@@ -821,6 +821,17 @@ inline bool repair_title_corruption_flags(std::uint32_t user_id,
         return false;
 
     const bool is_ps5 = (title_id.rfind("PPSA", 0) == 0 || title_id.rfind("PPCX", 0) == 0);
+
+    // En retrocompatibilidad PS4, savedata_meta/user/<TitleID> nunca debe contener param.sfo ni keystone
+    if (!is_ps5)
+    {
+        char uid_hex[32];
+        std::snprintf(uid_hex, sizeof(uid_hex), "%x", user_id);
+        const std::string meta_ps4 = std::string("/user/home/") + uid_hex + "/savedata_meta/user/" + title_id;
+        (void)unlink((meta_ps4 + "/param.sfo").c_str());
+        (void)unlink((meta_ps4 + "/PARAM.SFO").c_str());
+        (void)unlink((meta_ps4 + "/keystone").c_str());
+    }
     const auto unique_dbs = filter_existing_unique_dbs(
         is_ps5 ? get_ps5_savedata_db_candidates(user_id)
                : get_ps4_savedata_db_candidates(user_id));

@@ -1885,7 +1885,18 @@ inline PfsRestoreReport inject_and_resign_save(const std::string &title_id,
         }
 
         sfo::ResignParams rp;
-        rp.target_user_id = (user_id != 0) ? user_id : dummy_sfo_meta.user_id;
+        if (is_ps5)
+        {
+            rp.target_user_id = (user_id != 0) ? user_id : dummy_sfo_meta.user_id;
+        }
+        else
+        {
+            // Para juegos de PS4 en retrocompatibilidad, el user_id dentro de param.sfo
+            // es el ID de usuario local de PS4 (1 para el usuario principal, o el del dummy local).
+            // NUNCA debe inyectarse el ID de 32 bits de PS5 (ej. 0x105f615a), pues provoca error de corrupcion "Datos dañados"
+            // al no coincidir con sceUserServiceGetInitialUser() (que en la capa de compatibilidad de PS4 devuelve 1).
+            rp.target_user_id = (dummy_sfo_meta.user_id != 0) ? dummy_sfo_meta.user_id : 1;
+        }
         rp.target_account_id = active_account_id;
         rp.apply_account_id = true;
         rp.target_title_id = title_id;
@@ -2132,8 +2143,15 @@ inline PfsRestoreReport inject_and_resign_save(const std::string &title_id,
                             active_account_id = dummy_sfo_meta.account_id;
                             rp.target_account_id = active_account_id;
                         }
-                        if (rp.target_user_id == 0 && dummy_sfo_meta.user_id != 0)
-                            rp.target_user_id = dummy_sfo_meta.user_id;
+                        if (is_ps5)
+                        {
+                            if (rp.target_user_id == 0 && dummy_sfo_meta.user_id != 0)
+                                rp.target_user_id = dummy_sfo_meta.user_id;
+                        }
+                        else
+                        {
+                            rp.target_user_id = (dummy_sfo_meta.user_id != 0) ? dummy_sfo_meta.user_id : 1;
+                        }
                     }
                     const std::string inner_ks = mnt.mount_point() + "/sce_sys/keystone";
                     if (harvested_keystone_path.empty() && keystone::is_valid_keystone_file(inner_ks))
@@ -2231,6 +2249,10 @@ inline PfsRestoreReport inject_and_resign_save(const std::string &title_id,
                     const std::string meta_ps4 = std::string("/user/home/") + uid_hex + "/savedata_meta/user/" + title_id;
                     ensure_dir_tree(meta_ps4, owner_uid, owner_gid);
                     (void)copy_file_atomic(inner_icon, meta_ps4 + "/" + slot_label + "_icon0.png", owner_uid, owner_gid);
+                    // Purgar cualquier param.sfo suelto o keystone en savedata_meta/user/<TitleID> para evitar conflicto con el daemon BC
+                    (void)unlink((meta_ps4 + "/param.sfo").c_str());
+                    (void)unlink((meta_ps4 + "/PARAM.SFO").c_str());
+                    (void)unlink((meta_ps4 + "/keystone").c_str());
                 }
 
                 // Desmontar para que el kernel recalcule el arbol Merkle y selle el contenedor
