@@ -22,6 +22,10 @@
 #include "ui/qr_code.hpp"
 #include "core/build_info.hpp"
 #include "core/sqlite_adapter.hpp"
+#include "core/snapshot_manager.hpp"
+#include "core/title_activity.hpp"
+#include "core/notification_manager.hpp"
+#include "core/emulator_manager.hpp"
 #include "core/logger.hpp"
 
 #include <fcntl.h>
@@ -1312,7 +1316,7 @@ TEST(MacheteParamJsonSizeTest, UpdateFileSizeAndMtimeInParamJson)
 
 TEST(MacheteBuildInfoTest, BuildNumberMatchesExpected)
 {
-    EXPECT_STREQ(machete::build::build_number(), "85");
+    EXPECT_STREQ(machete::build::build_number(), "86");
 }
 
 TEST(MacheteParamJsonDirNameTest, UpdateDirNameInParamJson)
@@ -2179,6 +2183,1074 @@ TEST(MacheteSfoSynthTest, ExactPsidHmacPreserved)
     EXPECT_EQ(meta.user_id, 0x105f615a);
 
     (void)std::remove(tmp_sfo.c_str());
+}
+
+TEST(MacheteSnapshotTest, CreateDatedSnapshotAndList)
+{
+    const std::string live_dir = "/tmp/machete_test_snap_live";
+    const std::string snap_dir = "/tmp/machete_test_snap_root";
+
+    machete::snapshot::remove_dir_tree(live_dir);
+    machete::snapshot::remove_dir_tree(snap_dir);
+
+    ASSERT_TRUE(machete::snapshot::ensure_directories(live_dir));
+    ASSERT_TRUE(machete::snapshot::ensure_directories(snap_dir));
+
+    // Create dummy files in live backup
+    {
+        std::ofstream f1(live_dir + "/sdimg_save00");
+        f1 << "SAVE_DATA_BIN_PAYLOAD_001";
+    }
+    {
+        std::ofstream f2(live_dir + "/param.sfo");
+        f2 << "PARAM_SFO_DATA";
+    }
+    // Also create .image_stamp and a .part file in live_dir to verify they are skipped
+    {
+        std::ofstream f_stamp(live_dir + "/.image_stamp");
+        f_stamp << "INTERNAL_STAMP";
+    }
+    {
+        std::ofstream f_part(live_dir + "/temp.part");
+        f_part << "PART_DATA";
+    }
+
+    std::string err;
+    // Invalid date string rejected
+    EXPECT_FALSE(machete::snapshot::create_dated_snapshot(live_dir, snap_dir, "bad-date", &err));
+    EXPECT_FALSE(err.empty());
+
+    // Valid date snapshot created
+    const std::string date_str = "2026-10-31";
+    EXPECT_TRUE(machete::snapshot::create_dated_snapshot(live_dir, snap_dir, date_str, &err));
+
+    // Verify snapshot contents
+    const std::string snap_target = snap_dir + "/" + date_str;
+    EXPECT_EQ(access((snap_target + "/sdimg_save00").c_str(), R_OK), 0);
+    EXPECT_EQ(access((snap_target + "/param.sfo").c_str(), R_OK), 0);
+    // .image_stamp and .part must NOT be copied into snapshot
+    EXPECT_EQ(access((snap_target + "/.image_stamp").c_str(), F_OK), -1);
+    EXPECT_EQ(access((snap_target + "/temp.part").c_str(), F_OK), -1);
+
+    // Duplicate snapshot for same date must fail
+    EXPECT_FALSE(machete::snapshot::create_dated_snapshot(live_dir, snap_dir, date_str, &err));
+    EXPECT_NE(err.find("already exists"), std::string::npos);
+
+    // List snapshots
+    auto snaps = machete::snapshot::list_snapshots(snap_dir);
+    ASSERT_EQ(snaps.size(), 1u);
+    EXPECT_EQ(snaps[0].date_str, "2026-10-31");
+    EXPECT_EQ(snaps[0].full_path, snap_target);
+    EXPECT_GT(snaps[0].total_size_bytes, 0u);
+    EXPECT_GT(snaps[0].created_at, 0);
+
+    // Cleanup
+    machete::snapshot::remove_dir_tree(live_dir);
+    machete::snapshot::remove_dir_tree(snap_dir);
+}
+
+TEST(MacheteSnapshotTest, SortingByDate)
+{
+    const std::string live_dir = "/tmp/machete_test_sort_live";
+    const std::string snap_dir = "/tmp/machete_test_sort_snaps";
+
+    machete::snapshot::remove_dir_tree(live_dir);
+    machete::snapshot::remove_dir_tree(snap_dir);
+
+    ASSERT_TRUE(machete::snapshot::ensure_directories(live_dir));
+    {
+        std::ofstream f(live_dir + "/save.dat");
+        f << "DUMMY_SAVE";
+    }
+
+    // Create snapshots out of order
+    std::vector<std::string> dates = {"2026-10-25", "2026-11-02", "2026-10-28", "2026-10-31"};
+    for (const auto& d : dates)
+    {
+        EXPECT_TRUE(machete::snapshot::create_dated_snapshot(live_dir, snap_dir, d, nullptr));
+    }
+
+    // list_snapshots must return them sorted descending by date (newest first)
+    auto list = machete::snapshot::list_snapshots(snap_dir);
+    ASSERT_EQ(list.size(), 4u);
+    EXPECT_EQ(list[0].date_str, "2026-11-02");
+    EXPECT_EQ(list[1].date_str, "2026-10-31");
+    EXPECT_EQ(list[2].date_str, "2026-10-28");
+    EXPECT_EQ(list[3].date_str, "2026-10-25");
+
+    // Cleanup
+    machete::snapshot::remove_dir_tree(live_dir);
+    machete::snapshot::remove_dir_tree(snap_dir);
+}
+
+TEST(MacheteSnapshotTest, PruneOldestSnapshots)
+{
+    const std::string live_dir = "/tmp/machete_test_prune_live";
+    const std::string snap_dir = "/tmp/machete_test_prune_snaps";
+
+    machete::snapshot::remove_dir_tree(live_dir);
+    machete::snapshot::remove_dir_tree(snap_dir);
+
+    ASSERT_TRUE(machete::snapshot::ensure_directories(live_dir));
+    {
+        std::ofstream f(live_dir + "/save.bin");
+        f << "SAVE_CONTENT";
+    }
+
+    std::vector<std::string> dates = {"2026-10-20", "2026-10-22", "2026-10-25", "2026-10-28", "2026-10-31"};
+    for (const auto& d : dates)
+    {
+        EXPECT_TRUE(machete::snapshot::create_dated_snapshot(live_dir, snap_dir, d, nullptr));
+    }
+
+    // Simulate an interrupted copy leaving a stale .part folder
+    const std::string stale_part = snap_dir + "/2026-11-01.part";
+    ASSERT_TRUE(machete::snapshot::ensure_directories(stale_part));
+    {
+        std::ofstream f(stale_part + "/partial.tmp");
+        f << "INCOMPLETE";
+    }
+    EXPECT_EQ(access(stale_part.c_str(), F_OK), 0);
+
+    // Prune with retention = 3 (should remove stale .part and 2 oldest: 2026-10-20, 2026-10-22)
+    const size_t pruned = machete::snapshot::prune_old_snapshots(snap_dir, 3);
+    EXPECT_EQ(pruned, 2u);
+
+    // Stale part must be removed
+    EXPECT_EQ(access(stale_part.c_str(), F_OK), -1);
+
+    // Check remaining snapshots (should be newest 3: 2026-10-31, 2026-10-28, 2026-10-25)
+    auto remaining = machete::snapshot::list_snapshots(snap_dir);
+    ASSERT_EQ(remaining.size(), 3u);
+    EXPECT_EQ(remaining[0].date_str, "2026-10-31");
+    EXPECT_EQ(remaining[1].date_str, "2026-10-28");
+    EXPECT_EQ(remaining[2].date_str, "2026-10-25");
+
+    EXPECT_EQ(access((snap_dir + "/2026-10-20").c_str(), F_OK), -1);
+    EXPECT_EQ(access((snap_dir + "/2026-10-22").c_str(), F_OK), -1);
+
+    // Calling prune again when count <= max should prune 0
+    EXPECT_EQ(machete::snapshot::prune_old_snapshots(snap_dir, 3), 0u);
+
+    // Cleanup
+    machete::snapshot::remove_dir_tree(live_dir);
+    machete::snapshot::remove_dir_tree(snap_dir);
+}
+
+TEST(MacheteSnapshotTest, SignatureChangeDetection)
+{
+    const std::string live_dir = "/tmp/machete_test_sig_live";
+    const std::string backup_dir = "/tmp/machete_test_sig_backup";
+
+    machete::snapshot::remove_dir_tree(live_dir);
+    machete::snapshot::remove_dir_tree(backup_dir);
+
+    ASSERT_TRUE(machete::snapshot::ensure_directories(live_dir));
+    ASSERT_TRUE(machete::snapshot::ensure_directories(backup_dir));
+
+    const std::string save_file = live_dir + "/savedata.bin";
+    {
+        std::ofstream f(save_file);
+        f << "INITIAL_SAVE_DATA_STATE_V1";
+    }
+
+    // 1. Initially no signature stamp exists in backup -> is_save_modified returns true
+    EXPECT_TRUE(machete::snapshot::is_save_modified_since_last_backup(live_dir, backup_dir));
+
+    // 2. Write stamp
+    machete::snapshot::update_save_signature_stamp(live_dir, backup_dir);
+    EXPECT_EQ(access((backup_dir + "/.image_stamp").c_str(), R_OK), 0);
+
+    // 3. Immediately after writing stamp, save is not modified
+    EXPECT_FALSE(machete::snapshot::is_save_modified_since_last_backup(live_dir, backup_dir));
+
+    // 4. Modify file content (increase size and change mtime)
+    std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    {
+        std::ofstream f(save_file, std::ios::app);
+        f << "_MODIFIED_EXTRA_DATA";
+    }
+
+    // 5. Signature change must be detected
+    EXPECT_TRUE(machete::snapshot::is_save_modified_since_last_backup(live_dir, backup_dir));
+
+    // 6. Update stamp again -> returns false
+    machete::snapshot::update_save_signature_stamp(live_dir, backup_dir);
+    EXPECT_FALSE(machete::snapshot::is_save_modified_since_last_backup(live_dir, backup_dir));
+
+    // 7. Add a second file
+    const std::string second_file = live_dir + "/extra.dat";
+    {
+        std::ofstream f2(second_file);
+        f2 << "EXTRA_FILE_DATA";
+    }
+    EXPECT_TRUE(machete::snapshot::is_save_modified_since_last_backup(live_dir, backup_dir));
+
+    // 8. Update stamp
+    machete::snapshot::update_save_signature_stamp(live_dir, backup_dir);
+    EXPECT_FALSE(machete::snapshot::is_save_modified_since_last_backup(live_dir, backup_dir));
+
+    // 9. Remove second file
+    (void)unlink(second_file.c_str());
+    EXPECT_TRUE(machete::snapshot::is_save_modified_since_last_backup(live_dir, backup_dir));
+
+    // Cleanup
+    machete::snapshot::remove_dir_tree(live_dir);
+    machete::snapshot::remove_dir_tree(backup_dir);
+}
+
+TEST(MacheteSnapshotTest, SaveManagerBackupIntegrationWithDailySnapshots)
+{
+    const std::string mock_save_dir = "/tmp/machete_test_save";
+    machete::snapshot::ensure_directories(mock_save_dir);
+    {
+        std::ofstream f(mock_save_dir + "/sdimg_save00");
+        f << "TEST_SAVE_CONTENT_FOR_INTEGRATION_TEST";
+    }
+
+    auto games = machete::scanner::scan_installed_games_and_saves();
+    ASSERT_FALSE(games.empty());
+
+    machete::storage::StorageDevice dev;
+    dev.label = "Test USB Snap";
+    dev.mount_path = "/tmp/machete_test_usb_snap";
+    dev.root_dir = "/tmp/machete_test_usb_snap/MacheteSVG";
+    dev.connected = true;
+
+    machete::snapshot::remove_dir_tree("/tmp/machete_test_usb_snap");
+
+    // Enable snapshots with retention 3
+    machete::snapshot::set_snapshots_enabled(true);
+    machete::snapshot::set_snapshots_to_keep(3);
+
+    auto backup_res = machete::save::backup_game_save(games[0], dev);
+    EXPECT_TRUE(backup_res.success);
+
+    // Verify destination folder and .image_stamp
+    const std::string game_folder = dev.root_dir + "/" + games[0].title_id + " - " + games[0].title;
+    EXPECT_EQ(access((game_folder + "/.image_stamp").c_str(), R_OK), 0);
+
+    // Verify daily snapshot was created
+    const std::string today = machete::snapshot::get_current_date_str();
+    const std::string today_snap = game_folder + "/snapshots/" + today;
+    EXPECT_EQ(access(today_snap.c_str(), R_OK), 0);
+
+    // Verify snapshot can be listed
+    auto snaps = machete::snapshot::list_snapshots(game_folder);
+    ASSERT_FALSE(snaps.empty());
+    EXPECT_EQ(snaps[0].date_str, today);
+
+    // Verify signature check shows save is now up-to-date
+    const std::string active_path = games[0].save_path;
+    if (!active_path.empty() && access(active_path.c_str(), F_OK) == 0)
+    {
+        EXPECT_FALSE(machete::snapshot::is_save_modified_since_last_backup(active_path, game_folder));
+    }
+
+    // Cleanup
+    machete::snapshot::remove_dir_tree("/tmp/machete_test_usb_snap");
+}
+
+TEST(MacheteTitleProtectionTest, TitleIdValidationAndFiltering)
+{
+    // Valid standard 9-character format (4 letters + 5 digits)
+    EXPECT_TRUE(machete::activity::is_title_valid("PPSA01411"));
+    EXPECT_TRUE(machete::activity::is_title_valid("CUSA03173"));
+    EXPECT_TRUE(machete::activity::is_title_valid("CUSA99999"));
+    EXPECT_TRUE(machete::activity::is_title_valid("NPXS20001"));
+
+    // Invalid format or length
+    EXPECT_FALSE(machete::activity::is_title_valid(""));
+    EXPECT_FALSE(machete::activity::is_title_valid("PPSA"));
+    EXPECT_FALSE(machete::activity::is_title_valid("PPSA014111"));
+    EXPECT_FALSE(machete::activity::is_title_valid("123456789"));
+    EXPECT_FALSE(machete::activity::is_title_valid("PPS01411A"));
+    EXPECT_FALSE(machete::activity::is_title_valid("PPSA 1411"));
+
+    // Invalid title ID is blocked by default with unsupported reason
+    std::string reason;
+    EXPECT_TRUE(machete::activity::is_title_running_or_suspended("INVALID_ID", &reason));
+    EXPECT_NE(reason.find("unsupported save title ID"), std::string::npos);
+}
+
+TEST(MacheteTitleProtectionTest, ProcessAndMountDetection)
+{
+    machete::activity::reset_activity_monitor();
+
+    // Verify unmonitored title reports not running
+    std::string reason;
+    EXPECT_FALSE(machete::activity::is_title_running_or_suspended("PPSA08331", &reason));
+    EXPECT_TRUE(reason.empty());
+
+    // Mock active running process
+    machete::activity::set_mock_active_title("PPSA01411", "application process pid 4200");
+    EXPECT_TRUE(machete::activity::is_title_running_or_suspended("PPSA01411", &reason));
+    EXPECT_NE(reason.find("PPSA01411"), std::string::npos);
+    EXPECT_NE(reason.find("application process pid 4200"), std::string::npos);
+
+    // Another title remains unblocked
+    EXPECT_FALSE(machete::activity::is_title_running_or_suspended("PPSA08331"));
+
+    // Active title IDs list contains the running title
+    auto active_ids = machete::activity::get_active_title_ids();
+    EXPECT_EQ(active_ids.size(), 1u);
+    EXPECT_EQ(active_ids[0], "PPSA01411");
+
+    // Clear mock state restores normal inactive state
+    machete::activity::clear_mock_activity();
+    EXPECT_FALSE(machete::activity::is_title_running_or_suspended("PPSA01411", &reason));
+    EXPECT_TRUE(reason.empty());
+
+    machete::activity::reset_activity_monitor();
+}
+
+TEST(MacheteTitleProtectionTest, SandboxMountParsingAndAuxiliaryExports)
+{
+    machete::activity::reset_activity_monitor();
+
+    // 1. Valid sandbox mounts for PS5 and PS4
+    machete::activity::simulate_sandbox_mount("/mnt/sandbox/PPSA04609_000");
+    std::string reason;
+    EXPECT_TRUE(machete::activity::is_title_running_or_suspended("PPSA04609", &reason));
+    EXPECT_NE(reason.find("/mnt/sandbox/PPSA04609_000"), std::string::npos);
+
+    machete::activity::simulate_sandbox_mount("/mnt/sandbox/pfsmnt/CUSA03173-app0");
+    EXPECT_TRUE(machete::activity::is_title_running_or_suspended("CUSA03173", &reason));
+
+    // 2. Auxiliary exports from nullfs (ShadowMountPlus) are ignored
+    EXPECT_TRUE(machete::activity::TitleActivityMonitor::is_auxiliary_export(
+        "/mnt/sandbox/PPSA01411_000/data", "/user/data", "nullfs"));
+    EXPECT_TRUE(machete::activity::TitleActivityMonitor::is_auxiliary_export(
+        "/mnt/sandbox/PPSA01411_000/mnt/usb0", "/mnt/usb0", "nullfs"));
+    EXPECT_TRUE(machete::activity::TitleActivityMonitor::is_auxiliary_export(
+        "/mnt/sandbox/PPSA01411_000/preinst/common/font", "/preinst/common/font", "nullfs"));
+
+    // Non-auxiliary exports are not exempted
+    EXPECT_FALSE(machete::activity::TitleActivityMonitor::is_auxiliary_export(
+        "/mnt/sandbox/PPSA01411_000/savedata", "/user/home/savedata", "nullfs"));
+
+    // 3. Unidentified sandbox mount triggers safe unknown state
+    machete::activity::simulate_sandbox_mount("/mnt/sandbox/corrupted_unknown_mount_segment");
+    // In unknown state, any title check fails closed (is blocked)
+    EXPECT_TRUE(machete::activity::is_title_running_or_suspended("PPSA08331", &reason));
+    EXPECT_NE(reason.find("unidentified sandbox mount"), std::string::npos);
+
+    machete::activity::reset_activity_monitor();
+}
+
+TEST(MacheteTitleProtectionTest, EnvironmentVariableActivityConfig)
+{
+    machete::activity::reset_activity_monitor();
+
+    const std::string tmp_act_file = "/tmp/machete_test_activity_env.txt";
+    {
+        std::ofstream f(tmp_act_file);
+        f << "PPSA08331\n";
+    }
+
+    // Set environment variable
+    ::setenv("TEST_ACTIVE_TITLES", tmp_act_file.c_str(), 1);
+
+    std::string reason;
+    EXPECT_TRUE(machete::activity::is_title_running_or_suspended("PPSA08331", &reason));
+    EXPECT_NE(reason.find("PPSA08331"), std::string::npos);
+    EXPECT_FALSE(machete::activity::is_title_running_or_suspended("PPSA01411"));
+
+    // Cleanup env var and file
+    ::unsetenv("TEST_ACTIVE_TITLES");
+    (void)std::remove(tmp_act_file.c_str());
+
+    machete::activity::reset_activity_monitor();
+    EXPECT_FALSE(machete::activity::is_title_running_or_suspended("PPSA08331"));
+}
+
+TEST(MacheteTitleProtectionTest, SaveRestoreBlockedWhenTitleRunningOrSuspended)
+{
+    machete::activity::reset_activity_monitor();
+
+    machete::scanner::ScannedGame game;
+    game.title_id = "PPSA01411";
+    game.title = "Spider-Man 2";
+    game.platform = "PS5";
+
+    const std::string mock_backup_folder = "/tmp/machete_test_block_restore";
+    (void)mkdir(mock_backup_folder.c_str(), 0777);
+    {
+        std::ofstream f(mock_backup_folder + "/sdimg_save00");
+        f << "RESTORE_PAYLOAD_TEST";
+    }
+
+    // Block title PPSA01411
+    machete::activity::set_mock_active_title("PPSA01411", "application process pid 9988");
+
+    // 1. restore_from_folder must be blocked
+    auto restore_res = machete::save::restore_from_folder(game, mock_backup_folder, "Test USB");
+    EXPECT_FALSE(restore_res.success);
+    EXPECT_EQ(restore_res.status, machete::save::OperationStatus::FAILED_RUNNING_TITLE);
+    EXPECT_NE(restore_res.message.find("PPSA01411"), std::string::npos);
+    EXPECT_NE(restore_res.message.find("application process pid 9988"), std::string::npos);
+
+    // 2. restore_save_payload must be blocked
+    auto payload_res = machete::save::restore_save_payload(game, mock_backup_folder);
+    EXPECT_FALSE(payload_res.success);
+    EXPECT_EQ(payload_res.status, machete::save::OperationStatus::FAILED_RUNNING_TITLE);
+
+    // 3. backup_game_save / backup_save_payload must also be blocked
+    machete::storage::StorageDevice dev;
+    dev.label = "Test USB";
+    dev.root_dir = "/tmp/machete_test_block_usb";
+    auto backup_res = machete::save::backup_game_save(game, dev);
+    EXPECT_FALSE(backup_res.success);
+    EXPECT_EQ(backup_res.status, machete::save::OperationStatus::FAILED_RUNNING_TITLE);
+
+    auto backup_payload_res = machete::save::backup_save_payload(game, dev);
+    EXPECT_FALSE(backup_payload_res.success);
+    EXPECT_EQ(backup_payload_res.status, machete::save::OperationStatus::FAILED_RUNNING_TITLE);
+
+    // Clear mock activity and reset
+    machete::activity::clear_mock_activity();
+    machete::activity::reset_activity_monitor();
+
+    (void)std::remove((mock_backup_folder + "/sdimg_save00").c_str());
+    (void)rmdir(mock_backup_folder.c_str());
+}
+
+TEST(MacheteNotificationTest, FormattingAndDispatchTelemetry)
+{
+    machete::notification::clear_notification_history();
+
+    // 1. Format text
+    EXPECT_EQ(machete::notification::format_notification_text("Save completed", "MacheteSVG"),
+              "MacheteSVG: Save completed");
+    EXPECT_EQ(machete::notification::format_notification_text("Plain note", ""),
+              "Plain note");
+    EXPECT_EQ(machete::notification::format_notification_text("MacheteSVG", "MacheteSVG"),
+              "MacheteSVG");
+
+    // 2. Dispatch notification
+    machete::notification::notify("Save backup completed for PPSA01411", "MacheteSVG");
+    EXPECT_EQ(machete::notification::get_last_notification_message(), "Save backup completed for PPSA01411");
+    EXPECT_EQ(machete::notification::get_last_notification_title(), "MacheteSVG");
+    EXPECT_EQ(machete::notification::get_last_notification_formatted(), "MacheteSVG: Save backup completed for PPSA01411");
+    EXPECT_EQ(machete::notification::get_notification_count(), 1u);
+
+    // 3. Rich payload generation structure
+    std::string payload = machete::notification::build_rich_notification_payload(
+        "Line 1 \"quotes\" & escapes", "MacheteSVG", "/user/data/ps5save/notification.png");
+    EXPECT_NE(payload.find("\"ToastTemplateB\""), std::string::npos);
+    EXPECT_NE(payload.find("\"SystemFeedback\""), std::string::npos);
+    EXPECT_NE(payload.find("\"bundleName\":\"MacheteSVG\""), std::string::npos);
+    EXPECT_NE(payload.find("\\\"quotes\\\""), std::string::npos);
+    EXPECT_NE(payload.find("\"localNotificationId\""), std::string::npos);
+    EXPECT_NE(payload.find("/user/data/ps5save/notification.png"), std::string::npos);
+
+    machete::notification::clear_notification_history();
+    EXPECT_EQ(machete::notification::get_notification_count(), 0u);
+}
+
+TEST(MacheteBatchSaveTest, ExecuteBatchBackupAndRestoreSuccess)
+{
+    const std::string save1 = "/tmp/machete_test_save_PPSA90001";
+    const std::string save2 = "/tmp/machete_test_save_PPSA90002";
+    const std::string dest_root = "/tmp/machete_test_batch_dest";
+
+    (void)mkdir(save1.c_str(), 0777);
+    (void)mkdir(save2.c_str(), 0777);
+    (void)mkdir(dest_root.c_str(), 0777);
+
+    {
+        std::ofstream f1(save1 + "/sdimg_save00");
+        f1 << "BATCH_PAYLOAD_DATA_ALPHA";
+    }
+    {
+        std::ofstream f2(save2 + "/sdimg_save00");
+        f2 << "BATCH_PAYLOAD_DATA_BETA";
+    }
+
+    std::vector<std::string> titles = {"PPSA90001", "PPSA90002"};
+    std::vector<std::size_t> progress_calls;
+
+    auto summary = machete::save::execute_batch_backup(
+        titles, dest_root,
+        [&](std::size_t current, std::size_t total, const std::string &tid) {
+            progress_calls.push_back(current);
+            EXPECT_EQ(total, 2u);
+            EXPECT_FALSE(tid.empty());
+        });
+
+    EXPECT_EQ(summary.total_items, 2u);
+    EXPECT_EQ(summary.succeeded, 2u);
+    EXPECT_EQ(summary.failed, 0u);
+    EXPECT_GT(summary.total_bytes, 0u);
+    ASSERT_EQ(summary.results.size(), 2u);
+    EXPECT_TRUE(summary.results[0].success);
+    EXPECT_EQ(summary.results[0].title_id, "PPSA90001");
+    EXPECT_TRUE(summary.results[1].success);
+    EXPECT_EQ(summary.results[1].title_id, "PPSA90002");
+    EXPECT_EQ(progress_calls.size(), 2u);
+
+    // Remove source files to verify restore restores them
+    (void)unlink((save1 + "/sdimg_save00").c_str());
+    (void)unlink((save2 + "/sdimg_save00").c_str());
+    EXPECT_NE(access((save1 + "/sdimg_save00").c_str(), F_OK), 0);
+    EXPECT_NE(access((save2 + "/sdimg_save00").c_str(), F_OK), 0);
+
+    auto restore_summary = machete::save::execute_batch_restore(titles, dest_root);
+    EXPECT_EQ(restore_summary.total_items, 2u);
+    EXPECT_EQ(restore_summary.succeeded, 2u);
+    EXPECT_EQ(restore_summary.failed, 0u);
+    EXPECT_GT(restore_summary.total_bytes, 0u);
+    ASSERT_EQ(restore_summary.results.size(), 2u);
+    EXPECT_TRUE(restore_summary.results[0].success);
+    EXPECT_TRUE(restore_summary.results[1].success);
+
+    // Verify files were restored
+    EXPECT_EQ(access((save1 + "/sdimg_save00").c_str(), F_OK), 0);
+    EXPECT_EQ(access((save2 + "/sdimg_save00").c_str(), F_OK), 0);
+
+    // Cleanup
+    (void)unlink((save1 + "/sdimg_save00").c_str());
+    (void)unlink((save2 + "/sdimg_save00").c_str());
+    (void)rmdir(save1.c_str());
+    (void)rmdir(save2.c_str());
+
+    // Clean backup directories
+    (void)unlink((dest_root + "/PPSA90001 - PPSA90001/sdimg_save00").c_str());
+    (void)rmdir((dest_root + "/PPSA90001 - PPSA90001").c_str());
+    (void)unlink((dest_root + "/PPSA90002 - PPSA90002/sdimg_save00").c_str());
+    (void)rmdir((dest_root + "/PPSA90002 - PPSA90002").c_str());
+    (void)rmdir(dest_root.c_str());
+}
+
+TEST(MacheteBatchSaveTest, ExecuteBatchFaultIsolation)
+{
+    const std::string save_good = "/tmp/machete_test_save_PPSA91001";
+    const std::string save_good2 = "/tmp/machete_test_save_PPSA91004";
+    const std::string dest_root = "/tmp/machete_test_fault_dest";
+
+    (void)mkdir(save_good.c_str(), 0777);
+    (void)mkdir(save_good2.c_str(), 0777);
+    (void)mkdir(dest_root.c_str(), 0777);
+
+    {
+        std::ofstream f1(save_good + "/slot0.bin");
+        f1 << "GOOD_DATA_1";
+    }
+    {
+        std::ofstream f2(save_good2 + "/slot0.bin");
+        f2 << "GOOD_DATA_2";
+    }
+
+    // PPSA91002 has no files (missing save)
+    // PPSA91003 is simulated as running
+    machete::activity::clear_mock_activity();
+    machete::activity::set_mock_active_title("PPSA91003");
+
+    std::vector<std::string> titles = {"PPSA91001", "PPSA91002", "PPSA91003", "PPSA91004"};
+    auto summary = machete::save::execute_batch_backup(titles, dest_root);
+
+    EXPECT_EQ(summary.total_items, 4u);
+    EXPECT_EQ(summary.succeeded, 2u);
+    EXPECT_EQ(summary.failed, 2u);
+    ASSERT_EQ(summary.results.size(), 4u);
+
+    EXPECT_TRUE(summary.results[0].success);
+    EXPECT_EQ(summary.results[0].title_id, "PPSA91001");
+
+    EXPECT_FALSE(summary.results[1].success);
+    EXPECT_EQ(summary.results[1].title_id, "PPSA91002");
+    EXPECT_FALSE(summary.results[1].error_message.empty());
+
+    EXPECT_FALSE(summary.results[2].success);
+    EXPECT_EQ(summary.results[2].title_id, "PPSA91003");
+    EXPECT_FALSE(summary.results[2].error_message.empty());
+
+    EXPECT_TRUE(summary.results[3].success);
+    EXPECT_EQ(summary.results[3].title_id, "PPSA91004");
+
+    // Clear mock running title
+    machete::activity::clear_mock_activity();
+    machete::activity::reset_activity_monitor();
+
+    // Test restore fault isolation: PPSA91001 and PPSA91004 were backed up, PPSA99999 was not
+    std::vector<std::string> restore_titles = {"PPSA91001", "PPSA99999", "PPSA91004"};
+    auto restore_summary = machete::save::execute_batch_restore(restore_titles, dest_root);
+
+    EXPECT_EQ(restore_summary.total_items, 3u);
+    EXPECT_EQ(restore_summary.succeeded, 2u);
+    EXPECT_EQ(restore_summary.failed, 1u);
+    ASSERT_EQ(restore_summary.results.size(), 3u);
+
+    EXPECT_TRUE(restore_summary.results[0].success);
+    EXPECT_FALSE(restore_summary.results[1].success);
+    EXPECT_FALSE(restore_summary.results[1].error_message.empty());
+    EXPECT_TRUE(restore_summary.results[2].success);
+
+    // Cleanup
+    (void)unlink((save_good + "/slot0.bin").c_str());
+    (void)unlink((save_good2 + "/slot0.bin").c_str());
+    (void)rmdir(save_good.c_str());
+    (void)rmdir(save_good2.c_str());
+
+    (void)unlink((dest_root + "/PPSA91001 - PPSA91001/slot0.bin").c_str());
+    (void)rmdir((dest_root + "/PPSA91001 - PPSA91001").c_str());
+    (void)unlink((dest_root + "/PPSA91004 - PPSA91004/slot0.bin").c_str());
+    (void)rmdir((dest_root + "/PPSA91004 - PPSA91004").c_str());
+    (void)rmdir(dest_root.c_str());
+}
+
+TEST(MacheteBatchSaveTest, WebServerBatchApiEndpoints)
+{
+    const std::string save_web = "/tmp/machete_test_save_PPSA92001";
+    const std::string dest_root = "/tmp/machete_test_web_batch_dest";
+    (void)mkdir(save_web.c_str(), 0777);
+    (void)mkdir(dest_root.c_str(), 0777);
+    {
+        std::ofstream f(save_web + "/slot0.bin");
+        f << "WEB_BATCH_DATA";
+    }
+
+    auto &server = machete::server::WebServer::instance();
+    const std::uint16_t test_port = 18395;
+    EXPECT_TRUE(server.start(test_port));
+
+    // Test /api/batch_backup
+    std::string backup_body = "{\"title_ids\":[\"PPSA92001\",\"PPSA99999\"],\"destination_root\":\"" + dest_root + "\"}";
+    std::string backup_req = "POST /api/batch_backup HTTP/1.1\r\nHost: localhost\r\nContent-Length: " +
+                             std::to_string(backup_body.size()) + "\r\nConnection: close\r\n\r\n" + backup_body;
+    std::string backup_resp = test_http_request(test_port, backup_req);
+    EXPECT_NE(backup_resp.find("HTTP/1.1 200 OK"), std::string::npos);
+    EXPECT_NE(backup_resp.find("\"total_items\":2"), std::string::npos);
+    EXPECT_NE(backup_resp.find("\"succeeded\":1"), std::string::npos);
+    EXPECT_NE(backup_resp.find("\"failed\":1"), std::string::npos);
+    EXPECT_NE(backup_resp.find("\"PPSA92001\""), std::string::npos);
+
+    // Test /api/batch_restore
+    std::string restore_body = "{\"title_ids\":[\"PPSA92001\",\"PPSA99999\"],\"backup_root\":\"" + dest_root + "\"}";
+    std::string restore_req = "POST /api/batch_restore HTTP/1.1\r\nHost: localhost\r\nContent-Length: " +
+                              std::to_string(restore_body.size()) + "\r\nConnection: close\r\n\r\n" + restore_body;
+    std::string restore_resp = test_http_request(test_port, restore_req);
+    EXPECT_NE(restore_resp.find("HTTP/1.1 200 OK"), std::string::npos);
+    EXPECT_NE(restore_resp.find("\"total_items\":2"), std::string::npos);
+    EXPECT_NE(restore_resp.find("\"succeeded\":1"), std::string::npos);
+    EXPECT_NE(restore_resp.find("\"failed\":1"), std::string::npos);
+
+    server.stop();
+
+    // Cleanup
+    (void)unlink((save_web + "/slot0.bin").c_str());
+    (void)rmdir(save_web.c_str());
+    (void)unlink((dest_root + "/PPSA92001 - PPSA92001/slot0.bin").c_str());
+    (void)rmdir((dest_root + "/PPSA92001 - PPSA92001").c_str());
+    (void)rmdir(dest_root.c_str());
+}
+
+TEST_F(MacheteTest, MultiSelectModeAndKeyBindings)
+{
+    // Start in normal mode: press Square (Action::west) to enter multi-select
+    send(*machete_, press(Action::west), 0.1f);
+    expect_drawable(*machete_);
+
+    // Toggle current item again with Square
+    send(*machete_, press(Action::west), 0.1f);
+    expect_drawable(*machete_);
+
+    // Select all with Triangle (Action::north)
+    send(*machete_, press(Action::north), 0.1f);
+    expect_drawable(*machete_);
+
+    // Navigate in multi-select mode
+    send(*machete_, nav(Direction::down), 0.1f);
+    expect_drawable(*machete_);
+
+    // Select/deselect with confirm (Cross) on card
+    send(*machete_, press(Action::confirm), 0.1f);
+    expect_drawable(*machete_);
+
+    // Exit multi-select mode with Circle (Action::back)
+    send(*machete_, press(Action::back), 0.1f);
+    expect_drawable(*machete_);
+}
+
+TEST(MacheteEmulatorTest, TargetDetection)
+{
+    const std::string mock_root = "/tmp/machete_test_emu_detect";
+    machete::snapshot::remove_dir_tree(mock_root);
+
+    // Initial check: no emulators installed in fresh directory
+    auto initial_detected = machete::emulator::detect_installed_emulators(mock_root);
+    EXPECT_TRUE(initial_detected.empty());
+
+    // 1. PCSX2: standard paths + extra .ps2 memory card
+    ASSERT_TRUE(machete::snapshot::ensure_directories(mock_root + "/data/PCSX2/memcards"));
+    {
+        std::ofstream f(mock_root + "/data/PCSX2/Mcd001.ps2");
+        f << "PCSX2_SLOT1_MEMCARD";
+    }
+    {
+        std::ofstream f(mock_root + "/data/PCSX2/memcards/card_extra.ps2");
+        f << "PCSX2_EXTRA_CARD";
+    }
+    {
+        std::ofstream f(mock_root + "/data/PCSX2/bonus_card.ps2");
+        f << "PCSX2_BONUS_CARD";
+    }
+
+    // 2. Porpoise: GameCube/Wii
+    ASSERT_TRUE(machete::snapshot::ensure_directories(mock_root + "/data/porpoise/saves"));
+    {
+        std::ofstream f(mock_root + "/data/porpoise/saves/gcsave.raw");
+        f << "GC_RAW_SAVE";
+    }
+
+    // 3. RPCS3: PS3
+    ASSERT_TRUE(machete::snapshot::ensure_directories(mock_root + "/data/homebrew/PPSA99303/rpcs3/dev_hdd0/home/00000001"));
+    {
+        std::ofstream f(mock_root + "/data/homebrew/PPSA99303/rpcs3/dev_hdd0/home/00000001/savedata.bin");
+        f << "RPCS3_SAVEDATA";
+    }
+
+    // 4. ProsperoEden: Switch
+    ASSERT_TRUE(machete::snapshot::ensure_directories(mock_root + "/data/prosperoeden/user/nand"));
+    {
+        std::ofstream f(mock_root + "/data/prosperoeden/user/nand/switch_save.dat");
+        f << "SWITCH_NAND_SAVE";
+    }
+
+    // 5. PS5X360: Xbox 360
+    ASSERT_TRUE(machete::snapshot::ensure_directories(mock_root + "/data/homebrew/PPSA50011/saves"));
+    {
+        std::ofstream f(mock_root + "/data/homebrew/PPSA50011/saves/x360_save.bin");
+        f << "X360_SAVE";
+    }
+
+    auto detected = machete::emulator::detect_installed_emulators(mock_root);
+    EXPECT_EQ(detected.size(), 5u);
+
+    bool found_pcsx2 = false;
+    bool found_porpoise = false;
+    bool found_rpcs3 = false;
+    bool found_eden = false;
+    bool found_ps5x360 = false;
+
+    for (const auto &emu : detected)
+    {
+        if (emu.id == "EMU_PCSX2")
+        {
+            found_pcsx2 = true;
+            EXPECT_EQ(emu.name, "PCSX2 (PS2)");
+            EXPECT_EQ(emu.target_backup_subpath, "emulators/PCSX2");
+            // Verify bonus_card.ps2 was discovered dynamically
+            bool has_bonus = false;
+            for (const auto &p : emu.source_paths)
+            {
+                if (p.find("bonus_card.ps2") != std::string::npos)
+                    has_bonus = true;
+            }
+            EXPECT_TRUE(has_bonus);
+        }
+        else if (emu.id == "EMU_PORPOISE")
+        {
+            found_porpoise = true;
+            EXPECT_EQ(emu.name, "Porpoise (GameCube/Wii)");
+            EXPECT_EQ(emu.target_backup_subpath, "emulators/Porpoise");
+        }
+        else if (emu.id == "EMU_RPCS3")
+        {
+            found_rpcs3 = true;
+            EXPECT_EQ(emu.name, "RPCS3 (PS3)");
+            EXPECT_EQ(emu.target_backup_subpath, "emulators/RPCS3");
+        }
+        else if (emu.id == "EMU_EDEN")
+        {
+            found_eden = true;
+            EXPECT_EQ(emu.name, "ProsperoEden (Switch)");
+            EXPECT_EQ(emu.target_backup_subpath, "emulators/ProsperoEden");
+        }
+        else if (emu.id == "EMU_PS5X360")
+        {
+            found_ps5x360 = true;
+            EXPECT_EQ(emu.name, "PS5X360 (Xbox 360)");
+            EXPECT_EQ(emu.target_backup_subpath, "emulators/PS5X360");
+        }
+    }
+
+    EXPECT_TRUE(found_pcsx2);
+    EXPECT_TRUE(found_porpoise);
+    EXPECT_TRUE(found_rpcs3);
+    EXPECT_TRUE(found_eden);
+    EXPECT_TRUE(found_ps5x360);
+
+    // Verify find_emulator_target_by_id returns known targets
+    const auto *t_pcsx2 = machete::emulator::find_emulator_target_by_id("EMU_PCSX2", mock_root);
+    ASSERT_NE(t_pcsx2, nullptr);
+    EXPECT_EQ(t_pcsx2->id, "EMU_PCSX2");
+
+    const auto *t_invalid = machete::emulator::find_emulator_target_by_id("EMU_UNKNOWN", mock_root);
+    EXPECT_EQ(t_invalid, nullptr);
+
+    machete::snapshot::remove_dir_tree(mock_root);
+}
+
+TEST(MacheteEmulatorTest, CalculateSize)
+{
+    const std::string mock_root = "/tmp/machete_test_emu_calc";
+    machete::snapshot::remove_dir_tree(mock_root);
+
+    machete::emulator::EmulatorTarget target;
+    target.id = "EMU_PCSX2";
+    target.name = "PCSX2 (PS2)";
+    target.target_backup_subpath = "emulators/PCSX2";
+
+    std::string file1 = mock_root + "/Mcd001.ps2";
+    std::string dir2 = mock_root + "/memcards";
+    std::string file2 = dir2 + "/card1.ps2";
+    std::string file3 = dir2 + "/sub/card2.ps2";
+
+    ASSERT_TRUE(machete::snapshot::ensure_directories(dir2 + "/sub"));
+
+    // Write deterministic payloads of known sizes
+    {
+        std::ofstream f(file1);
+        f << std::string(1024, 'A');
+    }
+    {
+        std::ofstream f(file2);
+        f << std::string(2048, 'B');
+    }
+    {
+        std::ofstream f(file3);
+        f << std::string(3072, 'C');
+    }
+
+    target.source_paths = {file1, dir2};
+
+    std::uint64_t total = machete::emulator::calculate_emulator_saves_size(target);
+    EXPECT_EQ(total, 1024u + 2048u + 3072u);
+
+    machete::snapshot::remove_dir_tree(mock_root);
+}
+
+TEST(MacheteEmulatorTest, BackupAndRestoreRoundTrip)
+{
+    const std::string mock_src = "/tmp/machete_test_emu_rt_src";
+    const std::string backup_root = "/tmp/machete_test_emu_rt_backup";
+
+    machete::snapshot::remove_dir_tree(mock_src);
+    machete::snapshot::remove_dir_tree(backup_root);
+
+    ASSERT_TRUE(machete::snapshot::ensure_directories(mock_src + "/data/PCSX2/memcards"));
+    ASSERT_TRUE(machete::snapshot::ensure_directories(mock_src + "/data/porpoise/saves/wii"));
+
+    const std::string pcsx2_file1 = mock_src + "/data/PCSX2/Mcd001.ps2";
+    const std::string pcsx2_file2 = mock_src + "/data/PCSX2/memcards/card_custom.ps2";
+    const std::string porpoise_file1 = mock_src + "/data/porpoise/saves/gamecube.raw";
+    const std::string porpoise_file2 = mock_src + "/data/porpoise/saves/wii/data.bin";
+
+    const std::string content_pcsx2_1 = "PCSX2_MEMORY_CARD_SLOT_1_EXACT_PAYLOAD";
+    const std::string content_pcsx2_2 = "PCSX2_CUSTOM_MEMORY_CARD_SECONDARY_PAYLOAD";
+    const std::string content_porpoise_1 = "PORPOISE_GAMECUBE_NATIVE_RAW_SAVE_PAYLOAD";
+    const std::string content_porpoise_2 = "PORPOISE_WII_NAND_STRUCTURE_EXACT_PAYLOAD";
+
+    {
+        std::ofstream f(pcsx2_file1);
+        f << content_pcsx2_1;
+    }
+    {
+        std::ofstream f(pcsx2_file2);
+        f << content_pcsx2_2;
+    }
+    {
+        std::ofstream f(porpoise_file1);
+        f << content_porpoise_1;
+    }
+    {
+        std::ofstream f(porpoise_file2);
+        f << content_porpoise_2;
+    }
+
+    auto detected = machete::emulator::detect_installed_emulators(mock_src);
+    ASSERT_EQ(detected.size(), 2u);
+
+    const machete::emulator::EmulatorTarget *pcsx2 = nullptr;
+    const machete::emulator::EmulatorTarget *porpoise = nullptr;
+    for (const auto &e : detected)
+    {
+        if (e.id == "EMU_PCSX2")
+            pcsx2 = &e;
+        else if (e.id == "EMU_PORPOISE")
+            porpoise = &e;
+    }
+    ASSERT_NE(pcsx2, nullptr);
+    ASSERT_NE(porpoise, nullptr);
+
+    std::string err;
+    EXPECT_TRUE(machete::emulator::backup_emulator_saves(*pcsx2, backup_root, &err));
+    EXPECT_TRUE(err.empty());
+
+    EXPECT_TRUE(machete::emulator::backup_emulator_saves(*porpoise, backup_root, &err));
+    EXPECT_TRUE(err.empty());
+
+    // Verify backup paths and manifests exist
+    EXPECT_EQ(access((backup_root + "/emulators/PCSX2/.machete_emulator").c_str(), R_OK), 0);
+    EXPECT_EQ(access((backup_root + "/emulators/PCSX2/Mcd001.ps2").c_str(), R_OK), 0);
+    EXPECT_EQ(access((backup_root + "/emulators/PCSX2/memcards/card_custom.ps2").c_str(), R_OK), 0);
+
+    EXPECT_EQ(access((backup_root + "/emulators/Porpoise/.machete_emulator").c_str(), R_OK), 0);
+    EXPECT_EQ(access((backup_root + "/emulators/Porpoise/saves/gamecube.raw").c_str(), R_OK), 0);
+    EXPECT_EQ(access((backup_root + "/emulators/Porpoise/saves/wii/data.bin").c_str(), R_OK), 0);
+
+    // Delete local source files
+    machete::snapshot::remove_dir_tree(mock_src);
+    EXPECT_NE(access(pcsx2_file1.c_str(), F_OK), 0);
+    EXPECT_NE(access(pcsx2_file2.c_str(), F_OK), 0);
+    EXPECT_NE(access(porpoise_file1.c_str(), F_OK), 0);
+    EXPECT_NE(access(porpoise_file2.c_str(), F_OK), 0);
+
+    // Restore from backup
+    EXPECT_TRUE(machete::emulator::restore_emulator_saves(*pcsx2, backup_root, &err));
+    EXPECT_TRUE(machete::emulator::restore_emulator_saves(*porpoise, backup_root, &err));
+
+    // Verify files were restored and match original byte content
+    EXPECT_EQ(access(pcsx2_file1.c_str(), R_OK), 0);
+    EXPECT_EQ(access(pcsx2_file2.c_str(), R_OK), 0);
+    EXPECT_EQ(access(porpoise_file1.c_str(), R_OK), 0);
+    EXPECT_EQ(access(porpoise_file2.c_str(), R_OK), 0);
+
+    auto read_str = [](const std::string &path) {
+        std::ifstream in(path);
+        return std::string((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+    };
+
+    EXPECT_EQ(read_str(pcsx2_file1), content_pcsx2_1);
+    EXPECT_EQ(read_str(pcsx2_file2), content_pcsx2_2);
+    EXPECT_EQ(read_str(porpoise_file1), content_porpoise_1);
+    EXPECT_EQ(read_str(porpoise_file2), content_porpoise_2);
+
+    machete::snapshot::remove_dir_tree(mock_src);
+    machete::snapshot::remove_dir_tree(backup_root);
+}
+
+TEST(MacheteEmulatorTest, GameScannerIntegration)
+{
+    const std::string mock_root = "/tmp/machete_test_emu_scanner";
+    machete::snapshot::remove_dir_tree(mock_root);
+
+    ASSERT_TRUE(machete::snapshot::ensure_directories(mock_root + "/data/homebrew/PPSA99303/rpcs3/dev_hdd0/home/00000001"));
+    ASSERT_TRUE(machete::snapshot::ensure_directories(mock_root + "/data/prosperoeden/user/nand"));
+
+    {
+        std::ofstream f(mock_root + "/data/homebrew/PPSA99303/rpcs3/dev_hdd0/home/00000001/save.dat");
+        f << std::string(512, 'X');
+    }
+    {
+        std::ofstream f(mock_root + "/data/prosperoeden/user/nand/nand_save.bin");
+        f << std::string(1024, 'Y');
+    }
+
+    // Scan WITH emulators
+    auto games_with_emu = machete::scanner::detect_installed_titles(true, mock_root);
+    bool has_rpcs3 = false;
+    bool has_eden = false;
+
+    for (const auto &g : games_with_emu)
+    {
+        if (g.title_id == "EMU_RPCS3")
+        {
+            has_rpcs3 = true;
+            EXPECT_EQ(g.platform, "EMULATOR");
+            EXPECT_EQ(g.title, "RPCS3 (PS3)");
+            EXPECT_EQ(g.total_bytes, 512u);
+            EXPECT_FALSE(g.has_keystone);
+        }
+        else if (g.title_id == "EMU_EDEN")
+        {
+            has_eden = true;
+            EXPECT_EQ(g.platform, "EMULATOR");
+            EXPECT_EQ(g.title, "ProsperoEden (Switch)");
+            EXPECT_EQ(g.total_bytes, 1024u);
+            EXPECT_FALSE(g.has_keystone);
+        }
+    }
+
+    EXPECT_TRUE(has_rpcs3);
+    EXPECT_TRUE(has_eden);
+
+    // Scan WITHOUT emulators
+    auto games_without_emu = machete::scanner::detect_installed_titles(false, mock_root);
+    for (const auto &g : games_without_emu)
+    {
+        EXPECT_NE(g.platform, "EMULATOR");
+        EXPECT_NE(g.title_id, "EMU_RPCS3");
+        EXPECT_NE(g.title_id, "EMU_EDEN");
+    }
+
+    machete::snapshot::remove_dir_tree(mock_root);
+}
+
+TEST(MacheteEmulatorTest, SaveManagerIntegration)
+{
+    const std::string mock_src = "/tmp/machete_test_emu_sm_src";
+    const std::string mock_backup = "/tmp/machete_test_emu_sm_backup";
+
+    machete::snapshot::remove_dir_tree(mock_src);
+    machete::snapshot::remove_dir_tree(mock_backup);
+
+    const std::string save_dir = mock_src + "/data/homebrew/PPSA50011/saves";
+    ASSERT_TRUE(machete::snapshot::ensure_directories(save_dir));
+
+    const std::string payload = "X360_AUTHENTIC_SAVE_DATA_BLOB_888";
+    const std::string save_file = save_dir + "/profile.bin";
+    {
+        std::ofstream f(save_file);
+        f << payload;
+    }
+
+    machete::scanner::ScannedGame game;
+    game.title = "PS5X360 (Xbox 360)";
+    game.title_id = "EMU_PS5X360";
+    game.platform = "EMULATOR";
+    game.save_path = save_dir;
+    game.total_bytes = payload.size();
+
+    machete::storage::StorageDevice dev;
+    dev.type = machete::storage::StorageType::USB;
+    dev.id = "usb0";
+    dev.label = "Test USB Drive";
+    dev.mount_path = mock_backup;
+    dev.root_dir = mock_backup + "/MacheteSVG";
+    dev.connected = true;
+
+    ASSERT_TRUE(machete::snapshot::ensure_directories(dev.root_dir));
+
+    // 1. Backup via SaveManager
+    auto res_backup = machete::save::backup_game_save(game, dev);
+    EXPECT_TRUE(res_backup.success);
+    EXPECT_GT(res_backup.bytes_transferred, 0u);
+
+    // 2. Discover backups via find_available_backups
+    auto available = machete::save::find_available_backups(game, {dev});
+    ASSERT_FALSE(available.empty());
+    EXPECT_EQ(available[0].title_id, "EMU_PS5X360");
+    EXPECT_EQ(available[0].folder_name, "emulators/PS5X360");
+
+    // 3. Delete original save file
+    (void)unlink(save_file.c_str());
+    EXPECT_NE(access(save_file.c_str(), F_OK), 0);
+
+    // 4. Restore via SaveManager
+    auto res_restore = machete::save::restore_game_save(game, dev);
+    EXPECT_TRUE(res_restore.success);
+    EXPECT_GT(res_restore.bytes_transferred, 0u);
+
+    // 5. Verify restored file content
+    EXPECT_EQ(access(save_file.c_str(), R_OK), 0);
+    std::ifstream in(save_file);
+    std::string restored_data((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+    EXPECT_EQ(restored_data, payload);
+
+    machete::snapshot::remove_dir_tree(mock_src);
+    machete::snapshot::remove_dir_tree(mock_backup);
 }
 
 } // namespace hui::testing

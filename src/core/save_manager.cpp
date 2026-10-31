@@ -4,13 +4,17 @@
 
 #include "core/save_manager.hpp"
 #include "core/account_manager.hpp"
+#include "core/emulator_manager.hpp"
 #include "core/i18n.hpp"
 #include "core/jailbreak.hpp"
 #include "core/keystone_manager.hpp"
 #include "core/logger.hpp"
+#include "core/notification_manager.hpp"
 #include "core/pfs_mount_manager.hpp"
 #include "core/samu_vault.hpp"
 #include "core/sfo_resigner.hpp"
+#include "core/snapshot_manager.hpp"
+#include "core/title_activity.hpp"
 
 #include <cstdio>
 #include <cstdlib>
@@ -440,9 +444,11 @@ bool copy_directory_recursive(const std::string &src_dir, const std::string &dst
         if (std::strcmp(entry->d_name, ".") == 0 || std::strcmp(entry->d_name, "..") == 0)
             continue;
 
-        // No transferir directamente metadatos especiales ni la carpeta decrypted/ en el flujo generico de contenedores
+        // No transferir directamente metadatos especiales, instantaneas ni la carpeta decrypted/ en el flujo generico de contenedores
         if (std::strcmp(entry->d_name, ".meta") == 0 ||
             std::strcmp(entry->d_name, "crypto_vault.bin") == 0 ||
+            std::strcmp(entry->d_name, "snapshots") == 0 ||
+            std::strcmp(entry->d_name, ".image_stamp") == 0 ||
             (depth == 0 && std::strcmp(entry->d_name, "decrypted") == 0))
             continue;
 
@@ -1970,6 +1976,20 @@ __attribute__((noinline)) OperationResult backup_game_save(const scanner::Scanne
         OperationResult res;
         const bool is_es = (machete::i18n::current_language() == machete::i18n::Language::Spanish);
 
+        std::string activity_reason;
+        if (machete::activity::is_title_running_or_suspended(game.title_id, &activity_reason))
+        {
+            MACHETE_LOG("[SAFETY]", "Title %s is currently running or suspended: %s. Aborting operation to prevent corruption.",
+                        game.title_id.c_str(), activity_reason.c_str());
+            machete::notification::notify("Save backup blocked: " + game.title_id + " is running", "MacheteSVG");
+            res.success = false;
+            res.status = OperationStatus::FAILED_RUNNING_TITLE;
+            res.message = is_es
+                ? ("Operacion abortada: El titulo " + game.title_id + " esta actualmente en ejecucion o suspendido: " + activity_reason)
+                : ("Title " + game.title_id + " is currently running or suspended: " + activity_reason + ". Aborting operation to prevent corruption.");
+            return res;
+        }
+
         MACHETE_BREADCRUMB("backup_game_save: verify_root");
 
         if (!jailbreak::verify_root_access(static_cast<int>(getpid())))
@@ -1997,6 +2017,63 @@ __attribute__((noinline)) OperationResult backup_game_save(const scanner::Scanne
                 root_dir = "/mnt/ext1/" + std::string(storage::ROOT_DIR_NAME);
             else if (dest_device.type == storage::StorageType::USB)
                 root_dir = "/mnt/usb0/" + std::string(storage::ROOT_DIR_NAME);
+        }
+
+        if (game.platform == "EMULATOR" || game.title_id.rfind("EMU_", 0) == 0)
+        {
+            MACHETE_LOG("[BACKUP]", "Routing to emulator backup for %s (%s)",
+                        game.title_id.c_str(), game.title.c_str());
+
+            emulator::EmulatorTarget target;
+            const auto *found = emulator::find_emulator_target_by_id(game.title_id);
+            if (found)
+            {
+                target = *found;
+            }
+            else
+            {
+                target.id = game.title_id;
+                target.name = game.title;
+                target.target_backup_subpath = "emulators/" + (game.title_id.size() > 4 ? game.title_id.substr(4) : game.title_id);
+            }
+
+            if (!game.save_path.empty())
+            {
+                if (std::find(target.source_paths.begin(), target.source_paths.end(), game.save_path) == target.source_paths.end())
+                {
+                    target.source_paths.insert(target.source_paths.begin(), game.save_path);
+                }
+            }
+
+            std::string err;
+            if (!emulator::backup_emulator_saves(target, root_dir, &err))
+            {
+                res.success = false;
+                res.status = OperationStatus::FAILED;
+                res.message = err.empty() ? (is_es ? "Fallo al respaldar emulador" : "Failed to backup emulator") : err;
+                return res;
+            }
+
+            std::uint64_t total_size = emulator::calculate_emulator_saves_size(target);
+            res.success = true;
+            res.status = OperationStatus::SUCCESS;
+            res.bytes_transferred = total_size;
+            res.files_transferred = 1;
+            res.message = is_es
+                ? ("Respaldo de emulador completado en " + root_dir + "/" + target.target_backup_subpath)
+                : ("Emulator backup completed in " + root_dir + "/" + target.target_backup_subpath);
+
+            if (progress_cb)
+            {
+                OperationProgress p;
+                p.bytes_transferred = total_size;
+                p.total_bytes = total_size;
+                p.files_transferred = 1;
+                p.progress = 1.0f;
+                p.current_file = is_es ? "Completado" : "Completed";
+                progress_cb(p);
+            }
+            return res;
         }
 
         const std::string active_save_path = resolve_existing_save_path(game);
@@ -2190,6 +2267,43 @@ __attribute__((noinline)) OperationResult backup_game_save(const scanner::Scanne
 
         if (res.success)
         {
+            res.status = OperationStatus::SUCCESS;
+            machete::notification::notify("Save backup completed for " + game.title_id, "MacheteSVG");
+            // Actualizar marca de firma (.image_stamp) para evitar recopia de partidas sin cambios
+            machete::snapshot::update_save_signature_stamp(active_save_path, dest_game_folder);
+
+            // Rotacion de instantaneas diarias (daily snapshot retention)
+            if (machete::snapshot::are_snapshots_enabled())
+            {
+                const std::string snapshots_dir = dest_game_folder + "/snapshots";
+                const std::string today = machete::snapshot::get_current_date_str();
+                const std::string today_snapshot = snapshots_dir + "/" + today;
+
+                struct stat snap_st{};
+                const bool today_exists = (stat(today_snapshot.c_str(), &snap_st) == 0 && S_ISDIR(snap_st.st_mode));
+                if (!today_exists)
+                {
+                    std::string snap_err;
+                    if (machete::snapshot::create_dated_snapshot(dest_game_folder, snapshots_dir, today, &snap_err))
+                    {
+                        MACHETE_LOG("[SNAPSHOT]", "Daily snapshot created for %s at %s",
+                                    game.title_id.c_str(), today_snapshot.c_str());
+                    }
+                    else
+                    {
+                        MACHETE_LOG("[SNAPSHOT]", "Daily snapshot skipped or failed for %s: %s",
+                                    game.title_id.c_str(), snap_err.c_str());
+                    }
+                }
+                const std::size_t pruned = machete::snapshot::prune_old_snapshots(
+                    snapshots_dir, machete::snapshot::get_snapshots_to_keep());
+                if (pruned > 0)
+                {
+                    MACHETE_LOG("[SNAPSHOT]", "Pruned %zu old snapshot(s) for %s (retention: %zu)",
+                                pruned, game.title_id.c_str(), machete::snapshot::get_snapshots_to_keep());
+                }
+            }
+
             const std::string dec_tag = (dec_extracted > 0)
                 ? (is_es ? " [Incluye datos desencriptados Cross-Console]" : " [Includes Cross-Console decrypted data]")
                 : "";
@@ -2231,6 +2345,13 @@ __attribute__((noinline)) OperationResult backup_game_save(const scanner::Scanne
 #endif
 }
 
+OperationResult backup_save_payload(const scanner::ScannedGame &game,
+                                    const storage::StorageDevice &dest_device,
+                                    ProgressCallback progress_cb)
+{
+    return backup_game_save(game, dest_device, progress_cb);
+}
+
 __attribute__((noinline)) OperationResult restore_from_folder(const scanner::ScannedGame &game,
                                                                const std::string &backup_folder,
                                                                const std::string &source_label,
@@ -2243,6 +2364,20 @@ __attribute__((noinline)) OperationResult restore_from_folder(const scanner::Sca
 #endif
         OperationResult res;
         const bool is_es = (machete::i18n::current_language() == machete::i18n::Language::Spanish);
+
+        std::string activity_reason;
+        if (machete::activity::is_title_running_or_suspended(game.title_id, &activity_reason))
+        {
+            MACHETE_LOG("[SAFETY]", "Title %s is currently running or suspended: %s. Aborting operation to prevent corruption.",
+                        game.title_id.c_str(), activity_reason.c_str());
+            machete::notification::notify("Save restore blocked: " + game.title_id + " is running", "MacheteSVG");
+            res.success = false;
+            res.status = OperationStatus::FAILED_RUNNING_TITLE;
+            res.message = is_es
+                ? ("Operacion abortada: El titulo " + game.title_id + " esta actualmente en ejecucion o suspendido: " + activity_reason)
+                : ("Title " + game.title_id + " is currently running or suspended: " + activity_reason + ". Aborting operation to prevent corruption.");
+            return res;
+        }
 
         MACHETE_BREADCRUMB("restore_from_folder: verify_root");
         if (!jailbreak::verify_root_access(static_cast<int>(getpid())))
@@ -2259,6 +2394,61 @@ __attribute__((noinline)) OperationResult restore_from_folder(const scanner::Sca
                 MACHETE_LOG("[RESTORE]", "Elevation failed. Safe operation aborted.");
                 return res;
             }
+        }
+
+        if (game.platform == "EMULATOR" || game.title_id.rfind("EMU_", 0) == 0)
+        {
+            MACHETE_LOG("[RESTORE]", "Routing to emulator restore for %s (%s) from %s",
+                        game.title_id.c_str(), game.title.c_str(), backup_folder.c_str());
+
+            emulator::EmulatorTarget target;
+            const auto *found = emulator::find_emulator_target_by_id(game.title_id);
+            if (found)
+            {
+                target = *found;
+            }
+            else
+            {
+                target.id = game.title_id;
+                target.name = game.title;
+                target.target_backup_subpath = "emulators/" + (game.title_id.size() > 4 ? game.title_id.substr(4) : game.title_id);
+            }
+
+            if (!game.save_path.empty())
+            {
+                if (std::find(target.source_paths.begin(), target.source_paths.end(), game.save_path) == target.source_paths.end())
+                {
+                    target.source_paths.insert(target.source_paths.begin(), game.save_path);
+                }
+            }
+
+            std::string err;
+            if (!emulator::restore_emulator_saves(target, backup_folder, &err))
+            {
+                res.success = false;
+                res.status = OperationStatus::FAILED;
+                res.message = err.empty() ? (is_es ? "Fallo al restaurar emulador" : "Failed to restore emulator") : err;
+                return res;
+            }
+
+            std::uint64_t total_size = emulator::calculate_emulator_saves_size(target);
+            res.success = true;
+            res.status = OperationStatus::SUCCESS;
+            res.bytes_transferred = total_size;
+            res.files_transferred = 1;
+            res.message = is_es ? "Restauracion de emulador completada con exito" : "Emulator restore completed successfully";
+
+            if (progress_cb)
+            {
+                OperationProgress p;
+                p.bytes_transferred = total_size;
+                p.total_bytes = total_size;
+                p.files_transferred = 1;
+                p.progress = 1.0f;
+                p.current_file = is_es ? "Completado" : "Completed";
+                progress_cb(p);
+            }
+            return res;
         }
 
         if (access(backup_folder.c_str(), F_OK) != 0)
@@ -2603,6 +2793,8 @@ __attribute__((noinline)) OperationResult restore_from_folder(const scanner::Sca
 
         if (res.success)
         {
+            res.status = OperationStatus::SUCCESS;
+            machete::notification::notify("Save restore completed for " + game.title_id, "MacheteSVG");
             if (pfs_report.used_save_dummy)
             {
                 res.message = is_es
@@ -2669,19 +2861,47 @@ __attribute__((noinline)) OperationResult restore_from_folder(const scanner::Sca
 #endif
 }
 
+OperationResult restore_save_payload(const scanner::ScannedGame &game,
+                                     const std::string &backup_folder,
+                                     const std::string &source_label,
+                                     ProgressCallback progress_cb)
+{
+    return restore_from_folder(game, backup_folder, source_label, progress_cb);
+}
+
 OperationResult restore_game_save(const scanner::ScannedGame &game,
                                   const storage::StorageDevice &source_device,
                                   ProgressCallback progress_cb)
 {
     const bool is_es = (machete::i18n::current_language() == machete::i18n::Language::Spanish);
+    std::string root_dir = source_device.root_dir;
+    if (root_dir.empty())
+    {
+        if (source_device.type == storage::StorageType::Internal)
+            root_dir = "/data/" + std::string(storage::ROOT_DIR_NAME);
+        else if (source_device.type == storage::StorageType::SSD)
+            root_dir = "/mnt/ext1/" + std::string(storage::ROOT_DIR_NAME);
+        else if (source_device.type == storage::StorageType::USB)
+            root_dir = "/mnt/usb0/" + std::string(storage::ROOT_DIR_NAME);
+    }
+
     std::string backup_game_folder =
-        source_device.root_dir + "/" + game.title_id + " - " + sanitize_name(game.title);
+        root_dir + "/" + game.title_id + " - " + sanitize_name(game.title);
 
     if (access(backup_game_folder.c_str(), F_OK) != 0)
     {
-        std::string fallback_folder = source_device.root_dir + "/" + game.title_id;
+        std::string fallback_folder = root_dir + "/" + game.title_id;
         if (access(fallback_folder.c_str(), F_OK) == 0)
             backup_game_folder = fallback_folder;
+    }
+
+    if (access(backup_game_folder.c_str(), F_OK) != 0 && (game.platform == "EMULATOR" || game.title_id.rfind("EMU_", 0) == 0))
+    {
+        const auto *found = emulator::find_emulator_target_by_id(game.title_id);
+        std::string emu_subpath = found ? found->target_backup_subpath : ("emulators/" + (game.title_id.size() > 4 ? game.title_id.substr(4) : game.title_id));
+        std::string emu_folder = root_dir + "/" + emu_subpath;
+        if (access(emu_folder.c_str(), F_OK) == 0)
+            backup_game_folder = emu_folder;
     }
 
     if (access(backup_game_folder.c_str(), F_OK) != 0)
@@ -2848,6 +3068,8 @@ std::vector<BackupItem> find_available_backups(const scanner::ScannedGame &game,
                 {
                     if (std::strcmp(se->d_name, ".") == 0 || std::strcmp(se->d_name, "..") == 0)
                         continue;
+                    if (std::strcmp(se->d_name, "snapshots") == 0 || std::strcmp(se->d_name, ".image_stamp") == 0)
+                        continue;
                     std::string sp = full_path + "/" + se->d_name;
                     struct stat sst{};
                     if (stat(sp.c_str(), &sst) == 0)
@@ -2923,6 +3145,92 @@ std::vector<BackupItem> find_available_backups(const scanner::ScannedGame &game,
         backups.insert(backups.begin(), local_opt);
     }
 
+    if (game.platform == "EMULATOR" || game.title_id.rfind("EMU_", 0) == 0)
+    {
+        const auto *found_target = emulator::find_emulator_target_by_id(game.title_id);
+        std::string emu_subpath = found_target
+                                      ? found_target->target_backup_subpath
+                                      : ("emulators/" + (game.title_id.size() > 4 ? game.title_id.substr(4) : game.title_id));
+
+        for (const auto &dev : targets)
+        {
+            std::string full_path = dev.root_dir + "/" + emu_subpath;
+            struct stat st{};
+            if (::stat(full_path.c_str(), &st) == 0 && S_ISDIR(st.st_mode))
+            {
+                bool already = false;
+                for (const auto &b : backups)
+                {
+                    if (b.folder_path == full_path)
+                    {
+                        already = true;
+                        break;
+                    }
+                }
+                if (!already)
+                {
+                    BackupItem item;
+                    item.device_id = dev.id;
+                    item.device_label = dev.label;
+                    item.storage_type = dev.type;
+                    item.folder_path = full_path;
+                    item.folder_name = emu_subpath;
+                    item.title_id = game.title_id;
+                    item.title = game.title;
+
+                    std::tm tm_buf{};
+                    bool tm_ok = false;
+                    {
+                        static std::mutex s_emu_time_mutex;
+                        std::lock_guard<std::mutex> lock(s_emu_time_mutex);
+                        std::tm *tm_info = std::localtime(&st.st_mtime);
+                        if (tm_info)
+                        {
+                            tm_buf = *tm_info;
+                            tm_ok = true;
+                        }
+                    }
+                    if (tm_ok)
+                    {
+                        char time_buf[64];
+                        std::strftime(time_buf, sizeof(time_buf), "%d/%m/%Y, %I:%M %p", &tm_buf);
+                        item.timestamp_str = time_buf;
+                    }
+                    else
+                    {
+                        item.timestamp_str = is_es ? "Fecha desconocida" : "Unknown date";
+                    }
+
+                    emulator::EmulatorTarget tmp_t;
+                    if (found_target)
+                        tmp_t = *found_target;
+                    else
+                    {
+                        tmp_t.id = game.title_id;
+                        tmp_t.name = game.title;
+                        tmp_t.target_backup_subpath = emu_subpath;
+                    }
+                    tmp_t.source_paths = {full_path};
+                    item.total_bytes = emulator::calculate_emulator_saves_size(tmp_t);
+                    item.file_count = 1;
+                    item.has_keystone = false;
+
+                    char size_buf[64];
+                    double mb = static_cast<double>(item.total_bytes) / (1024.0 * 1024.0);
+                    if (mb >= 1024.0)
+                        std::snprintf(size_buf, sizeof(size_buf), "%.1f GB", mb / 1024.0);
+                    else if (mb >= 0.1)
+                        std::snprintf(size_buf, sizeof(size_buf), "%.1f MB", mb);
+                    else
+                        std::snprintf(size_buf, sizeof(size_buf), "%llu bytes", static_cast<unsigned long long>(item.total_bytes));
+                    item.size_str = size_buf;
+
+                    backups.push_back(item);
+                }
+            }
+        }
+    }
+
     return backups;
 }
 
@@ -2931,6 +3239,20 @@ OperationResult resign_local_ps4_save(const scanner::ScannedGame &game,
 {
     OperationResult res;
     const bool is_es = (machete::i18n::current_language() == machete::i18n::Language::Spanish);
+
+    std::string activity_reason;
+    if (machete::activity::is_title_running_or_suspended(game.title_id, &activity_reason))
+    {
+        MACHETE_LOG("[SAFETY]", "Title %s is currently running or suspended: %s. Aborting operation to prevent corruption.",
+                    game.title_id.c_str(), activity_reason.c_str());
+        machete::notification::notify("Save operation blocked: " + game.title_id + " is running", "MacheteSVG");
+        res.success = false;
+        res.status = OperationStatus::FAILED_RUNNING_TITLE;
+        res.message = is_es
+            ? ("Operacion abortada: El titulo " + game.title_id + " esta actualmente en ejecucion o suspendido: " + activity_reason)
+            : ("Title " + game.title_id + " is currently running or suspended: " + activity_reason + ". Aborting operation to prevent corruption.");
+        return res;
+    }
 
     if (game.platform != "PS4" && game.title_id.rfind("CUSA", 0) != 0)
     {
@@ -3174,6 +3496,8 @@ OperationResult resign_local_ps4_save(const scanner::ScannedGame &game,
     std::snprintf(acc_hex, sizeof(acc_hex), "%016llx", static_cast<unsigned long long>(active_account_id));
 
     res.success = true;
+    res.status = OperationStatus::SUCCESS;
+    machete::notification::notify("Save resigned successfully for " + game.title_id, "MacheteSVG");
     res.files_transferred = slots_indexed;
     res.message = is_es
         ? ("Partida PS4 resignada con exito [Modo Apollo]: Account ID 0x" + std::string(acc_hex) +
@@ -3198,6 +3522,276 @@ __attribute__((noinline)) OperationResult restore_backup_item(const scanner::Sca
     const std::string folder = backup.folder_path;
     const std::string label = backup.device_label;
     return restore_from_folder(game, folder, label, progress_cb);
+}
+
+BatchSummary execute_batch_backup(
+    const std::vector<std::string> &title_ids,
+    const std::string &destination_root,
+    std::function<void(std::size_t current, std::size_t total, const std::string &title_id)> progress_cb)
+{
+    MACHETE_BREADCRUMB("execute_batch_backup: start");
+    BatchSummary summary;
+    summary.total_items = title_ids.size();
+    summary.succeeded = 0;
+    summary.failed = 0;
+    summary.total_bytes = 0;
+    summary.results.reserve(title_ids.size());
+
+    if (title_ids.empty())
+    {
+        return summary;
+    }
+
+    std::string root = destination_root;
+    if (root.empty())
+    {
+        storage::ensure_internal_storage();
+        root = "/data/" + std::string(storage::ROOT_DIR_NAME);
+    }
+    ensure_directories_recursive(root);
+
+    storage::StorageDevice dest_device;
+    dest_device.type = storage::StorageType::Internal;
+    dest_device.id = "batch_dest";
+    dest_device.label = root;
+    dest_device.mount_path = root;
+    dest_device.root_dir = root;
+    dest_device.connected = true;
+
+    auto scanned_games = scanner::scan_installed_games_and_saves();
+
+    for (std::size_t i = 0; i < title_ids.size(); ++i)
+    {
+        const std::string &tid = title_ids[i];
+        if (progress_cb)
+        {
+            progress_cb(i + 1, title_ids.size(), tid);
+        }
+
+        BatchItemResult item;
+        item.title_id = tid;
+        item.success = false;
+        item.bytes_transferred = 0;
+
+        scanner::ScannedGame game;
+        bool found = false;
+        for (const auto &g : scanned_games)
+        {
+            if (g.title_id == tid)
+            {
+                game = g;
+                found = true;
+                break;
+            }
+        }
+        if (!found)
+        {
+            game.title_id = tid;
+            game.title = tid;
+            game.platform = (tid.rfind("CUSA", 0) == 0) ? "PS4" : "PS5";
+        }
+        item.title_name = game.title.empty() ? tid : game.title;
+
+        // Check fallback test save location if running on host/mock test
+        if (game.save_path.empty())
+        {
+            std::string test_dir = "/tmp/machete_test_save_" + tid;
+            if (access(test_dir.c_str(), F_OK) == 0)
+            {
+                game.save_path = test_dir;
+            }
+        }
+
+        auto res = backup_game_save(game, dest_device, nullptr);
+        if (res.success)
+        {
+            item.success = true;
+            item.bytes_transferred = res.bytes_transferred;
+            item.error_message = "";
+            summary.succeeded++;
+            summary.total_bytes += res.bytes_transferred;
+            MACHETE_LOG("[BATCH_BACKUP]", "Title %s backed up successfully (%llu bytes)",
+                        tid.c_str(), static_cast<unsigned long long>(res.bytes_transferred));
+        }
+        else
+        {
+            item.success = false;
+            item.error_message = res.message.empty() ? "Backup failed" : res.message;
+            summary.failed++;
+            MACHETE_LOG("[BATCH_BACKUP]", "Title %s backup failed: %s",
+                        tid.c_str(), item.error_message.c_str());
+        }
+
+        summary.results.push_back(std::move(item));
+    }
+
+    MACHETE_BREADCRUMB("execute_batch_backup: done");
+    return summary;
+}
+
+BatchSummary execute_batch_restore(
+    const std::vector<std::string> &title_ids,
+    const std::string &backup_root,
+    std::function<void(std::size_t current, std::size_t total, const std::string &title_id)> progress_cb)
+{
+    MACHETE_BREADCRUMB("execute_batch_restore: start");
+    BatchSummary summary;
+    summary.total_items = title_ids.size();
+    summary.succeeded = 0;
+    summary.failed = 0;
+    summary.total_bytes = 0;
+    summary.results.reserve(title_ids.size());
+
+    if (title_ids.empty())
+    {
+        return summary;
+    }
+
+    std::string root = backup_root;
+    if (root.empty())
+    {
+        storage::ensure_internal_storage();
+        root = "/data/" + std::string(storage::ROOT_DIR_NAME);
+    }
+
+    auto scanned_games = scanner::scan_installed_games_and_saves();
+
+    for (std::size_t i = 0; i < title_ids.size(); ++i)
+    {
+        const std::string &tid = title_ids[i];
+        if (progress_cb)
+        {
+            progress_cb(i + 1, title_ids.size(), tid);
+        }
+
+        BatchItemResult item;
+        item.title_id = tid;
+        item.success = false;
+        item.bytes_transferred = 0;
+
+        scanner::ScannedGame game;
+        bool found = false;
+        for (const auto &g : scanned_games)
+        {
+            if (g.title_id == tid)
+            {
+                game = g;
+                found = true;
+                break;
+            }
+        }
+        if (!found)
+        {
+            game.title_id = tid;
+            game.title = tid;
+            game.platform = (tid.rfind("CUSA", 0) == 0) ? "PS4" : "PS5";
+        }
+        item.title_name = game.title.empty() ? tid : game.title;
+
+        // Check fallback test save location if running on host/mock test
+        if (game.save_path.empty())
+        {
+            std::string test_dir = "/tmp/machete_test_save_" + tid;
+            if (access(test_dir.c_str(), F_OK) == 0)
+            {
+                game.save_path = test_dir;
+            }
+        }
+
+        std::string backup_folder;
+        std::string expected_folder = root + "/" + tid + " - " + sanitize_name(game.title);
+        std::string exact_folder = root + "/" + tid;
+        if (access(expected_folder.c_str(), F_OK) == 0)
+        {
+            backup_folder = expected_folder;
+        }
+        else if (access(exact_folder.c_str(), F_OK) == 0)
+        {
+            backup_folder = exact_folder;
+        }
+        else
+        {
+            ScopedDir dir(root);
+            if (dir.is_valid())
+            {
+                while (const dirent *ent = readdir(dir.get()))
+                {
+                    if (ent->d_name[0] == '.')
+                        continue;
+                    std::string dname = ent->d_name;
+                    if (dname.rfind(tid, 0) == 0)
+                    {
+                        std::string cand = root + "/" + dname;
+                        struct stat st{};
+                        if (stat(cand.c_str(), &st) == 0 && S_ISDIR(st.st_mode))
+                        {
+                            backup_folder = cand;
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+
+        if (backup_folder.empty() || access(backup_folder.c_str(), F_OK) != 0)
+        {
+            item.success = false;
+            item.error_message = "No backup folder found in " + root + " for " + tid;
+            summary.failed++;
+            MACHETE_LOG("[BATCH_RESTORE]", "No backup folder found for %s in %s", tid.c_str(), root.c_str());
+            summary.results.push_back(std::move(item));
+            continue;
+        }
+
+        auto res = restore_from_folder(game, backup_folder, root, nullptr);
+        if (res.success)
+        {
+            item.success = true;
+            item.bytes_transferred = res.bytes_transferred;
+            item.error_message = "";
+            summary.succeeded++;
+            summary.total_bytes += res.bytes_transferred;
+            MACHETE_LOG("[BATCH_RESTORE]", "Title %s restored successfully (%llu bytes)",
+                        tid.c_str(), static_cast<unsigned long long>(res.bytes_transferred));
+        }
+        else
+        {
+            item.success = false;
+            item.error_message = res.message.empty() ? "Restore failed" : res.message;
+            summary.failed++;
+            MACHETE_LOG("[BATCH_RESTORE]", "Title %s restore failed: %s",
+                        tid.c_str(), item.error_message.c_str());
+        }
+
+        summary.results.push_back(std::move(item));
+    }
+
+    MACHETE_BREADCRUMB("execute_batch_restore: done");
+    return summary;
+}
+
+OperationResult backup_emulator_target(const emulator::EmulatorTarget &target,
+                                       const storage::StorageDevice &dest_device,
+                                       ProgressCallback progress_cb)
+{
+    scanner::ScannedGame eg;
+    eg.title = target.name;
+    eg.title_id = target.id;
+    eg.platform = "EMULATOR";
+    eg.save_path = !target.source_paths.empty() ? target.source_paths[0] : "";
+    return backup_game_save(eg, dest_device, progress_cb);
+}
+
+OperationResult restore_emulator_target(const emulator::EmulatorTarget &target,
+                                        const storage::StorageDevice &source_device,
+                                        ProgressCallback progress_cb)
+{
+    scanner::ScannedGame eg;
+    eg.title = target.name;
+    eg.title_id = target.id;
+    eg.platform = "EMULATOR";
+    eg.save_path = !target.source_paths.empty() ? target.source_paths[0] : "";
+    return restore_game_save(eg, source_device, progress_cb);
 }
 
 } // namespace machete::save

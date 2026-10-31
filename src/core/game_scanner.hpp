@@ -31,6 +31,10 @@ struct ScannedGame
 // Escanea el almacenamiento de la consola (/user/home/*/savedata/, /user/app/, /data/MacheteSVG/)
 // para descubrir automáticamente todos los juegos y partidas reales instaladas.
 std::vector<ScannedGame> scan_installed_games_and_saves();
+std::vector<ScannedGame> scan_installed_games_and_saves(bool include_emulators, const std::string &root_prefix = "");
+
+// Descubre titulos y partidas instaladas, con soporte opcional de emuladores
+std::vector<ScannedGame> detect_installed_titles(bool include_emulators = true, const std::string &root_prefix = "");
 
 // Carga las imágenes icon0.png de cada juego en texturas de hardware OpenGL utilizando stb_image
 void load_game_icon_textures(std::vector<ScannedGame> &games);

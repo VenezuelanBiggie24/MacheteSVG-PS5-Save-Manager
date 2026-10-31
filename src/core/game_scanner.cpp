@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 #include "core/game_scanner.hpp"
+#include "core/emulator_manager.hpp"
 #include "core/logger.hpp"
 #include "core/sqlite_adapter.hpp"
 
@@ -958,7 +959,7 @@ static std::unordered_map<std::string, std::string> scan_app_database_titles()
     return titles;
 }
 
-std::vector<ScannedGame> scan_installed_games_and_saves()
+std::vector<ScannedGame> scan_installed_games_and_saves(bool include_emulators, const std::string &root_prefix)
 {
     MACHETE_BREADCRUMB("scanner:start");
     MACHETE_LOG("[SCANNER]", "Starting scan for installed titles and savedata...");
@@ -1555,6 +1556,29 @@ std::vector<ScannedGame> scan_installed_games_and_saves()
         }
     }
 
+    if (include_emulators)
+    {
+        const auto detected_emus = machete::emulator::detect_installed_emulators(root_prefix);
+        for (const auto &emu : detected_emus)
+        {
+            ScannedGame eg;
+            eg.title = emu.name;
+            eg.title_id = emu.id;
+            eg.platform = "EMULATOR";
+            eg.save_path = !emu.source_paths.empty() ? emu.source_paths[0] : "";
+            eg.app_path = eg.save_path;
+            eg.icon_path = "";
+            eg.total_bytes = machete::emulator::calculate_emulator_saves_size(emu);
+            eg.size_str = format_bytes(eg.total_bytes);
+            eg.timestamp_str = "Instalado";
+            eg.has_keystone = false;
+            eg.icon_texture = 0;
+            eg.has_save_dummy = false;
+            eg.save_title_id = emu.id;
+            valid_games.push_back(std::move(eg));
+        }
+    }
+
     // Ordenar: primero aquellos con partidas guardadas (bytes > 0), luego por titulo
     MACHETE_BREADCRUMB("scanner:sort");
     std::sort(valid_games.begin(), valid_games.end(), [](const ScannedGame &a, const ScannedGame &b) {
@@ -1588,6 +1612,16 @@ std::vector<ScannedGame> scan_installed_games_and_saves()
     }
     MACHETE_BREADCRUMB("scanner:done");
     return valid_games;
+}
+
+std::vector<ScannedGame> scan_installed_games_and_saves()
+{
+    return scan_installed_games_and_saves(true, "");
+}
+
+std::vector<ScannedGame> detect_installed_titles(bool include_emulators, const std::string &root_prefix)
+{
+    return scan_installed_games_and_saves(include_emulators, root_prefix);
 }
 
 unsigned int load_texture_from_png(const std::string &path)

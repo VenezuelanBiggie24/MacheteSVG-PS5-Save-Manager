@@ -769,7 +769,7 @@ constexpr std::string_view kWebUiHtml = R"rawhtml(<!DOCTYPE html>
       <div>
         <div class="brand-title">
           <span>MacheteSaveGameManager</span>
-          <span class="version-tag" id="main-header-version">PPSA99700 v1.3.11</span>
+          <span class="version-tag" id="main-header-version">PPSA99700 v1.3.12</span>
         </div>
         <div class="brand-subtitle">Estación Web Local & Gestor de Partidas PS5 / PS4</div>
       </div>
@@ -916,6 +916,33 @@ constexpr std::string_view kWebUiHtml = R"rawhtml(<!DOCTYPE html>
       </div>
     </div>
 
+    <!-- Barra de Operaciones por Lote (Batch Bar) -->
+    <div id="batch-bar" style="display: flex; align-items: center; justify-content: space-between; gap: 1rem; padding: 0.85rem 1.5rem; background: rgba(99, 102, 241, 0.08); border: 1px solid rgba(99, 102, 241, 0.25); border-radius: 14px; margin-bottom: 1.25rem; flex-wrap: wrap;">
+      <div style="display: flex; align-items: center; gap: 0.75rem; flex-wrap: wrap;">
+        <span style="font-weight: 700; font-size: 0.95rem; color: #818cf8;">Operaciones por Lote:</span>
+        <span id="batch-selected-count" class="badge badge-ps5" style="font-size: 0.78rem;">0 seleccionados</span>
+        <button class="btn btn-secondary btn-sm" onclick="batchSelectAll(true)" style="padding: 0.35rem 0.75rem; font-size: 0.8rem;">Seleccionar Todos</button>
+        <button class="btn btn-secondary btn-sm" onclick="batchSelectAll(false)" style="padding: 0.35rem 0.75rem; font-size: 0.8rem;">Deseleccionar</button>
+      </div>
+      <div style="display: flex; align-items: center; gap: 0.75rem; flex-wrap: wrap;">
+        <button class="btn btn-primary btn-sm" id="btn-batch-backup" onclick="triggerBatchBackup()" style="padding: 0.45rem 1rem;">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" width="16" height="16">
+            <path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"></path>
+            <polyline points="17 21 17 13 7 13 7 21"></polyline>
+            <polyline points="7 3 7 8 15 8"></polyline>
+          </svg>
+          <span id="batch-backup-label">Respaldar Lote (0)</span>
+        </button>
+        <button class="btn btn-secondary btn-sm" id="btn-batch-restore" onclick="triggerBatchRestore()" style="padding: 0.45rem 1rem;">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" width="16" height="16">
+            <polyline points="1 4 1 10 7 10"></polyline>
+            <path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10"></path>
+          </svg>
+          <span id="batch-restore-label">Restaurar Lote (0)</span>
+        </button>
+      </div>
+    </div>
+
     <!-- Games Grid -->
     <div id="games-grid" class="grid">
       <!-- Inyectado dinamicamente -->
@@ -960,7 +987,7 @@ constexpr std::string_view kWebUiHtml = R"rawhtml(<!DOCTYPE html>
         <div>
           <h3 style="display:flex; align-items:center; gap:0.6rem;">
             <span>Actualizador Remoto de MacheteSVG</span>
-            <span class="version-tag" id="updater-curr-version">v1.3.11</span>
+            <span class="version-tag" id="updater-curr-version">v1.3.12</span>
           </h3>
           <p>Instalacion automatica de paquetes de actualizacion .zip sin necesidad de cliente FTP</p>
         </div>
@@ -1220,6 +1247,7 @@ constexpr std::string_view kWebUiHtml = R"rawhtml(<!DOCTYPE html>
             </div>
             <div class="game-meta">
               <div class="game-badge-row">
+                <input type="checkbox" class="batch-checkbox" data-tid="${escapeAttr(g.title_id)}" onchange="onBatchCheckChanged()" style="width:18px; height:18px; cursor:pointer; accent-color:var(--primary); margin-right:4px;" title="Seleccionar para lote">
                 <span class="badge ${platformBadgeClass}">${escapeHtml(g.platform)}</span>
                 <span class="title-id-badge">${escapeHtml(g.title_id)}</span>
                 ${crossBadgeHtml}
@@ -1403,6 +1431,109 @@ constexpr std::string_view kWebUiHtml = R"rawhtml(<!DOCTYPE html>
         }
       } catch (e) {
         showToast('Error de red al restaurar partida', 'error');
+      }
+    }
+
+    function getSelectedBatchTitleIds() {
+      const checkboxes = document.querySelectorAll('.batch-checkbox:checked');
+      const tids = [];
+      checkboxes.forEach(cb => {
+        if (cb.dataset.tid) tids.push(cb.dataset.tid);
+      });
+      return tids;
+    }
+
+    function onBatchCheckChanged() {
+      const tids = getSelectedBatchTitleIds();
+      const count = tids.length;
+      const countEl = document.getElementById('batch-selected-count');
+      if (countEl) countEl.textContent = `${count} seleccionados`;
+      const bBackup = document.getElementById('batch-backup-label');
+      if (bBackup) bBackup.textContent = `Respaldar Lote (${count})`;
+      const bRestore = document.getElementById('batch-restore-label');
+      if (bRestore) bRestore.textContent = `Restaurar Lote (${count})`;
+    }
+
+    function batchSelectAll(select) {
+      const checkboxes = document.querySelectorAll('.batch-checkbox');
+      checkboxes.forEach(cb => { cb.checked = select; });
+      onBatchCheckChanged();
+    }
+
+    function showBatchSummaryModal(summary, operationName) {
+      const modal = document.getElementById('modal');
+      const modalTitle = document.getElementById('modal-title');
+      const modalSubtitle = document.getElementById('modal-subtitle');
+      const modalBody = document.getElementById('modal-body');
+
+      modalTitle.textContent = `Resumen: ${operationName}`;
+      const mbTot = (summary.total_bytes / (1024 * 1024)).toFixed(1);
+      modalSubtitle.textContent = `Total: ${summary.total_items} | Exitosos: ${summary.succeeded} | Fallidos: ${summary.failed} | ${mbTot} MB`;
+
+      let html = '<div style="display:flex; flex-direction:column; gap:0.5rem; max-height:420px; overflow-y:auto;">';
+      for (const r of (summary.results || [])) {
+        const ok = r.success;
+        const color = ok ? '#34d399' : '#ef4444';
+        const tag = ok ? 'OK' : 'ERROR';
+        const mb = (r.bytes_transferred / (1024 * 1024)).toFixed(2);
+        html += `
+          <div class="file-item" style="border-left: 3px solid ${color};">
+            <div class="file-name-wrap">
+              <span class="badge" style="background:${ok ? 'rgba(16,185,129,0.2)' : 'rgba(239,68,68,0.2)'}; color:${color}; font-size:0.7rem;">${tag}</span>
+              <span class="file-name">${escapeHtml(r.title_name || r.title_id)} (${escapeHtml(r.title_id)})</span>
+            </div>
+            <span class="file-size" style="color:${color}; font-size:0.8rem;">
+              ${ok ? `${mb} MB` : escapeHtml(r.error_message || 'Fallo')}
+            </span>
+          </div>
+        `;
+      }
+      html += '</div>';
+      modalBody.innerHTML = html;
+      modal.classList.add('open');
+    }
+
+    async function triggerBatchBackup() {
+      const tids = getSelectedBatchTitleIds();
+      if (tids.length === 0) {
+        showToast('Selecciona al menos un juego para la operacion por lote', 'error');
+        return;
+      }
+      showToast(`Iniciando respaldo en lote para ${tids.length} juegos...`);
+      try {
+        const res = await fetch('/api/batch_backup', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ title_ids: tids })
+        });
+        const summary = await res.json();
+        showToast(`Respaldo de lote finalizado: ${summary.succeeded} exitosos, ${summary.failed} fallidos`);
+        showBatchSummaryModal(summary, 'Respaldo por Lote');
+        await loadGames();
+      } catch (e) {
+        showToast('Error de red al ejecutar respaldo por lote', 'error');
+      }
+    }
+
+    async function triggerBatchRestore() {
+      const tids = getSelectedBatchTitleIds();
+      if (tids.length === 0) {
+        showToast('Selecciona al menos un juego para la operacion por lote', 'error');
+        return;
+      }
+      showToast(`Iniciando restauracion en lote para ${tids.length} juegos...`);
+      try {
+        const res = await fetch('/api/batch_restore', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ title_ids: tids })
+        });
+        const summary = await res.json();
+        showToast(`Restauracion de lote finalizada: ${summary.succeeded} exitosos, ${summary.failed} fallidos`);
+        showBatchSummaryModal(summary, 'Restauracion por Lote');
+        await loadGames();
+      } catch (e) {
+        showToast('Error de red al ejecutar restauracion por lote', 'error');
       }
     }
 

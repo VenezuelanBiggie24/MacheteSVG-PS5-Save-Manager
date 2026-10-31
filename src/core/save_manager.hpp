@@ -4,9 +4,12 @@
 
 #pragma once
 
+#include "core/emulator_manager.hpp"
 #include "core/game_scanner.hpp"
 #include "core/storage.hpp"
 
+#include <cstddef>
+#include <cstdint>
 #include <functional>
 #include <string>
 #include <vector>
@@ -14,9 +17,17 @@
 namespace machete::save
 {
 
+enum class OperationStatus
+{
+    SUCCESS,
+    FAILED,
+    FAILED_RUNNING_TITLE
+};
+
 struct OperationResult
 {
     bool success = false;
+    OperationStatus status = OperationStatus::FAILED;
     std::string message;
     std::uint64_t bytes_transferred = 0;
     int files_transferred = 0;
@@ -68,11 +79,22 @@ OperationResult backup_game_save(const scanner::ScannedGame &game,
                                  const storage::StorageDevice &dest_device,
                                  ProgressCallback progress_cb = nullptr);
 
+// Ejecuta el respaldo del payload de guardado tras comprobar la proteccion de titulo activo
+OperationResult backup_save_payload(const scanner::ScannedGame &game,
+                                    const storage::StorageDevice &dest_device,
+                                    ProgressCallback progress_cb = nullptr);
+
 // Restaura una copia de seguridad desde cualquier carpeta hacia la ubicacion activa del juego
 OperationResult restore_from_folder(const scanner::ScannedGame &game,
                                     const std::string &backup_folder,
                                     const std::string &source_label,
                                     ProgressCallback progress_cb = nullptr);
+
+// Ejecuta la restauracion del payload de guardado tras comprobar la proteccion de titulo activo
+OperationResult restore_save_payload(const scanner::ScannedGame &game,
+                                     const std::string &backup_folder,
+                                     const std::string &source_label = "",
+                                     ProgressCallback progress_cb = nullptr);
 
 // Restaura una copia de seguridad hacia la ubicacion activa del juego en /user/home/.../savedata/
 OperationResult restore_game_save(const scanner::ScannedGame &game,
@@ -97,6 +119,46 @@ OperationResult restore_backup_item(const scanner::ScannedGame &game,
 // - Registra y purga banderas de corrupcion (is_broken=0, fake_broken=0) en savedata.db
 OperationResult resign_local_ps4_save(const scanner::ScannedGame &game,
                                       ProgressCallback progress_cb = nullptr);
+
+// Estructuras y operaciones para procesamiento por lotes (Batch Operations)
+struct BatchItemResult
+{
+    std::string title_id;
+    std::string title_name;
+    bool success = false;
+    std::string error_message;
+    std::uint64_t bytes_transferred = 0;
+};
+
+struct BatchSummary
+{
+    std::size_t total_items = 0;
+    std::size_t succeeded = 0;
+    std::size_t failed = 0;
+    std::uint64_t total_bytes = 0;
+    std::vector<BatchItemResult> results;
+};
+
+// Ejecuta respaldo en lote de multiples juegos con aislamiento de fallos (Fault Isolation)
+BatchSummary execute_batch_backup(
+    const std::vector<std::string> &title_ids,
+    const std::string &destination_root,
+    std::function<void(std::size_t current, std::size_t total, const std::string &title_id)> progress_cb = nullptr);
+
+// Ejecuta restauracion en lote de multiples juegos con aislamiento de fallos (Fault Isolation)
+BatchSummary execute_batch_restore(
+    const std::vector<std::string> &title_ids,
+    const std::string &backup_root,
+    std::function<void(std::size_t current, std::size_t total, const std::string &title_id)> progress_cb = nullptr);
+
+// Operaciones de respaldo y restauracion directa para emuladores
+OperationResult backup_emulator_target(const emulator::EmulatorTarget &target,
+                                       const storage::StorageDevice &dest_device,
+                                       ProgressCallback progress_cb = nullptr);
+
+OperationResult restore_emulator_target(const emulator::EmulatorTarget &target,
+                                        const storage::StorageDevice &source_device,
+                                        ProgressCallback progress_cb = nullptr);
 
 } // namespace machete::save
 

@@ -13,6 +13,7 @@ src/concepts/*.cpp
 src/core/storage.cpp
 src/core/i18n.cpp
 src/core/game_scanner.cpp
+src/core/emulator_manager.cpp
 src/core/jailbreak.cpp
 src/core/save_manager.cpp
 src/core/logger.cpp

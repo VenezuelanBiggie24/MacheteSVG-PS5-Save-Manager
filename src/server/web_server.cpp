@@ -1516,7 +1516,283 @@ void WebServer::handle_client(int client_fd)
         return;
     }
 
-    // Ruta 6E: API de Actualizacion Remota de MacheteSVG (Subida de ZIP via Web OTA)
+    // Ruta 6E: API para Respaldo en Lote (Batch Backup)
+    if (path == "/api/batch_backup" && method_str == "POST")
+    {
+        std::string body;
+        const char *hdr_end = std::strstr(req_buf, "\r\n\r\n");
+        std::size_t hdr_len = 0;
+        if (hdr_end)
+            hdr_len = static_cast<std::size_t>((hdr_end - req_buf) + 4);
+        else
+        {
+            hdr_end = std::strstr(req_buf, "\n\n");
+            if (hdr_end)
+                hdr_len = static_cast<std::size_t>((hdr_end - req_buf) + 2);
+        }
+
+        std::size_t content_length = 0;
+        if (hdr_len > 0)
+        {
+            std::string raw_hdrs(req_buf, hdr_len);
+            std::size_t cl_pos = raw_hdrs.find("Content-Length:");
+            if (cl_pos == std::string::npos)
+                cl_pos = raw_hdrs.find("content-length:");
+            if (cl_pos != std::string::npos)
+            {
+                cl_pos += 15;
+                while (cl_pos < hdr_len && (raw_hdrs[cl_pos] == ' ' || raw_hdrs[cl_pos] == '\t'))
+                    cl_pos++;
+                content_length = static_cast<std::size_t>(std::strtoul(raw_hdrs.c_str() + cl_pos, nullptr, 10));
+            }
+
+            const char *body_start = req_buf + hdr_len;
+            std::size_t body_in_req = (static_cast<std::size_t>(n) > hdr_len)
+                                          ? static_cast<std::size_t>(n) - hdr_len
+                                          : 0;
+            body.append(body_start, body_in_req);
+
+            if (content_length > body_in_req)
+            {
+                std::size_t rem = content_length - body_in_req;
+                while (rem > 0)
+                {
+                    char chunk[2048];
+                    std::size_t to_read = std::min(sizeof(chunk), rem);
+                    ssize_t r = recv(client_fd, chunk, to_read, 0);
+                    if (r <= 0)
+                        break;
+                    body.append(chunk, static_cast<std::size_t>(r));
+                    rem -= static_cast<std::size_t>(r);
+                }
+            }
+        }
+
+        // Extraer lista de Title IDs desde el JSON
+        std::vector<std::string> title_ids;
+        std::size_t p = 0;
+        while (p < body.size())
+        {
+            std::size_t q1 = body.find('"', p);
+            if (q1 == std::string::npos)
+                break;
+            std::size_t q2 = body.find('"', q1 + 1);
+            if (q2 == std::string::npos)
+                break;
+            std::string val = body.substr(q1 + 1, q2 - q1 - 1);
+            if (val != "title_ids" && val != "titles" && val != "destination_root" &&
+                val != "backup_root" && val != "root" && !val.empty())
+            {
+                if (val.find('/') == std::string::npos && val.find('\\') == std::string::npos &&
+                    val.find("..") == std::string::npos)
+                {
+                    title_ids.push_back(val);
+                }
+            }
+            p = q2 + 1;
+        }
+
+        std::string dest_root;
+        std::size_t fpos = body.find("\"destination_root\"");
+        if (fpos == std::string::npos)
+            fpos = body.find("\"root\"");
+        if (fpos != std::string::npos)
+        {
+            std::size_t colon = body.find(':', fpos);
+            if (colon != std::string::npos)
+            {
+                std::size_t q1 = body.find('"', colon);
+                if (q1 != std::string::npos)
+                {
+                    std::size_t q2 = body.find('"', q1 + 1);
+                    if (q2 != std::string::npos)
+                        dest_root = body.substr(q1 + 1, q2 - q1 - 1);
+                }
+            }
+        }
+        if (dest_root.empty() && query_pos != std::string::npos)
+        {
+            std::string qs = decoded_path.substr(query_pos + 1);
+            std::size_t rpos = qs.find("root=");
+            if (rpos != std::string::npos)
+            {
+                std::size_t amp = qs.find('&', rpos);
+                dest_root = (amp == std::string::npos) ? qs.substr(rpos + 5) : qs.substr(rpos + 5, amp - (rpos + 5));
+            }
+        }
+        if (dest_root.empty())
+        {
+            machete::storage::ensure_internal_storage();
+            dest_root = "/data/" + std::string(storage::ROOT_DIR_NAME);
+        }
+
+        auto summary = machete::save::execute_batch_backup(title_ids, dest_root);
+        std::string json = "{";
+        json += "\"total_items\":" + std::to_string(summary.total_items) + ",";
+        json += "\"succeeded\":" + std::to_string(summary.succeeded) + ",";
+        json += "\"failed\":" + std::to_string(summary.failed) + ",";
+        json += "\"total_bytes\":" + std::to_string(summary.total_bytes) + ",";
+        json += "\"results\":[";
+        for (std::size_t i = 0; i < summary.results.size(); ++i)
+        {
+            const auto &r = summary.results[i];
+            if (i > 0)
+                json += ",";
+            json += "{";
+            json += "\"title_id\":\"" + json_escape(r.title_id) + "\",";
+            json += "\"title_name\":\"" + json_escape(r.title_name) + "\",";
+            json += "\"success\":" + std::string(r.success ? "true" : "false") + ",";
+            json += "\"error_message\":\"" + json_escape(r.error_message) + "\",";
+            json += "\"bytes_transferred\":" + std::to_string(r.bytes_transferred);
+            json += "}";
+        }
+        json += "]}";
+        send_string_response(client_fd, 200, "OK", "application/json", json);
+        return;
+    }
+
+    // Ruta 6F: API para Restauracion en Lote (Batch Restore)
+    if (path == "/api/batch_restore" && method_str == "POST")
+    {
+        std::string body;
+        const char *hdr_end = std::strstr(req_buf, "\r\n\r\n");
+        std::size_t hdr_len = 0;
+        if (hdr_end)
+            hdr_len = static_cast<std::size_t>((hdr_end - req_buf) + 4);
+        else
+        {
+            hdr_end = std::strstr(req_buf, "\n\n");
+            if (hdr_end)
+                hdr_len = static_cast<std::size_t>((hdr_end - req_buf) + 2);
+        }
+
+        std::size_t content_length = 0;
+        if (hdr_len > 0)
+        {
+            std::string raw_hdrs(req_buf, hdr_len);
+            std::size_t cl_pos = raw_hdrs.find("Content-Length:");
+            if (cl_pos == std::string::npos)
+                cl_pos = raw_hdrs.find("content-length:");
+            if (cl_pos != std::string::npos)
+            {
+                cl_pos += 15;
+                while (cl_pos < hdr_len && (raw_hdrs[cl_pos] == ' ' || raw_hdrs[cl_pos] == '\t'))
+                    cl_pos++;
+                content_length = static_cast<std::size_t>(std::strtoul(raw_hdrs.c_str() + cl_pos, nullptr, 10));
+            }
+
+            const char *body_start = req_buf + hdr_len;
+            std::size_t body_in_req = (static_cast<std::size_t>(n) > hdr_len)
+                                          ? static_cast<std::size_t>(n) - hdr_len
+                                          : 0;
+            body.append(body_start, body_in_req);
+
+            if (content_length > body_in_req)
+            {
+                std::size_t rem = content_length - body_in_req;
+                while (rem > 0)
+                {
+                    char chunk[2048];
+                    std::size_t to_read = std::min(sizeof(chunk), rem);
+                    ssize_t r = recv(client_fd, chunk, to_read, 0);
+                    if (r <= 0)
+                        break;
+                    body.append(chunk, static_cast<std::size_t>(r));
+                    rem -= static_cast<std::size_t>(r);
+                }
+            }
+        }
+
+        // Extraer lista de Title IDs desde el JSON
+        std::vector<std::string> title_ids;
+        std::size_t p = 0;
+        while (p < body.size())
+        {
+            std::size_t q1 = body.find('"', p);
+            if (q1 == std::string::npos)
+                break;
+            std::size_t q2 = body.find('"', q1 + 1);
+            if (q2 == std::string::npos)
+                break;
+            std::string val = body.substr(q1 + 1, q2 - q1 - 1);
+            if (val != "title_ids" && val != "titles" && val != "destination_root" &&
+                val != "backup_root" && val != "root" && !val.empty())
+            {
+                if (val.find('/') == std::string::npos && val.find('\\') == std::string::npos &&
+                    val.find("..") == std::string::npos)
+                {
+                    title_ids.push_back(val);
+                }
+            }
+            p = q2 + 1;
+        }
+
+        std::string backup_root;
+        std::size_t fpos = body.find("\"backup_root\"");
+        if (fpos == std::string::npos)
+            fpos = body.find("\"root\"");
+        if (fpos != std::string::npos)
+        {
+            std::size_t colon = body.find(':', fpos);
+            if (colon != std::string::npos)
+            {
+                std::size_t q1 = body.find('"', colon);
+                if (q1 != std::string::npos)
+                {
+                    std::size_t q2 = body.find('"', q1 + 1);
+                    if (q2 != std::string::npos)
+                        backup_root = body.substr(q1 + 1, q2 - q1 - 1);
+                }
+            }
+        }
+        if (backup_root.empty() && query_pos != std::string::npos)
+        {
+            std::string qs = decoded_path.substr(query_pos + 1);
+            std::size_t rpos = qs.find("root=");
+            if (rpos != std::string::npos)
+            {
+                std::size_t amp = qs.find('&', rpos);
+                backup_root = (amp == std::string::npos) ? qs.substr(rpos + 5) : qs.substr(rpos + 5, amp - (rpos + 5));
+            }
+        }
+        if (backup_root.empty())
+        {
+            machete::storage::ensure_internal_storage();
+            backup_root = "/data/" + std::string(storage::ROOT_DIR_NAME);
+        }
+
+        auto summary = machete::save::execute_batch_restore(title_ids, backup_root);
+        if (summary.succeeded > 0)
+        {
+            auto scanned = scanner::scan_installed_games_and_saves();
+            update_games(scanned);
+        }
+
+        std::string json = "{";
+        json += "\"total_items\":" + std::to_string(summary.total_items) + ",";
+        json += "\"succeeded\":" + std::to_string(summary.succeeded) + ",";
+        json += "\"failed\":" + std::to_string(summary.failed) + ",";
+        json += "\"total_bytes\":" + std::to_string(summary.total_bytes) + ",";
+        json += "\"results\":[";
+        for (std::size_t i = 0; i < summary.results.size(); ++i)
+        {
+            const auto &r = summary.results[i];
+            if (i > 0)
+                json += ",";
+            json += "{";
+            json += "\"title_id\":\"" + json_escape(r.title_id) + "\",";
+            json += "\"title_name\":\"" + json_escape(r.title_name) + "\",";
+            json += "\"success\":" + std::string(r.success ? "true" : "false") + ",";
+            json += "\"error_message\":\"" + json_escape(r.error_message) + "\",";
+            json += "\"bytes_transferred\":" + std::to_string(r.bytes_transferred);
+            json += "}";
+        }
+        json += "]}";
+        send_string_response(client_fd, 200, "OK", "application/json", json);
+        return;
+    }
+
+    // Ruta 6G: API de Actualizacion Remota de MacheteSVG (Subida de ZIP via Web OTA)
     if (path == "/api/update" && method_str == "POST")
     {
         if (!is_update_module_enabled())

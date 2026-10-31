@@ -33,6 +33,7 @@
 #include <string>
 #include <thread>
 #include <unistd.h>
+#include <unordered_set>
 #include <vector>
 
 namespace hui::concepts
@@ -484,6 +485,8 @@ static void draw_shinchan_character(gfx::DrawList &list, ui::Painter &paint,
 class Machete final : public app::Concept
 {
   public:
+    enum class OperationType { None, Backup, Restore, BatchBackup, BatchRestore };
+
     explicit Machete(app::Context &context) : context_(context)
     {
         machete::i18n::init();
@@ -830,6 +833,130 @@ class Machete final : public app::Concept
         });
     }
 
+    void start_async_batch_backup(const std::vector<std::string> &title_ids, const std::string &dest_root)
+    {
+        if (op_thread_.joinable())
+            op_thread_.join();
+
+        is_operating_.store(true);
+        operation_progress_.store(0.0f);
+        operation_result_ready_.store(false);
+        op_type_ = OperationType::BatchBackup;
+
+        shinchan_state_ = ShinchanState::Dancing;
+        shinchan_opacity_ = 1.0f;
+        shinchan_timer_ = 0.0f;
+
+        const bool is_es = (machete::i18n::current_language() == machete::i18n::Language::Spanish);
+        {
+            std::lock_guard<std::mutex> lock(op_mutex_);
+            operation_title_ = is_es ? ("Procesando lote: 0 / " + std::to_string(title_ids.size()))
+                                     : ("Processing batch: 0 / " + std::to_string(title_ids.size()));
+            operation_detail_ = is_es ? "Iniciando respaldo por lote..." : "Starting batch backup...";
+            batch_summary_ = {};
+        }
+
+        MACHETE_LOG("[OPERATION]", "Starting background batch backup for %zu titles", title_ids.size());
+
+        op_thread_.start([this, title_ids, dest_root]() {
+            MACHETE_BREADCRUMB("op_thread: batch_backup");
+            auto summary = machete::save::execute_batch_backup(
+                title_ids, dest_root,
+                [this](std::size_t current, std::size_t total, const std::string &tid) {
+                    const float p = (total > 0) ? (static_cast<float>(current) / static_cast<float>(total)) : 0.0f;
+                    operation_progress_.store(p);
+                    const bool is_es = (machete::i18n::current_language() == machete::i18n::Language::Spanish);
+                    std::string title_disp = tid;
+                    for (const auto &g : games_)
+                    {
+                        if (g.title_id == tid && !g.title.empty())
+                        {
+                            title_disp = g.title;
+                            break;
+                        }
+                    }
+                    std::lock_guard<std::mutex> lock(op_mutex_);
+                    operation_title_ = is_es
+                        ? ("Procesando lote: " + std::to_string(current) + " / " + std::to_string(total))
+                        : ("Processing batch: " + std::to_string(current) + " / " + std::to_string(total));
+                    operation_detail_ = title_disp + " (" + tid + ")";
+                });
+
+            {
+                std::lock_guard<std::mutex> lock(op_mutex_);
+                batch_summary_ = std::move(summary);
+            }
+            MACHETE_LOG("[OPERATION]", "Background batch backup finished: succeeded=%zu, failed=%zu",
+                        batch_summary_.succeeded, batch_summary_.failed);
+            operation_progress_.store(1.0f);
+            operation_result_ready_.store(true);
+            is_operating_.store(false);
+            MACHETE_BREADCRUMB("op_thread: batch_backup done");
+        });
+    }
+
+    void start_async_batch_restore(const std::vector<std::string> &title_ids, const std::string &backup_root)
+    {
+        if (op_thread_.joinable())
+            op_thread_.join();
+
+        is_operating_.store(true);
+        operation_progress_.store(0.0f);
+        operation_result_ready_.store(false);
+        op_type_ = OperationType::BatchRestore;
+
+        shinchan_state_ = ShinchanState::Dancing;
+        shinchan_opacity_ = 1.0f;
+        shinchan_timer_ = 0.0f;
+
+        const bool is_es = (machete::i18n::current_language() == machete::i18n::Language::Spanish);
+        {
+            std::lock_guard<std::mutex> lock(op_mutex_);
+            operation_title_ = is_es ? ("Procesando lote: 0 / " + std::to_string(title_ids.size()))
+                                     : ("Processing batch: 0 / " + std::to_string(title_ids.size()));
+            operation_detail_ = is_es ? "Iniciando restauracion por lote..." : "Starting batch restore...";
+            batch_summary_ = {};
+        }
+
+        MACHETE_LOG("[OPERATION]", "Starting background batch restore for %zu titles", title_ids.size());
+
+        op_thread_.start([this, title_ids, backup_root]() {
+            MACHETE_BREADCRUMB("op_thread: batch_restore");
+            auto summary = machete::save::execute_batch_restore(
+                title_ids, backup_root,
+                [this](std::size_t current, std::size_t total, const std::string &tid) {
+                    const float p = (total > 0) ? (static_cast<float>(current) / static_cast<float>(total)) : 0.0f;
+                    operation_progress_.store(p);
+                    const bool is_es = (machete::i18n::current_language() == machete::i18n::Language::Spanish);
+                    std::string title_disp = tid;
+                    for (const auto &g : games_)
+                    {
+                        if (g.title_id == tid && !g.title.empty())
+                        {
+                            title_disp = g.title;
+                            break;
+                        }
+                    }
+                    std::lock_guard<std::mutex> lock(op_mutex_);
+                    operation_title_ = is_es
+                        ? ("Procesando lote: " + std::to_string(current) + " / " + std::to_string(total))
+                        : ("Processing batch: " + std::to_string(current) + " / " + std::to_string(total));
+                    operation_detail_ = title_disp + " (" + tid + ")";
+                });
+
+            {
+                std::lock_guard<std::mutex> lock(op_mutex_);
+                batch_summary_ = std::move(summary);
+            }
+            MACHETE_LOG("[OPERATION]", "Background batch restore finished: succeeded=%zu, failed=%zu",
+                        batch_summary_.succeeded, batch_summary_.failed);
+            operation_progress_.store(1.0f);
+            operation_result_ready_.store(true);
+            is_operating_.store(false);
+            MACHETE_BREADCRUMB("op_thread: batch_restore done");
+        });
+    }
+
     std::vector<int> get_filtered_game_indices() const
     {
         std::vector<int> indices;
@@ -1077,46 +1204,93 @@ class Machete final : public app::Concept
         // Verificación de finalización de operación asíncrona en segundo plano
         if (operation_result_ready_.exchange(false))
         {
-            machete::save::OperationResult res;
-            {
-                std::lock_guard<std::mutex> lock(op_mutex_);
-                res = operation_result_;
-            }
-            if (op_type_ == OperationType::Restore && res.success)
-            {
-                refresh_games();
-            }
-
-            // Actualización del estado del personaje animado (Shin-chan festeja o llora)
-            if (res.success)
-            {
-                shinchan_state_ = ShinchanState::Success;
-            }
-            else
-            {
-                shinchan_state_ = ShinchanState::Error;
-            }
-            shinchan_opacity_ = 1.0f;
-            shinchan_timer_ = 6.0f; // 6 segundos de celebracion / aviso comico
-
             const bool is_es = (machete::i18n::current_language() == machete::i18n::Language::Spanish);
-            if (!res.success || res.message.size() > 45)
+            if (op_type_ == OperationType::BatchBackup || op_type_ == OperationType::BatchRestore)
             {
-                const std::string title = !res.success
-                    ? (is_es ? "Aviso de Operacion" : "Operation Notice")
-                    : (is_es ? "Operacion Completada" : "Operation Completed");
-                notification_timer_ = 0.0f;
-                notification_text_[0] = '\0';
-                open_alert_dialog(!res.success, title, res.message, feedback);
+                machete::save::BatchSummary summary;
+                {
+                    std::lock_guard<std::mutex> lock(op_mutex_);
+                    summary = batch_summary_;
+                }
+                if (op_type_ == OperationType::BatchRestore && summary.succeeded > 0)
+                {
+                    refresh_games();
+                }
+
+                shinchan_state_ = (summary.failed == 0) ? ShinchanState::Success : ShinchanState::Error;
+                shinchan_opacity_ = 1.0f;
+                shinchan_timer_ = 6.0f;
+
+                const std::string title = is_es ? "Resumen de Operacion por Lote" : "Batch Operation Summary";
+                const double mb_tot = static_cast<double>(summary.total_bytes) / (1024.0 * 1024.0);
+
+                char hdr[256];
+                std::snprintf(hdr, sizeof(hdr),
+                              is_es ? "Total: %zu | Exitosos: %zu | Fallidos: %zu | Total: %.1f MB"
+                                    : "Total: %zu | Succeeded: %zu | Failed: %zu | Total: %.1f MB",
+                              summary.total_items, summary.succeeded, summary.failed, mb_tot);
+
+                std::string msg = hdr;
+                for (const auto &item : summary.results)
+                {
+                    msg += "\n";
+                    if (item.success)
+                    {
+                        msg += "[OK] " + item.title_name + " (" + item.title_id + ")";
+                    }
+                    else
+                    {
+                        msg += "[ERROR] " + item.title_name + " (" + item.title_id + "): " + item.error_message;
+                    }
+                }
+
+                multi_select_mode_ = false;
+                selected_title_ids_.clear();
+                open_alert_dialog(summary.failed > 0, title, msg, feedback);
+                op_type_ = OperationType::None;
             }
             else
             {
-                notification_timer_ = 4.0f;
-                std::snprintf(notification_text_, sizeof(notification_text_), "%s", res.message.c_str());
-                feedback.play(res.success ? audio::Cue::saved : audio::Cue::error, 1.0f, 0.0f);
-            }
+                machete::save::OperationResult res;
+                {
+                    std::lock_guard<std::mutex> lock(op_mutex_);
+                    res = operation_result_;
+                }
+                if (op_type_ == OperationType::Restore && res.success)
+                {
+                    refresh_games();
+                }
 
-            op_type_ = OperationType::None;
+                // Actualización del estado del personaje animado (Shin-chan festeja o llora)
+                if (res.success)
+                {
+                    shinchan_state_ = ShinchanState::Success;
+                }
+                else
+                {
+                    shinchan_state_ = ShinchanState::Error;
+                }
+                shinchan_opacity_ = 1.0f;
+                shinchan_timer_ = 6.0f; // 6 segundos de celebracion / aviso comico
+
+                if (!res.success || res.message.size() > 45)
+                {
+                    const std::string title = !res.success
+                        ? (is_es ? "Aviso de Operacion" : "Operation Notice")
+                        : (is_es ? "Operacion Completada" : "Operation Completed");
+                    notification_timer_ = 0.0f;
+                    notification_text_[0] = '\0';
+                    open_alert_dialog(!res.success, title, res.message, feedback);
+                }
+                else
+                {
+                    notification_timer_ = 4.0f;
+                    std::snprintf(notification_text_, sizeof(notification_text_), "%s", res.message.c_str());
+                    feedback.play(res.success ? audio::Cue::saved : audio::Cue::error, 1.0f, 0.0f);
+                }
+
+                op_type_ = OperationType::None;
+            }
         }
 
         const bool operating = is_operating_.load();
@@ -1196,10 +1370,33 @@ class Machete final : public app::Concept
         {
             update_alert_dialog(input, feedback);
         }
-        // Atajo Triangle: Abrir / alternar servidor web local directamente
+        // Salir de Seleccion Multiple con Action::back (Circulo)
+        else if (multi_select_mode_ && input.is_pressed(Action::back))
+        {
+            multi_select_mode_ = false;
+            selected_title_ids_.clear();
+            feedback.play(audio::Cue::modal_close, 1.0f, 0.0f);
+        }
+        // Atajo Triangle: En Seleccion Multiple: Seleccionar Todos. Fuera de ella: Alternar Servidor Web
         else if (input.is_pressed(Action::north))
         {
-            if (web_server_dialog_)
+            if (multi_select_mode_)
+            {
+                const auto filtered = get_filtered_game_indices();
+                if (selected_title_ids_.size() == filtered.size())
+                {
+                    selected_title_ids_.clear();
+                }
+                else
+                {
+                    for (int idx : filtered)
+                    {
+                        selected_title_ids_.insert(games_[static_cast<std::size_t>(idx)].title_id);
+                    }
+                }
+                feedback.play(audio::Cue::select, 1.0f, 0.0f);
+            }
+            else if (web_server_dialog_)
             {
                 web_server_dialog_ = false;
                 feedback.play(audio::Cue::modal_close, 1.0f, 0.0f);
@@ -1209,26 +1406,32 @@ class Machete final : public app::Concept
                 open_web_server_dialog(feedback);
             }
         }
-        // Atajo Square: Resignar partida de PS4 en caliente (Modo Apollo) o Recargar lista
+        // Atajo Square: Alternar Seleccion Multiple o Marcar/Desmarcar elemento
         else if (input.is_pressed(Action::west))
         {
             const auto *game_ptr = current_selected_game();
-            const bool is_ps4_sel = game_ptr && (game_ptr->platform == "PS4" || game_ptr->title_id.rfind("CUSA", 0) == 0);
-            if (is_ps4_sel && !game_ptr->save_path.empty() && !is_operating_.load())
+            if (multi_select_mode_)
             {
-                feedback.play(audio::Cue::select, 1.0f, 0.0f);
-                start_async_resign(*game_ptr);
+                if (game_ptr)
+                {
+                    if (selected_title_ids_.count(game_ptr->title_id))
+                    {
+                        selected_title_ids_.erase(game_ptr->title_id);
+                    }
+                    else
+                    {
+                        selected_title_ids_.insert(game_ptr->title_id);
+                    }
+                    feedback.play(audio::Cue::select, 1.0f, 0.0f);
+                }
             }
             else
             {
-                if (!root_active_.load())
-                    start_async_jailbreak();
-                machete::storage::ensure_internal_storage();
-                active_devices_ = machete::storage::scan_storage_devices();
-                refresh_games();
-                std::snprintf(notification_text_, sizeof(notification_text_),
-                              machete::i18n::tr(machete::i18n::StringId::ToastScanUpdated), games_.size());
-                notification_timer_ = 3.0f;
+                multi_select_mode_ = true;
+                if (game_ptr)
+                {
+                    selected_title_ids_.insert(game_ptr->title_id);
+                }
                 feedback.play(audio::Cue::select, 1.0f, 0.0f);
             }
         }
@@ -1525,10 +1728,55 @@ class Machete final : public app::Concept
         }
         else if (focus_ >= kGame0 && focus_ <= kGame4)
         {
+            if (multi_select_mode_)
+            {
+                const auto *game = current_selected_game();
+                if (game)
+                {
+                    if (selected_title_ids_.count(game->title_id))
+                    {
+                        selected_title_ids_.erase(game->title_id);
+                    }
+                    else
+                    {
+                        selected_title_ids_.insert(game->title_id);
+                    }
+                    feedback.play(audio::Cue::select, 1.0f, ui::pan_for_x(kRects[focus_].cx()));
+                }
+                return;
+            }
             feedback.play(audio::Cue::select, 1.0f, ui::pan_for_x(kRects[focus_].cx()));
         }
         else if (focus_ == kBtnBackup)
         {
+            if (multi_select_mode_)
+            {
+                const bool is_es = (machete::i18n::current_language() == machete::i18n::Language::Spanish);
+                if (selected_title_ids_.empty())
+                {
+                    std::snprintf(notification_text_, sizeof(notification_text_), "%s",
+                                  is_es ? "No hay juegos seleccionados en el lote" : "No games selected in batch");
+                    notification_timer_ = 3.0f;
+                    feedback.play(audio::Cue::error, 1.0f, 0.0f);
+                    return;
+                }
+                std::vector<std::string> tids(selected_title_ids_.begin(), selected_title_ids_.end());
+                machete::storage::ensure_internal_storage();
+                std::string dest_root = "/data/" + std::string(machete::storage::ROOT_DIR_NAME);
+                active_devices_ = machete::storage::scan_storage_devices();
+                for (const auto &d : active_devices_)
+                {
+                    if (d.connected && !d.root_dir.empty())
+                    {
+                        dest_root = d.root_dir;
+                        break;
+                    }
+                }
+                feedback.play(audio::Cue::select, 1.0f, ui::pan_for_x(kRects[focus_].cx()));
+                start_async_batch_backup(tids, dest_root);
+                return;
+            }
+
             const auto *game = current_selected_game();
             if (!game)
                 return;
@@ -1541,6 +1789,34 @@ class Machete final : public app::Concept
         }
         else if (focus_ == kBtnRestore)
         {
+            if (multi_select_mode_)
+            {
+                const bool is_es = (machete::i18n::current_language() == machete::i18n::Language::Spanish);
+                if (selected_title_ids_.empty())
+                {
+                    std::snprintf(notification_text_, sizeof(notification_text_), "%s",
+                                  is_es ? "No hay juegos seleccionados en el lote" : "No games selected in batch");
+                    notification_timer_ = 3.0f;
+                    feedback.play(audio::Cue::error, 1.0f, 0.0f);
+                    return;
+                }
+                std::vector<std::string> tids(selected_title_ids_.begin(), selected_title_ids_.end());
+                machete::storage::ensure_internal_storage();
+                std::string backup_root = "/data/" + std::string(machete::storage::ROOT_DIR_NAME);
+                active_devices_ = machete::storage::scan_storage_devices();
+                for (const auto &d : active_devices_)
+                {
+                    if (d.connected && !d.root_dir.empty())
+                    {
+                        backup_root = d.root_dir;
+                        break;
+                    }
+                }
+                feedback.play(audio::Cue::select, 1.0f, ui::pan_for_x(kRects[focus_].cx()));
+                start_async_batch_restore(tids, backup_root);
+                return;
+            }
+
             const auto *game = current_selected_game();
             if (!game)
                 return;
@@ -1940,6 +2216,28 @@ class Machete final : public app::Concept
                    web_chip.x + 36, web_chip.cy() + 7, 18,
                    web_focused ? theme.primary : Color::rgb(0xffffff));
 
+        // Barra de Accion de Seleccion Multiple
+        if (multi_select_mode_)
+        {
+            const Rect action_bar{96, 166, 1728, 36};
+            list.rounded_rect(action_bar, 8.0f, Color::rgb(0x132242).with_alpha(0.95f));
+            paint.stroke(action_bar, 8.0f, 1.5f, theme.primary);
+
+            const bool is_es_banner = (machete::i18n::current_language() == machete::i18n::Language::Spanish);
+            char mode_text[128];
+            std::snprintf(mode_text, sizeof(mode_text),
+                          is_es_banner ? "[Seleccion Multiple Activa: %zu juegos]"
+                                       : "[Multi-Select Active: %zu games]",
+                          selected_title_ids_.size());
+            paint.body(mode_text, action_bar.x + 20, action_bar.cy() + 6, 18, theme.primary);
+
+            const char *controls_text = is_es_banner
+                ? "[Cuadrado] Marcar/Desmarcar | [Triangulo] Seleccionar Todos | [Circulo] Salir de seleccion"
+                : "[Square] Check/Uncheck | [Triangle] Select All | [Circle] Exit selection";
+            paint.body(controls_text, action_bar.x + action_bar.w - 20, action_bar.cy() + 6, 17,
+                       theme.text, gfx::Align::right);
+        }
+
         // ==========================================
         // 2. PANEL IZQUIERDO: LISTA DINAMICA DE JUEGOS
         // ==========================================
@@ -2049,12 +2347,19 @@ class Machete final : public app::Concept
             const Rect r = kRects[kGame0 + i];
             const bool is_focused = (focus_ == kGame0 + i);
             const bool is_selected = (selected_game_ == filtered_idx);
+            const bool in_batch = multi_select_mode_ && (selected_title_ids_.count(game.title_id) > 0);
 
             // Fondo de la fila
             if (is_focused)
             {
                 paint.surface(r, theme.radius, theme.surface_high, theme.outline, 1.0f);
                 paint.focus_ring(r, theme.radius, focus_amount_[kGame0 + i].value);
+            }
+            else if (in_batch)
+            {
+                list.rounded_rect(r, theme.radius, theme.primary.with_alpha(0.24f));
+                list.line(r.x + 2, r.y + 12, r.x + 2, r.y + r.h - 12, 4.0f, theme.primary);
+                paint.stroke(r, theme.radius, 1.5f, theme.primary.with_alpha(0.6f));
             }
             else if (is_selected)
             {
@@ -2102,6 +2407,23 @@ class Machete final : public app::Concept
                           game.title_id.c_str(),
                           game.size_str.empty() ? "Instalado" : game.size_str.c_str());
             paint.body(sub, r.x + 92, r.y + 70, 18, theme.text_muted);
+
+            // Checkbox / icono de seleccion multiple
+            if (multi_select_mode_)
+            {
+                const Rect chk_rect{r.x + r.w - 46, r.y + (r.h - 26) / 2, 26, 26};
+                if (in_batch)
+                {
+                    list.rounded_rect(chk_rect, 6.0f, theme.primary);
+                    paint.stroke(chk_rect, 6.0f, 1.5f, Color::rgb(0xffffff));
+                    paint.label("[X]", chk_rect.cx(), chk_rect.cy() + 5, 13, Color::rgb(0xffffff), gfx::Align::center);
+                }
+                else
+                {
+                    list.rounded_rect(chk_rect, 6.0f, Color::rgb(0xffffff).with_alpha(0.06f));
+                    paint.stroke(chk_rect, 6.0f, 1.5f, Color::rgb(0xffffff).with_alpha(0.35f));
+                }
+            }
         }
 
         // ==========================================
@@ -2238,12 +2560,28 @@ class Machete final : public app::Concept
             // Botones de acción
             paint.label(machete::i18n::tr(machete::i18n::StringId::SaveActionsHeader),
                         836, 756, 17, theme.text_muted);
-            paint.button(kRects[kBtnBackup], machete::i18n::tr(machete::i18n::StringId::BtnBackup),
+
+            std::string backup_btn_label;
+            std::string restore_btn_label;
+            if (multi_select_mode_)
+            {
+                const std::string count_str = std::to_string(selected_title_ids_.size());
+                backup_btn_label = is_es ? ("Respaldar Lote (" + count_str + ")")
+                                         : ("Batch Backup (" + count_str + ")");
+                restore_btn_label = is_es ? ("Restaurar Lote (" + count_str + ")")
+                                          : ("Batch Restore (" + count_str + ")");
+            }
+            else
+            {
+                backup_btn_label = machete::i18n::tr(machete::i18n::StringId::BtnBackup);
+                restore_btn_label = is_ps4_title
+                    ? (is_es ? "Restaurar (Modo Apollo)" : "Restore (Apollo Mode)")
+                    : machete::i18n::tr(machete::i18n::StringId::BtnRestore);
+            }
+
+            paint.button(kRects[kBtnBackup], backup_btn_label.c_str(),
                          ui::ButtonKind::primary, look(kBtnBackup));
-            const char *restore_btn_label = is_ps4_title
-                ? (is_es ? "Restaurar (Modo Apollo)" : "Restore (Apollo Mode)")
-                : machete::i18n::tr(machete::i18n::StringId::BtnRestore);
-            paint.button(kRects[kBtnRestore], restore_btn_label,
+            paint.button(kRects[kBtnRestore], restore_btn_label.c_str(),
                          ui::ButtonKind::secondary, look(kBtnRestore));
             paint.button(kRects[kBtnWebServer], machete::i18n::tr(machete::i18n::StringId::BtnWebServer),
                          ui::ButtonKind::secondary, look(kBtnWebServer));
@@ -2782,10 +3120,13 @@ class Machete final : public app::Concept
             {ui::Button::l1, is_es ? "Pestañas" : "Tabs", ui::Button::r1},
             {ui::Button::l2, machete::i18n::tr(machete::i18n::StringId::HintTheme), ui::Button::r2},
             {ui::Button::dpad, machete::i18n::tr(machete::i18n::StringId::HintNavigate)},
-            {ui::Button::cross, machete::i18n::tr(machete::i18n::StringId::LegendSelect)},
-            {ui::Button::circle, machete::i18n::tr(machete::i18n::StringId::LegendBack)},
-            {ui::Button::triangle, machete::i18n::tr(machete::i18n::StringId::LegendWebServer)},
-            {ui::Button::square, square_label},
+            {ui::Button::cross, multi_select_mode_ ? (is_es ? "Marcar / Ejecutar" : "Select / Execute")
+                                                   : machete::i18n::tr(machete::i18n::StringId::LegendSelect)},
+            {ui::Button::circle, multi_select_mode_ ? (is_es ? "Salir de seleccion" : "Exit selection")
+                                                    : machete::i18n::tr(machete::i18n::StringId::LegendBack)},
+            {ui::Button::triangle, multi_select_mode_ ? (is_es ? "Seleccionar Todos" : "Select All")
+                                                      : machete::i18n::tr(machete::i18n::StringId::LegendWebServer)},
+            {ui::Button::square, multi_select_mode_ ? (is_es ? "Marcar/Desmarcar" : "Check/Uncheck") : square_label},
             {ui::Button::left_stick, machete::i18n::tr(machete::i18n::StringId::HintLanguage)},
         };
         ui::HintLayout layout;
@@ -2831,6 +3172,10 @@ class Machete final : public app::Concept
 
     // Lista dinámica de juegos escaneados
     std::vector<machete::scanner::ScannedGame> games_;
+
+    // Seleccion Multiple (Multi-Select Batch Operations)
+    bool multi_select_mode_ = false;
+    std::unordered_set<std::string> selected_title_ids_;
 
     // Modales
     bool dialog_ = false;
@@ -2884,7 +3229,7 @@ class Machete final : public app::Concept
     mutable std::array<unsigned int, 16> shinchan_crying_textures_{};
 
     // Operaciones Asíncronas en Segundo Plano (Worker Thread con 2MB de stack garantizados)
-    enum class OperationType { None, Backup, Restore } op_type_ = OperationType::None;
+    OperationType op_type_ = OperationType::None;
     machete::threading::WorkerThread op_thread_;
     std::atomic<bool> is_operating_{false};
     std::atomic<float> operation_progress_{0.0f};
@@ -2893,6 +3238,7 @@ class Machete final : public app::Concept
     std::string operation_title_;
     std::string operation_detail_;
     machete::save::OperationResult operation_result_;
+    machete::save::BatchSummary batch_summary_;
 
     tween::Spring op_progress_bar_;
     tween::Spring op_overlay_show_;
