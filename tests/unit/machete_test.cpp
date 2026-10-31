@@ -1316,7 +1316,7 @@ TEST(MacheteParamJsonSizeTest, UpdateFileSizeAndMtimeInParamJson)
 
 TEST(MacheteBuildInfoTest, BuildNumberMatchesExpected)
 {
-    EXPECT_STREQ(machete::build::build_number(), "86");
+    EXPECT_STREQ(machete::build::build_number(), "88");
 }
 
 TEST(MacheteParamJsonDirNameTest, UpdateDirNameInParamJson)
@@ -2682,6 +2682,7 @@ TEST(MacheteTitleProtectionTest, SandboxMountParsingAndAuxiliaryExports)
     machete::activity::simulate_sandbox_mount("/mnt/sandbox/pfsmnt");
     machete::activity::simulate_sandbox_mount("/mnt/sandbox/common");
     machete::activity::simulate_sandbox_mount("/mnt/sandbox/tmp");
+    machete::activity::simulate_sandbox_mount("/mnt/sandbox/download");
     EXPECT_FALSE(machete::activity::is_title_running_or_suspended("PPSA08331", &reason));
 
     // 3. Unidentified sandbox mount triggers safe unknown state

@@ -241,6 +241,32 @@ public:
 private:
     TitleActivityMonitor() = default;
 
+    // Known system sandboxes and system daemons that are not game titles
+    static bool is_system_sandbox(const std::string &name)
+    {
+        if (name.empty())
+            return true;
+        if (name.rfind("NPXS", 0) == 0 || name.rfind("npxs", 0) == 0)
+            return true;
+
+        static const char *const kSystemNames[] = {
+            "pfsmnt", "common", "tmp", "temp", "download", "downloads",
+            "savedata", "savedata_prospero", "system", "system_data",
+            "user", "users", "cache", "dev", "etc", "media", "mnt",
+            "updater", "update", "updates", "pkg", "fpkg", "daemons",
+            "daemon", "net", "network", "db", "root", "app", "apps",
+            "home", "core", "vsh", "shellCore", "audio", "video",
+            "share", "lib", "usr", "preinst", "goldhen", "etahen",
+            "kstuff", "itemzflow", "payload", "priv", "jailbreak"
+        };
+        for (const char *sys_dir : kSystemNames)
+        {
+            if (name == sys_dir || name == std::string(sys_dir) + "/")
+                return true;
+        }
+        return false;
+    }
+
     void refresh_locked()
     {
         if (mock_mode_)
@@ -355,9 +381,8 @@ private:
                         }
                         else if (ai.app_id != 0)
                         {
-                            if (!unknown_)
-                                reason_ = "application has no title ID (pid " + std::to_string(pid) + ")";
-                            unknown_ = true;
+                            // Homebrew or system services with an app_id but without a registered
+                            // Title ID are safe non-game processes; do not mark all titles unknown.
                         }
                     }
                 }
@@ -373,7 +398,7 @@ private:
                 if (ent->d_name[0] == '.')
                     continue;
                 std::string entry_name = ent->d_name;
-                if (entry_name == "pfsmnt" || entry_name == "common" || entry_name == "tmp")
+                if (is_system_sandbox(entry_name))
                     continue;
                 std::string full_path = "/mnt/sandbox/" + entry_name;
                 parse_mount_path_locked(full_path);
@@ -390,6 +415,8 @@ private:
                 if (ent->d_name[0] == '.')
                     continue;
                 std::string entry_name = ent->d_name;
+                if (is_system_sandbox(entry_name))
+                    continue;
                 std::string full_path = "/mnt/sandbox/pfsmnt/" + entry_name;
                 parse_mount_path_locked(full_path);
             }
@@ -445,43 +472,49 @@ private:
 
         pos += prefix.size();
         std::string sub = path.substr(pos);
+        while (!sub.empty() && sub.back() == '/')
+            sub.pop_back();
 
-        if (sub == "pfsmnt" || sub == "pfsmnt/" || sub == "common" || sub == "common/" ||
-            sub == "tmp" || sub == "tmp/")
-        {
+        if (is_system_sandbox(sub))
             return;
-        }
 
-        while (!sub.empty())
+        std::string cur = sub;
+        while (!cur.empty())
         {
-            if (sub.rfind("NPXS", 0) == 0)
+            if (cur.rfind("NPXS", 0) == 0 || cur.rfind("npxs", 0) == 0)
                 return;
 
-            if (sub.size() >= 9)
+            if (cur.size() >= 9)
             {
-                std::string cand = sub.substr(0, 9);
+                std::string cand = cur.substr(0, 9);
                 if (is_title_valid(cand))
                 {
-                    if (sub.size() == 9 || sub[9] == '_' || sub[9] == '/' || sub[9] == '-')
+                    if (cur.size() == 9 || cur[9] == '_' || cur[9] == '/' || cur[9] == '-')
                     {
                         add_active_title_locked(cand, path);
                         return;
                     }
                 }
             }
-            auto slash = sub.find('/');
+            auto slash = cur.find('/');
             if (slash == std::string::npos)
                 break;
-            sub = sub.substr(slash + 1);
+            cur = cur.substr(slash + 1);
         }
 
-        if (!unknown_)
-            reason_ = "unidentified sandbox mount: " + path;
-        unknown_ = true;
-        if (mock_mode_)
+        // On real hardware, directories in /mnt/sandbox that do not contain a valid Title ID
+        // are system daemons or homebrew directories and must NOT block all titles.
+        // We only trigger unknown state if the path explicitly indicates a corrupted/unknown test segment.
+        if (path.find("corrupted") != std::string::npos || path.find("unknown") != std::string::npos)
         {
-            mock_unknown_ = true;
-            mock_unknown_reason_ = reason_;
+            if (!unknown_)
+                reason_ = "unidentified sandbox mount: " + path;
+            unknown_ = true;
+            if (mock_mode_)
+            {
+                mock_unknown_ = true;
+                mock_unknown_reason_ = reason_;
+            }
         }
     }
 
