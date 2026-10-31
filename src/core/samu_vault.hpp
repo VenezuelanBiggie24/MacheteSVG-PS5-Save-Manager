@@ -16,6 +16,7 @@
 #include <string>
 #include <sys/ioctl.h>
 #include <sys/stat.h>
+#include <sys/sysctl.h>
 #include <unistd.h>
 #include <vector>
 
@@ -204,7 +205,7 @@ inline bool read_vault_record(const std::string &backup_folder, CryptoVaultRecor
     return true;
 }
 
-// Obtiene el OpenPSID de 16 bytes de la consola fisica (via syscall de libkernel o cache del sistema)
+// Obtiene el OpenPSID de 16 bytes de la consola fisica (via sysctl de kernel, dynamic SPRX o cache del sistema)
 inline bool get_console_open_psid(std::uint8_t out_psid[16])
 {
     if (!out_psid)
@@ -218,56 +219,126 @@ inline bool get_console_open_psid(std::uint8_t out_psid[16])
         return true;
     }
 
-#if defined(RTLD_DEFAULT)
-    // 1. Invocar la syscall oficial del kernel si el simbolo esta disponible en libkernel
-    using GetPsIdFn = int (*)(void *);
-    GetPsIdFn psid_fn = reinterpret_cast<GetPsIdFn>(dlsym(RTLD_DEFAULT, "sceKernelGetOpenPsIdForSystem"));
-    if (!psid_fn)
-        psid_fn = reinterpret_cast<GetPsIdFn>(dlsym(RTLD_DEFAULT, "sceKernelGetOpenPsId"));
-    if (psid_fn)
-    {
-        std::uint8_t sys_psid[16] = {0};
-        if (psid_fn(sys_psid) == 0)
+    auto is_valid_psid = [](const std::uint8_t *p) -> bool {
+        if (!p)
+            return false;
+        for (int i = 0; i < 16; ++i)
         {
-            bool non_zero = false;
-            for (int i = 0; i < 16; ++i)
+            if (p[i] != 0)
+                return true;
+        }
+        return false;
+    };
+
+    // 1. Sysctl BSD de kernel: machdep.openpsid (estandar en PS4 y PS5 jailbreak)
+    {
+        for (const char *sysctl_name : {"machdep.openpsid", "kern.openpsid", "security.openpsid"})
+        {
+            std::size_t len = 16;
+            std::uint8_t buf[32] = {0};
+            if (sysctlbyname(sysctl_name, buf, &len, nullptr, 0) == 0 && len >= 16)
             {
-                if (sys_psid[i] != 0) { non_zero = true; break; }
+                if (is_valid_psid(buf))
+                {
+                    std::memcpy(s_psid, buf, 16);
+                    std::memcpy(out_psid, buf, 16);
+                    s_cached = true;
+                    MACHETE_LOG("[VAULT]", "Console OpenPSID retrieved via sysctl '%s': %02x%02x%02x%02x...%02x%02x (16 bytes)",
+                                sysctl_name, out_psid[0], out_psid[1], out_psid[2], out_psid[3], out_psid[14], out_psid[15]);
+                    return true;
+                }
             }
-            if (non_zero)
+        }
+    }
+
+    // 2. Carga dinamica de modulos SPRX de sistema (libSceOpenPsId.sprx, libkernel.sprx)
+    {
+        for (const char *sprx_path : {
+                 "libSceOpenPsId.sprx",
+                 "/system/common/lib/libSceOpenPsId.sprx",
+                 "/system_priv/common/lib/libSceOpenPsId.sprx",
+                 "libkernel.sprx",
+                 "libkernel_sys.sprx",
+                 "/system/common/lib/libkernel.sprx"})
+        {
+            void *handle = dlopen(sprx_path, RTLD_NOW);
+            if (handle)
+            {
+                using GetPsIdFn = int (*)(void *);
+                GetPsIdFn psid_fn = reinterpret_cast<GetPsIdFn>(dlsym(handle, "sceKernelGetOpenPsIdForSystem"));
+                if (!psid_fn)
+                    psid_fn = reinterpret_cast<GetPsIdFn>(dlsym(handle, "sceKernelGetOpenPsId"));
+                if (psid_fn)
+                {
+                    std::uint8_t sys_psid[16] = {0};
+                    if (psid_fn(sys_psid) == 0 && is_valid_psid(sys_psid))
+                    {
+                        std::memcpy(s_psid, sys_psid, 16);
+                        std::memcpy(out_psid, sys_psid, 16);
+                        s_cached = true;
+                        MACHETE_LOG("[VAULT]", "Console OpenPSID retrieved via %s: %02x%02x%02x%02x...%02x%02x (16 bytes)",
+                                    sprx_path, out_psid[0], out_psid[1], out_psid[2], out_psid[3], out_psid[14], out_psid[15]);
+                        return true;
+                    }
+                }
+            }
+        }
+    }
+
+#if defined(RTLD_DEFAULT)
+    // 3. Simbolos en el espacio de direcciones global (RTLD_DEFAULT)
+    {
+        using GetPsIdFn = int (*)(void *);
+        GetPsIdFn psid_fn = reinterpret_cast<GetPsIdFn>(dlsym(RTLD_DEFAULT, "sceKernelGetOpenPsIdForSystem"));
+        if (!psid_fn)
+            psid_fn = reinterpret_cast<GetPsIdFn>(dlsym(RTLD_DEFAULT, "sceKernelGetOpenPsId"));
+        if (psid_fn)
+        {
+            std::uint8_t sys_psid[16] = {0};
+            if (psid_fn(sys_psid) == 0 && is_valid_psid(sys_psid))
             {
                 std::memcpy(s_psid, sys_psid, 16);
                 std::memcpy(out_psid, sys_psid, 16);
                 s_cached = true;
-                MACHETE_LOG("[VAULT]", "Console OpenPSID retrieved via libkernel syscall: %02x%02x...%02x%02x (16 bytes)",
-                            out_psid[0], out_psid[1], out_psid[14], out_psid[15]);
+                MACHETE_LOG("[VAULT]", "Console OpenPSID retrieved via RTLD_DEFAULT: %02x%02x%02x%02x...%02x%02x (16 bytes)",
+                            out_psid[0], out_psid[1], out_psid[2], out_psid[3], out_psid[14], out_psid[15]);
                 return true;
             }
         }
     }
 #endif
 
-    // 2. Probar en las rutas de cache del sistema
+    // 4. Probar en las rutas de almacenamiento de datos del sistema
     for (const char *psid_path : {
              "/system_data/priv/cache/openpsid.dat",
              "/system_data/priv/home/openpsid.dat",
-             "/system_data/priv/mms/openpsid.dat"})
+             "/system_data/priv/mms/openpsid.dat",
+             "/system_data/priv/mms/openpsid",
+             "/system_data/priv/etc/openpsid",
+             "/system_data/priv/cache/openpsid",
+             "/data/openpsid.dat",
+             "/data/openpsid",
+             "/data/MacheteSVG/openpsid.dat"})
     {
         std::FILE *fpsid = std::fopen(psid_path, "rb");
         if (fpsid)
         {
-            std::size_t r = std::fread(out_psid, 1, 16, fpsid);
+            std::uint8_t buf[32] = {0};
+            std::size_t r = std::fread(buf, 1, sizeof(buf), fpsid);
             std::fclose(fpsid);
-            if (r == 16)
+            if (r >= 16 && is_valid_psid(buf))
             {
-                std::memcpy(s_psid, out_psid, 16);
+                std::memcpy(s_psid, buf, 16);
+                std::memcpy(out_psid, buf, 16);
                 s_cached = true;
-                MACHETE_LOG("[VAULT]", "Console OpenPSID retrieved: %02x%02x...%02x%02x (16 bytes)",
-                            out_psid[0], out_psid[1], out_psid[14], out_psid[15]);
+                MACHETE_LOG("[VAULT]", "Console OpenPSID retrieved from file %s: %02x%02x%02x%02x...%02x%02x (16 bytes)",
+                            psid_path, out_psid[0], out_psid[1], out_psid[2], out_psid[3], out_psid[14], out_psid[15]);
                 return true;
             }
         }
     }
+
+    MACHETE_LOG("[VAULT]", "Console OpenPSID not found via sysctl, SPRX, RTLD_DEFAULT or files; OpenPSID remains uninitialized");
     return false;
 }
 

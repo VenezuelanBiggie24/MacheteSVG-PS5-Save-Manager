@@ -1052,6 +1052,32 @@ void WebServer::handle_client(int client_fd)
         return;
     }
 
+    // Ruta: Diagnostico de Verdad-Terreno PFS (/api/dump?title_id=...)
+    if (path == "/api/dump" || path.rfind("/api/dump?", 0) == 0)
+    {
+        std::string query_tid;
+        const auto qpos = path.find('?');
+        if (qpos != std::string::npos)
+        {
+            const std::string query = path.substr(qpos + 1);
+            const auto tpos = query.find("title_id=");
+            if (tpos != std::string::npos)
+            {
+                query_tid = query.substr(tpos + 9);
+                const auto amp = query_tid.find('&');
+                if (amp != std::string::npos)
+                    query_tid = query_tid.substr(0, amp);
+            }
+        }
+
+        const int dumped_count = machete::pfs::dump_installed_save_containers(query_tid, "MANUAL_API_TRIGGER");
+        std::string json = "{\"status\":\"ok\",\"title_id\":\"" + query_tid +
+                           "\",\"dumped_containers\":" + std::to_string(dumped_count) +
+                           ",\"message\":\"Diagnostic dump completed. Inspect machete.log\"}";
+        send_string_response(client_fd, 200, "OK", "application/json", json);
+        return;
+    }
+
     // Ruta: Descarga del Registro de Eventos del Sistema (machete.log)
     if (path == "/api/log" || path == "/log" || path == "/machete.log")
     {

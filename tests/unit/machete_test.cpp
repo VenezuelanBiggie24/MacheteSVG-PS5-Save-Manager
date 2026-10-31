@@ -1316,7 +1316,7 @@ TEST(MacheteParamJsonSizeTest, UpdateFileSizeAndMtimeInParamJson)
 
 TEST(MacheteBuildInfoTest, BuildNumberMatchesExpected)
 {
-    EXPECT_STREQ(machete::build::build_number(), "88");
+    EXPECT_STREQ(machete::build::build_number(), "89");
 }
 
 TEST(MacheteParamJsonDirNameTest, UpdateDirNameInParamJson)
@@ -4032,6 +4032,80 @@ TEST(MacheteEmulatorTest, EmulatorIDNoCollisionWithPS4PS5)
     }
 
     machete::snapshot::remove_dir_tree(mock_root);
+}
+
+TEST(MacheteSfoResignFullTest, FullPs4SfoResignLayoutAndHmac)
+{
+    const std::string tmp_sfo = "/tmp/machete_test_full_resign.sfo";
+    ASSERT_TRUE(machete::sfo::synthesize_ps4_save_param_sfo(
+        tmp_sfo, "CUSA18600", "Book", "DRAGON QUEST XI S", "Adventure Log", "Save 1",
+        0x105f615a, 0x1234567890abcdefULL, 42));
+
+    // Prepare ResignParams with new user_id, new account_id, target_title_id, local psid, and list param
+    machete::sfo::ResignParams rp;
+    rp.target_user_id = 0x20abcdef;
+    rp.target_account_id = 0x9988776655443322ULL;
+    rp.apply_account_id = true;
+    rp.target_title_id = "CUSA18600";
+    rp.sync_savedata_list_param = true;
+    rp.target_savedata_list_param = 99;
+
+    std::uint8_t mock_psid[16] = {0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08,
+                                  0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f, 0x10};
+    rp.psid = mock_psid;
+
+    bool was_modified = false;
+    EXPECT_TRUE(machete::sfo::resign_param_sfo(tmp_sfo, rp, &was_modified));
+    EXPECT_TRUE(was_modified);
+
+    machete::sfo::SfoSaveMetadata meta{};
+    EXPECT_TRUE(machete::sfo::read_sfo_metadata(tmp_sfo, meta));
+    EXPECT_EQ(meta.user_id, 0x20abcdef);
+    EXPECT_EQ(meta.account_id, 0x9988776655443322ULL);
+    EXPECT_EQ(meta.title_id, "CUSA18600");
+    EXPECT_EQ(meta.title_id_1, "CUSA18600");
+    EXPECT_EQ(meta.title_id_2, "CUSA18600");
+    EXPECT_TRUE(meta.has_savedata_list_param);
+    EXPECT_EQ(meta.savedata_list_param, 99u);
+    EXPECT_TRUE(meta.has_psid_hmac);
+
+    // Verify expected HMAC-SHA256
+    std::uint8_t expected_hmac[32] = {0};
+    machete::crypto::hmac_sha256(machete::sfo::PSID_HMAC_KEY, sizeof(machete::sfo::PSID_HMAC_KEY),
+                                 mock_psid, 16, expected_hmac);
+    EXPECT_EQ(std::memcmp(meta.psid_hmac, expected_hmac, 32), 0);
+
+    (void)std::remove(tmp_sfo.c_str());
+}
+
+TEST(MacheteDiagnosticDumpTest, CopyTreeLoggedAndDumpDiagnostics)
+{
+    const std::string src_dir = "/tmp/machete_diag_src";
+    const std::string dst_dir = "/tmp/machete_diag_dst";
+    machete::snapshot::remove_dir_tree(src_dir);
+    machete::snapshot::remove_dir_tree(dst_dir);
+
+    ASSERT_TRUE(machete::snapshot::ensure_directories(src_dir + "/sce_sys"));
+    ASSERT_TRUE(machete::sfo::synthesize_ps4_save_param_sfo(
+        src_dir + "/sce_sys/param.sfo", "CUSA18600", "Book", "DQXI", "Sub", "Det",
+        0x105f615a, 0x12345678ULL, 1));
+
+    {
+        std::ofstream f(src_dir + "/save_payload.bin");
+        f << "TEST_PAYLOAD_BYTES";
+    }
+
+    // Test copy_tree_logged
+    int copied = machete::pfs::copy_tree_logged(src_dir, dst_dir, false, "TEST_OP", "slot00");
+    EXPECT_GE(copied, 2);
+    EXPECT_EQ(access((dst_dir + "/sce_sys/param.sfo").c_str(), R_OK), 0);
+    EXPECT_EQ(access((dst_dir + "/save_payload.bin").c_str(), R_OK), 0);
+
+    // Test dump_mounted_container_diagnostics does not crash
+    machete::pfs::dump_mounted_container_diagnostics(dst_dir, "test_container", "UNIT_TEST");
+
+    machete::snapshot::remove_dir_tree(src_dir);
+    machete::snapshot::remove_dir_tree(dst_dir);
 }
 
 } // namespace hui::testing

@@ -23,12 +23,13 @@
 #include <dirent.h>
 #include <dlfcn.h>
 #include <fcntl.h>
+#include <functional>
 #include <memory>
+#include <mutex>
 #include <string>
 #include <sys/stat.h>
 #include <unistd.h>
 #include <vector>
-#include <mutex>
 
 namespace machete::pfs
 {
@@ -299,6 +300,180 @@ inline int copy_tree_simple(const std::string &src_dir, const std::string &dst_d
     }
     closedir(dir);
     return copied;
+}
+
+// Copia recursiva con registro detallado de cada archivo individual (nombres, tamanos y destino)
+inline int copy_tree_logged(const std::string &src_dir, const std::string &dst_dir,
+                            bool skip_sce_sys, const std::string &op_tag, const std::string &slot_tag,
+                            const std::string &rel_prefix = "", int depth = 0)
+{
+    if (depth >= 8)
+        return 0;
+
+    DIR *dir = opendir(src_dir.c_str());
+    if (!dir)
+        return 0;
+
+    ensure_dir_tree(dst_dir);
+    int copied = 0;
+
+    while (const dirent *ent = readdir(dir))
+    {
+        if (std::strcmp(ent->d_name, ".") == 0 || std::strcmp(ent->d_name, "..") == 0)
+            continue;
+        if (skip_sce_sys && std::strcmp(ent->d_name, "sce_sys") == 0)
+            continue;
+
+        const std::string sp = src_dir + "/" + ent->d_name;
+        const std::string dp = dst_dir + "/" + ent->d_name;
+        const std::string rel_name = rel_prefix.empty() ? ent->d_name : (rel_prefix + "/" + ent->d_name);
+        struct stat st{};
+        if (stat(sp.c_str(), &st) != 0)
+            continue;
+
+        if (S_ISDIR(st.st_mode))
+        {
+            copied += copy_tree_logged(sp, dp, false, op_tag, slot_tag, rel_name, depth + 1);
+        }
+        else if (S_ISREG(st.st_mode))
+        {
+            if (copy_file_atomic(sp, dp))
+            {
+                copied++;
+                MACHETE_LOG("[FILE_SYNC]", "[%s] [%s] %s (%llu bytes) -> %s",
+                            op_tag.c_str(), slot_tag.c_str(), rel_name.c_str(),
+                            static_cast<unsigned long long>(st.st_size), dp.c_str());
+            }
+        }
+    }
+    closedir(dir);
+    return copied;
+}
+
+// Diagnostico integral de verdad-terreno: vuelca arbol completo de archivos (tamanos, permisos, uid/gid)
+// y todos los campos del param.sfo interno (ACCOUNT_ID, user_id, title_ids, psid_hmac, SAVEDATA_LIST_PARAM)
+inline void dump_mounted_container_diagnostics(const std::string &mount_point,
+                                              const std::string &container_name,
+                                              const std::string &phase_tag = "MOUNTED",
+                                              int max_depth = 6)
+{
+    MACHETE_LOG("[DUMP]", "--- BEGIN DUMP [%s] Container: %s (Mount: %s) ---",
+                phase_tag.c_str(), container_name.c_str(), mount_point.c_str());
+
+    std::function<void(const std::string &, const std::string &, int)> scan_dir;
+    scan_dir = [&](const std::string &cur_dir, const std::string &rel_prefix, int depth) {
+        if (depth >= max_depth)
+            return;
+        DIR *dir = opendir(cur_dir.c_str());
+        if (!dir)
+            return;
+
+        while (const dirent *ent = readdir(dir))
+        {
+            if (std::strcmp(ent->d_name, ".") == 0 || std::strcmp(ent->d_name, "..") == 0)
+                continue;
+
+            const std::string full_path = cur_dir + "/" + ent->d_name;
+            const std::string rel_path = rel_prefix.empty() ? ent->d_name : (rel_prefix + "/" + ent->d_name);
+            struct stat st{};
+            if (stat(full_path.c_str(), &st) != 0)
+                continue;
+
+            if (S_ISDIR(st.st_mode))
+            {
+                MACHETE_LOG("[DUMP]", "[%s] [DIR ] %s/ | mode=0%03o | uid=%d gid=%d",
+                            phase_tag.c_str(), rel_path.c_str(),
+                            static_cast<unsigned int>(st.st_mode & 0777),
+                            static_cast<int>(st.st_uid), static_cast<int>(st.st_gid));
+                scan_dir(full_path, rel_path, depth + 1);
+            }
+            else if (S_ISREG(st.st_mode))
+            {
+                MACHETE_LOG("[DUMP]", "[%s] [FILE] %s | size=%llu | mode=0%03o | uid=%d gid=%d",
+                            phase_tag.c_str(), rel_path.c_str(),
+                            static_cast<unsigned long long>(st.st_size),
+                            static_cast<unsigned int>(st.st_mode & 0777),
+                            static_cast<int>(st.st_uid), static_cast<int>(st.st_gid));
+            }
+        }
+        closedir(dir);
+    };
+
+    scan_dir(mount_point, "", 0);
+
+    // Volcar campos del param.sfo interno si existe
+    for (const std::string &sfo_cand : {
+             mount_point + "/sce_sys/param.sfo",
+             mount_point + "/sce_sys/PARAM.SFO",
+             mount_point + "/param.sfo"})
+    {
+        if (access(sfo_cand.c_str(), R_OK) == 0)
+        {
+            const sfo::SfoSaveMetadata meta = sfo::read_sfo_metadata(sfo_cand);
+            if (meta.valid)
+            {
+                char hmac_hex[65] = {0};
+                if (meta.has_psid_hmac)
+                {
+                    for (int i = 0; i < 16; ++i)
+                        std::snprintf(&hmac_hex[i * 2], 3, "%02x", meta.psid_hmac[i]);
+                }
+                MACHETE_LOG("[DUMP]", "[%s] [PARAM.SFO] %s | valid=1 | title_id='%s' | title_id_1='%s' | title_id_2='%s' | user_id=0x%08x (%u) | account_id=0x%016llx | psid_hmac=%s (first16: %s) | list_param=%s (0x%08x, %u)",
+                            phase_tag.c_str(), sfo_cand.c_str(),
+                            meta.title_id.c_str(),
+                            meta.title_id_1.c_str(),
+                            meta.title_id_2.c_str(),
+                            meta.user_id, meta.user_id,
+                            static_cast<unsigned long long>(meta.account_id),
+                            meta.has_psid_hmac ? "YES" : "NO",
+                            meta.has_psid_hmac ? hmac_hex : "NONE",
+                            meta.has_savedata_list_param ? "YES" : "NO",
+                            meta.savedata_list_param, meta.savedata_list_param);
+            }
+            else
+            {
+                MACHETE_LOG("[DUMP]", "[%s] [PARAM.SFO] %s found but invalid SFO header",
+                            phase_tag.c_str(), sfo_cand.c_str());
+            }
+        }
+    }
+
+    // Volcar campos del param.json si existe (PS5)
+    for (const std::string &json_cand : {
+             mount_point + "/sce_sys/param.json",
+             mount_point + "/param.json"})
+    {
+        if (access(json_cand.c_str(), R_OK) == 0)
+        {
+            std::FILE *jf = std::fopen(json_cand.c_str(), "rb");
+            if (jf)
+            {
+                std::fseek(jf, 0, SEEK_END);
+                long jsz = std::ftell(jf);
+                std::fseek(jf, 0, SEEK_SET);
+                if (jsz > 0 && jsz < 32768)
+                {
+                    std::string jbuf(static_cast<std::size_t>(jsz), '\0');
+                    if (std::fread(&jbuf[0], 1, jbuf.size(), jf) == jbuf.size())
+                    {
+                        std::string compact;
+                        for (char c : jbuf)
+                        {
+                            if (c == '\r' || c == '\n')
+                                compact += ' ';
+                            else
+                                compact += c;
+                        }
+                        MACHETE_LOG("[DUMP]", "[%s] [PARAM.JSON] %s | size=%ld | content: %s",
+                                    phase_tag.c_str(), json_cand.c_str(), jsz, compact.c_str());
+                    }
+                }
+                std::fclose(jf);
+            }
+        }
+    }
+
+    MACHETE_LOG("[DUMP]", "--- END DUMP [%s] Container: %s ---", phase_tag.c_str(), container_name.c_str());
 }
 
 inline bool decrypt_pfs_key_for_slot(const std::string &save_dir,
@@ -680,7 +855,7 @@ public:
         return false;
     }
 
-    bool mount(const std::string &image_path, const std::uint8_t key[32], bool write_back)
+    bool mount(const std::string &image_path, const std::uint8_t key[32], bool write_back, const std::string &diag_tag = "MOUNTED")
     {
         if (mounted_)
             return false;
@@ -838,6 +1013,7 @@ public:
         staged_raw_path_ = staged_raw;
         MACHETE_LOG("[PFS]", "Mounted PFS container %s at %s (write_back=%d, rc=%d, helper=%d)",
                     image_path.c_str(), SAVE_MNT_PATH, write_back ? 1 : 0, rc, used_helper_ ? 1 : 0);
+        dump_mounted_container_diagnostics(SAVE_MNT_PATH, image_path, diag_tag);
         return true;
     }
 
@@ -948,14 +1124,14 @@ inline int extract_decrypted_slots_unlocked(const std::string &source_save_dir,
 
         ScopedPfsMount mnt;
         const std::string image_path = source_save_dir + "/" + slot_name;
-        if (!mnt.mount(image_path, plain_key, false))
+        if (!mnt.mount(image_path, plain_key, false, "BACKUP_EXTRACT"))
             continue;
 
         const std::string slot_label = (slot_name.rfind("sdimg_", 0) == 0) ? slot_name.substr(6) : slot_name;
         const std::string out_slot_dir = dest_backup_folder + "/decrypted/" + slot_label;
         ensure_dir_tree(out_slot_dir);
 
-        const int count = copy_tree_simple(mnt.mount_point(), out_slot_dir, false);
+        const int count = copy_tree_logged(mnt.mount_point(), out_slot_dir, false, "EXTRACT", slot_name);
         total_extracted += count;
 
         // Preservar el keystone autentico desde el interior del contenedor PFS
@@ -1358,6 +1534,21 @@ inline bool preserve_local_save_dummy(const std::string &dst_target, const std::
         }
     }
 
+    // Diagnosticar y volcar estructura de verdad-terreno del guardado fresco de la consola local
+    for (const auto &slot : local_slots)
+    {
+        std::uint8_t dummy_plain_key[32] = {0};
+        if (decrypt_pfs_key_for_slot(dst_target, slot, is_ps5, dummy_plain_key))
+        {
+            ScopedPfsMount local_mnt;
+            const std::string local_img = dst_target + "/" + slot;
+            if (local_mnt.mount(local_img, dummy_plain_key, false, "LOCAL_DUMMY_FRESH"))
+            {
+                (void)local_mnt.unmount();
+            }
+        }
+    }
+
     if (access((dst_target + "/sce_sys").c_str(), F_OK) == 0)
     {
         (void)copy_tree_simple(dst_target + "/sce_sys", staging_backup_dir + "/sce_sys", false);
@@ -1548,6 +1739,23 @@ inline PfsRestoreReport inject_and_resign_save(const std::string &title_id,
          access((backup_folder + "/meta/param.json").c_str(), R_OK) == 0 ||
          access((backup_folder + "/.meta/sce_sys/param.json").c_str(), R_OK) == 0);
 
+    // Cosechar metadatos del SFO del backup (si existe) para preservar SAVEDATA_LIST_PARAM y TITLE_ID
+    sfo::SfoSaveMetadata backup_sfo_meta{};
+    for (const std::string &cand_bu_sfo : {
+             backup_folder + "/param.sfo",
+             backup_folder + "/sce_sys/param.sfo",
+             backup_folder + "/.meta/param.sfo",
+             backup_folder + "/decrypted/param.sfo",
+             backup_folder + "/decrypted/sce_sys/param.sfo"})
+    {
+        if (access(cand_bu_sfo.c_str(), R_OK) == 0)
+        {
+            backup_sfo_meta = sfo::read_sfo_metadata(cand_bu_sfo);
+            if (backup_sfo_meta.valid)
+                break;
+        }
+    }
+
     // 1. Si habia un Save Dummy local, cosechar su keystone autentico de 96 bytes
     //    y su PARAMS.psid_hmac / account_id nativo de esta consola e instalacion
     std::string harvested_keystone_path;
@@ -1680,10 +1888,26 @@ inline PfsRestoreReport inject_and_resign_save(const std::string &title_id,
         rp.target_user_id = (user_id != 0) ? user_id : dummy_sfo_meta.user_id;
         rp.target_account_id = active_account_id;
         rp.apply_account_id = true;
+        rp.target_title_id = title_id;
         if (has_psid)
             rp.psid = console_psid;
         if (dummy_sfo_meta.has_psid_hmac)
             rp.exact_psid_hmac = dummy_sfo_meta.psid_hmac;
+
+        if (backup_sfo_meta.valid && backup_sfo_meta.has_savedata_list_param)
+        {
+            rp.sync_savedata_list_param = true;
+            rp.target_savedata_list_param = backup_sfo_meta.savedata_list_param;
+            MACHETE_LOG("[PFS]", "Propagating backup SAVEDATA_LIST_PARAM = 0x%08x (%u)",
+                        backup_sfo_meta.savedata_list_param, backup_sfo_meta.savedata_list_param);
+        }
+        else if (dummy_sfo_meta.valid && dummy_sfo_meta.has_savedata_list_param)
+        {
+            rp.sync_savedata_list_param = true;
+            rp.target_savedata_list_param = dummy_sfo_meta.savedata_list_param;
+            MACHETE_LOG("[PFS]", "Preserving dummy SAVEDATA_LIST_PARAM = 0x%08x (%u)",
+                        dummy_sfo_meta.savedata_list_param, dummy_sfo_meta.savedata_list_param);
+        }
 
         for (const auto &slot_name : target_slots)
         {
@@ -1707,7 +1931,7 @@ inline PfsRestoreReport inject_and_resign_save(const std::string &title_id,
 
             ScopedPfsMount mnt;
             const std::string image_path = dst_target + "/" + slot_name;
-            if (!mnt.mount(image_path, plain_key, true))
+            if (!mnt.mount(image_path, plain_key, true, "RESTORE_INJECT"))
             {
                 struct stat st_f{};
                 std::uint64_t fsz = 0;
@@ -1839,7 +2063,7 @@ inline PfsRestoreReport inject_and_resign_save(const std::string &title_id,
                 const std::string slot_dec_dir = resolve_decrypted_slot_dir(effective_dec_source, slot_label);
                 if (!slot_dec_dir.empty())
                 {
-                    const int copied = copy_tree_simple(slot_dec_dir, mnt.mount_point(), true);
+                    const int copied = copy_tree_logged(slot_dec_dir, mnt.mount_point(), true, "INJECT", slot_name);
                     report.injected_files += copied;
                     MACHETE_LOG("[PFS]", "Injected %d decrypted files from %s into mounted PS5 slot %s",
                                  copied, slot_dec_dir.c_str(), slot_name.c_str());
@@ -1858,12 +2082,20 @@ inline PfsRestoreReport inject_and_resign_save(const std::string &title_id,
                 }
 
                 // Si existe param.sfo dentro del contenedor PS5, resignarlo con el Account ID y User ID activos
-                if (access(inner_sfo_path.c_str(), F_OK) == 0 && sfo::resign_param_sfo(inner_sfo_path, rp))
+                bool ps5_sfo_mod = false;
+                if (access(inner_sfo_path.c_str(), F_OK) == 0)
                 {
-                    report.sfo_resigned = true;
-                    MACHETE_LOG("[PFS]", "Resigned inner PS5 param.sfo inside PFS mount: %s", slot_name.c_str());
+                    if (sfo::resign_param_sfo(inner_sfo_path, rp, &ps5_sfo_mod, slot_name + "/sce_sys/param.sfo"))
+                    {
+                        if (ps5_sfo_mod)
+                            report.sfo_resigned = true;
+                        MACHETE_LOG("[PFS]", "[PS5] Resign check inner param.sfo inside PFS mount: %s (modified=%d, acc=0x%016llx, uid=0x%x)",
+                                    slot_name.c_str(), ps5_sfo_mod ? 1 : 0,
+                                    static_cast<unsigned long long>(rp.target_account_id), rp.target_user_id);
+                    }
                 }
 
+                dump_mounted_container_diagnostics(mnt.mount_point(), slot_name, "RESTORED_COMMITTED_PS5");
                 (void)mnt.unmount();
 
                 struct stat st_sd{};
@@ -1918,7 +2150,7 @@ inline PfsRestoreReport inject_and_resign_save(const std::string &title_id,
                 const std::string slot_dec_dir = resolve_decrypted_slot_dir(effective_dec_source, slot_label);
                 if (!slot_dec_dir.empty())
                 {
-                    const int copied = copy_tree_simple(slot_dec_dir, mnt.mount_point(), true);
+                    const int copied = copy_tree_logged(slot_dec_dir, mnt.mount_point(), true, "INJECT", slot_name);
                     report.injected_files += copied;
 
                     // Copiar tambien param.sfo e icon0.png del backup al interior del contenedor para conservar
@@ -1928,6 +2160,14 @@ inline PfsRestoreReport inject_and_resign_save(const std::string &title_id,
                     {
                         ensure_dir_tree(mnt.mount_point() + "/sce_sys");
                         (void)copy_file_atomic(dec_sfo, mnt.mount_point() + "/sce_sys/param.sfo");
+                        const sfo::SfoSaveMetadata dec_meta = sfo::read_sfo_metadata(dec_sfo);
+                        if (dec_meta.valid && dec_meta.has_savedata_list_param)
+                        {
+                            rp.sync_savedata_list_param = true;
+                            rp.target_savedata_list_param = dec_meta.savedata_list_param;
+                            MACHETE_LOG("[PFS]", "Adopted SAVEDATA_LIST_PARAM = 0x%08x (%u) from decrypted slot %s",
+                                        dec_meta.savedata_list_param, dec_meta.savedata_list_param, slot_name.c_str());
+                        }
                     }
                     const std::string dec_icon = slot_dec_dir + "/sce_sys/icon0.png";
                     if (access(dec_icon.c_str(), R_OK) == 0)
@@ -1955,23 +2195,32 @@ inline PfsRestoreReport inject_and_resign_save(const std::string &title_id,
                     report.keystone_injected = true;
                 }
 
-                // Resignar param.sfo DENTRO del contenedor PFS montado (ACCOUNT_ID, user_id, PARAMS.psid_hmac)
+                // Resignar param.sfo DENTRO del contenedor PFS montado (ACCOUNT_ID, user_id, PARAMS.psid_hmac, title_ids, list_param)
                 sfo::SfoSaveMetadata resigned_meta{};
+                bool sfo_was_modified = false;
                 for (const std::string &inner_sfo : {
                          mnt.mount_point() + "/sce_sys/param.sfo",
                          mnt.mount_point() + "/sce_sys/PARAM.SFO",
                          mnt.mount_point() + "/param.sfo"})
                 {
-                    if (access(inner_sfo.c_str(), F_OK) == 0 && sfo::resign_param_sfo(inner_sfo, rp))
+                    bool this_mod = false;
+                    if (access(inner_sfo.c_str(), F_OK) == 0 &&
+                        sfo::resign_param_sfo(inner_sfo, rp, &this_mod, slot_name + "/sce_sys/param.sfo"))
                     {
-                        report.sfo_resigned = true;
+                        if (this_mod)
+                        {
+                            report.sfo_resigned = true;
+                            sfo_was_modified = true;
+                        }
                         resigned_meta = sfo::read_sfo_metadata(inner_sfo);
-                        MACHETE_LOG("[PFS]", "Resigned inner PS4 param.sfo inside PFS mount: %s (Account ID: 0x%04llx...%04llx)",
-                                    inner_sfo.c_str(),
+                        MACHETE_LOG("[PFS]", "Resigned inner PS4 param.sfo inside PFS mount: %s (modified=%d, Account ID: 0x%04llx...%04llx, user_id=0x%x)",
+                                    inner_sfo.c_str(), this_mod ? 1 : 0,
                                     static_cast<unsigned long long>((active_account_id >> 48) & 0xffff),
-                                    static_cast<unsigned long long>(active_account_id & 0xffff));
+                                    static_cast<unsigned long long>(active_account_id & 0xffff),
+                                    rp.target_user_id);
                     }
                 }
+                (void)sfo_was_modified;
 
                 // Exportar <slot>_icon0.png hacia savedata_meta/user/<TitleID>/ antes de desmontar
                 const std::string inner_icon = mnt.mount_point() + "/sce_sys/icon0.png";
@@ -1985,6 +2234,7 @@ inline PfsRestoreReport inject_and_resign_save(const std::string &title_id,
                 }
 
                 // Desmontar para que el kernel recalcule el arbol Merkle y selle el contenedor
+                dump_mounted_container_diagnostics(mnt.mount_point(), slot_name, "RESTORED_COMMITTED_PS4");
                 (void)mnt.unmount();
 
                 struct stat st_sd{};
@@ -2039,6 +2289,117 @@ inline PfsRestoreReport inject_and_resign_save(const std::string &title_id,
     }
 
     return report;
+}
+
+// Vuelca la verdad-terreno de todos los contenedores instalados en la consola para un Title ID dado (o todos)
+inline int dump_installed_save_containers(const std::string &target_title_id = "",
+                                          const std::string &label_tag = "DIAG_DUMP")
+{
+    std::lock_guard<std::mutex> lock(pfs_global_mount_mutex());
+    MACHETE_LOG("[DUMP]", "=== MANUAL DIAGNOSTIC DUMP TRIGGERED (target_title_id='%s', label='%s') ===",
+                target_title_id.c_str(), label_tag.c_str());
+
+    std::uint8_t console_psid[16] = {0};
+    const bool has_psid = vault::get_console_open_psid(console_psid);
+    MACHETE_LOG("[DUMP]", "Console OpenPSID status: has_psid=%d", has_psid ? 1 : 0);
+
+    int total_dumped = 0;
+
+    DIR *user_home = opendir("/user/home");
+    if (!user_home)
+    {
+        MACHETE_LOG("[DUMP]", "Cannot open /user/home for scanning installed containers");
+        return 0;
+    }
+
+    std::vector<std::string> user_folders;
+    while (const dirent *ent = readdir(user_home))
+    {
+        if (ent->d_name[0] == '.')
+            continue;
+        user_folders.push_back(ent->d_name);
+    }
+    closedir(user_home);
+
+    for (const auto &u_str : user_folders)
+    {
+        const std::string u_base = std::string("/user/home/") + u_str;
+
+        // 1. Escanear contenedores PS5 (/user/home/<uid>/savedata_prospero/<TitleID>)
+        const std::string ps5_base = u_base + "/savedata_prospero";
+        DIR *ps5_dir = opendir(ps5_base.c_str());
+        if (ps5_dir)
+        {
+            while (const dirent *ent = readdir(ps5_dir))
+            {
+                if (ent->d_name[0] == '.')
+                    continue;
+                const std::string tid = ent->d_name;
+                if (!target_title_id.empty() && tid != target_title_id)
+                    continue;
+
+                const std::string tid_dir = ps5_base + "/" + tid;
+                std::vector<std::string> slots;
+                if (has_local_save_dummy(tid_dir, true, &slots))
+                {
+                    for (const auto &slot : slots)
+                    {
+                        std::uint8_t plain_key[32] = {0};
+                        if (decrypt_pfs_key_for_slot(tid_dir, slot, true, plain_key))
+                        {
+                            ScopedPfsMount mnt;
+                            const std::string img = tid_dir + "/" + slot;
+                            if (mnt.mount(img, plain_key, false, label_tag + "_PS5_" + tid))
+                            {
+                                total_dumped++;
+                                (void)mnt.unmount();
+                            }
+                        }
+                    }
+                }
+            }
+            closedir(ps5_dir);
+        }
+
+        // 2. Escanear contenedores PS4 (/user/home/<uid>/savedata/<TitleID>)
+        const std::string ps4_base = u_base + "/savedata";
+        DIR *ps4_dir = opendir(ps4_base.c_str());
+        if (ps4_dir)
+        {
+            while (const dirent *ent = readdir(ps4_dir))
+            {
+                if (ent->d_name[0] == '.')
+                    continue;
+                const std::string tid = ent->d_name;
+                if (!target_title_id.empty() && tid != target_title_id)
+                    continue;
+
+                const std::string tid_dir = ps4_base + "/" + tid;
+                std::vector<std::string> slots;
+                if (has_local_save_dummy(tid_dir, false, &slots))
+                {
+                    for (const auto &slot : slots)
+                    {
+                        std::uint8_t plain_key[32] = {0};
+                        if (decrypt_pfs_key_for_slot(tid_dir, slot, false, plain_key))
+                        {
+                            ScopedPfsMount mnt;
+                            const std::string img = tid_dir + "/" + slot;
+                            if (mnt.mount(img, plain_key, false, label_tag + "_PS4_" + tid))
+                            {
+                                total_dumped++;
+                                (void)mnt.unmount();
+                            }
+                        }
+                    }
+                }
+            }
+            closedir(ps4_dir);
+        }
+    }
+
+    MACHETE_LOG("[DUMP]", "=== DIAGNOSTIC DUMP FINISHED: %d container(s) evaluated ===", total_dumped);
+    return total_dumped;
 }
 
 } // namespace machete::pfs
