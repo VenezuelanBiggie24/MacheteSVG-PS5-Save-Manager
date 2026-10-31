@@ -274,6 +274,42 @@ std::uint64_t calculate_directory_size(const std::string &path, int depth = 0)
     return total;
 }
 
+bool directory_has_files(const std::string &path, int depth = 0)
+{
+    if (depth >= kMaxDirectoryDepth)
+    {
+        return false;
+    }
+
+    struct stat st{};
+    if (stat(path.c_str(), &st) != 0)
+        return false;
+    if (S_ISREG(st.st_mode))
+        return true;
+    if (!S_ISDIR(st.st_mode))
+        return false;
+
+    ScopedDir dir(path);
+    if (!dir.is_valid())
+        return false;
+
+    while (const dirent *entry = readdir(dir.get()))
+    {
+        if (std::strcmp(entry->d_name, ".") == 0 || std::strcmp(entry->d_name, "..") == 0)
+            continue;
+        const std::string sub_path = path + "/" + entry->d_name;
+        struct stat sub_st{};
+        if (stat(sub_path.c_str(), &sub_st) == 0)
+        {
+            if (S_ISREG(sub_st.st_mode))
+                return true;
+            if (S_ISDIR(sub_st.st_mode) && directory_has_files(sub_path, depth + 1))
+                return true;
+        }
+    }
+    return false;
+}
+
 bool copy_file_with_fsync(const std::string &src, const std::string &dst,
                           std::uint64_t &bytes_copied,
                           std::uint64_t total_bytes,
@@ -1872,7 +1908,7 @@ std::string resolve_default_save_path(const scanner::ScannedGame &game)
 std::string resolve_existing_save_path(const scanner::ScannedGame &game)
 {
     if (!game.save_path.empty() && access(game.save_path.c_str(), F_OK) == 0 &&
-        calculate_directory_size(game.save_path) > 0)
+        (calculate_directory_size(game.save_path) > 0 || directory_has_files(game.save_path)))
     {
         return game.save_path;
     }
@@ -1917,7 +1953,7 @@ std::string resolve_existing_save_path(const scanner::ScannedGame &game)
                 };
                 for (const auto &cand : candidates)
                 {
-                    if (access(cand.c_str(), F_OK) == 0 && calculate_directory_size(cand) > 0)
+                    if (access(cand.c_str(), F_OK) == 0 && (calculate_directory_size(cand) > 0 || directory_has_files(cand)))
                         return cand;
                 }
             }
@@ -2462,12 +2498,12 @@ __attribute__((noinline)) OperationResult restore_from_folder(const scanner::Sca
 
         MACHETE_BREADCRUMB("restore_from_folder: calculate_size");
         const std::uint64_t total_dir_bytes = calculate_directory_size(backup_folder);
-        if (total_dir_bytes == 0)
+        if (total_dir_bytes == 0 && !directory_has_files(backup_folder))
         {
             res.success = false;
-            res.message = is_es ? "La carpeta de respaldo esta vacia (0 bytes)"
-                                : "Backup folder is empty (0 bytes)";
-            MACHETE_LOG("[RESTORE]", "Empty backup folder (0 bytes): %s", backup_folder.c_str());
+            res.message = is_es ? "La carpeta de respaldo esta vacia (0 archivos)"
+                                : "Backup folder is empty (0 files)";
+            MACHETE_LOG("[RESTORE]", "Empty backup folder (0 files): %s", backup_folder.c_str());
             return res;
         }
 
@@ -3548,6 +3584,10 @@ BatchSummary execute_batch_backup(
         storage::ensure_internal_storage();
         root = "/data/" + std::string(storage::ROOT_DIR_NAME);
     }
+    while (root.size() > 1 && root.back() == '/')
+    {
+        root.pop_back();
+    }
     ensure_directories_recursive(root);
 
     storage::StorageDevice dest_device;
@@ -3587,8 +3627,21 @@ BatchSummary execute_batch_backup(
         if (!found)
         {
             game.title_id = tid;
-            game.title = tid;
-            game.platform = (tid.rfind("CUSA", 0) == 0) ? "PS4" : "PS5";
+            if (tid.rfind("EMU_", 0) == 0)
+            {
+                game.platform = "EMULATOR";
+                const auto *emu_target = emulator::find_emulator_target_by_id(tid);
+                game.title = emu_target ? emu_target->name : tid;
+                if (emu_target && !emu_target->source_paths.empty())
+                {
+                    game.save_path = emu_target->source_paths[0];
+                }
+            }
+            else
+            {
+                game.title = tid;
+                game.platform = (tid.rfind("CUSA", 0) == 0) ? "PS4" : "PS5";
+            }
         }
         item.title_name = game.title.empty() ? tid : game.title;
 
@@ -3615,8 +3668,9 @@ BatchSummary execute_batch_backup(
         }
         else
         {
+            const bool is_es = (machete::i18n::current_language() == machete::i18n::Language::Spanish);
             item.success = false;
-            item.error_message = res.message.empty() ? "Backup failed" : res.message;
+            item.error_message = res.message.empty() ? (is_es ? "Fallo en el respaldo" : "Backup failed") : res.message;
             summary.failed++;
             MACHETE_LOG("[BATCH_BACKUP]", "Title %s backup failed: %s",
                         tid.c_str(), item.error_message.c_str());
@@ -3653,6 +3707,10 @@ BatchSummary execute_batch_restore(
         storage::ensure_internal_storage();
         root = "/data/" + std::string(storage::ROOT_DIR_NAME);
     }
+    while (root.size() > 1 && root.back() == '/')
+    {
+        root.pop_back();
+    }
 
     auto scanned_games = scanner::scan_installed_games_and_saves();
 
@@ -3683,8 +3741,21 @@ BatchSummary execute_batch_restore(
         if (!found)
         {
             game.title_id = tid;
-            game.title = tid;
-            game.platform = (tid.rfind("CUSA", 0) == 0) ? "PS4" : "PS5";
+            if (tid.rfind("EMU_", 0) == 0)
+            {
+                game.platform = "EMULATOR";
+                const auto *emu_target = emulator::find_emulator_target_by_id(tid);
+                game.title = emu_target ? emu_target->name : tid;
+                if (emu_target && !emu_target->source_paths.empty())
+                {
+                    game.save_path = emu_target->source_paths[0];
+                }
+            }
+            else
+            {
+                game.title = tid;
+                game.platform = (tid.rfind("CUSA", 0) == 0) ? "PS4" : "PS5";
+            }
         }
         item.title_name = game.title.empty() ? tid : game.title;
 
@@ -3699,44 +3770,62 @@ BatchSummary execute_batch_restore(
         }
 
         std::string backup_folder;
-        std::string expected_folder = root + "/" + tid + " - " + sanitize_name(game.title);
-        std::string exact_folder = root + "/" + tid;
-        if (access(expected_folder.c_str(), F_OK) == 0)
+        if (game.platform == "EMULATOR" || tid.rfind("EMU_", 0) == 0)
         {
-            backup_folder = expected_folder;
-        }
-        else if (access(exact_folder.c_str(), F_OK) == 0)
-        {
-            backup_folder = exact_folder;
-        }
-        else
-        {
-            ScopedDir dir(root);
-            if (dir.is_valid())
+            const auto *emu_target = emulator::find_emulator_target_by_id(tid);
+            std::string emu_subpath = emu_target ? emu_target->target_backup_subpath
+                                                 : ("emulators/" + (tid.size() > 4 ? tid.substr(4) : tid));
+            std::string emu_folder = root + "/" + emu_subpath;
+            if (access(emu_folder.c_str(), F_OK) == 0)
             {
-                while (const dirent *ent = readdir(dir.get()))
+                backup_folder = emu_folder;
+            }
+        }
+
+        if (backup_folder.empty())
+        {
+            std::string expected_folder = root + "/" + tid + " - " + sanitize_name(game.title);
+            std::string exact_folder = root + "/" + tid;
+            if (access(expected_folder.c_str(), F_OK) == 0)
+            {
+                backup_folder = expected_folder;
+            }
+            else if (access(exact_folder.c_str(), F_OK) == 0)
+            {
+                backup_folder = exact_folder;
+            }
+            else
+            {
+                ScopedDir dir(root);
+                if (dir.is_valid())
                 {
-                    if (ent->d_name[0] == '.')
-                        continue;
-                    std::string dname = ent->d_name;
-                    if (dname.rfind(tid, 0) == 0)
+                    while (const dirent *ent = readdir(dir.get()))
                     {
-                        std::string cand = root + "/" + dname;
-                        struct stat st{};
-                        if (stat(cand.c_str(), &st) == 0 && S_ISDIR(st.st_mode))
+                        if (ent->d_name[0] == '.')
+                            continue;
+                        std::string dname = ent->d_name;
+                        if (dname.rfind(tid, 0) == 0)
                         {
-                            backup_folder = cand;
-                            break;
+                            std::string cand = root + "/" + dname;
+                            struct stat st{};
+                            if (stat(cand.c_str(), &st) == 0 && S_ISDIR(st.st_mode))
+                            {
+                                backup_folder = cand;
+                                break;
+                            }
                         }
                     }
                 }
             }
         }
 
+        const bool is_es = (machete::i18n::current_language() == machete::i18n::Language::Spanish);
         if (backup_folder.empty() || access(backup_folder.c_str(), F_OK) != 0)
         {
             item.success = false;
-            item.error_message = "No backup folder found in " + root + " for " + tid;
+            item.error_message = is_es
+                ? ("No se encontro carpeta de respaldo en " + root + " para " + tid)
+                : ("No backup folder found in " + root + " for " + tid);
             summary.failed++;
             MACHETE_LOG("[BATCH_RESTORE]", "No backup folder found for %s in %s", tid.c_str(), root.c_str());
             summary.results.push_back(std::move(item));
@@ -3757,7 +3846,7 @@ BatchSummary execute_batch_restore(
         else
         {
             item.success = false;
-            item.error_message = res.message.empty() ? "Restore failed" : res.message;
+            item.error_message = res.message.empty() ? (is_es ? "Fallo en la restauracion" : "Restore failed") : res.message;
             summary.failed++;
             MACHETE_LOG("[BATCH_RESTORE]", "Title %s restore failed: %s",
                         tid.c_str(), item.error_message.c_str());

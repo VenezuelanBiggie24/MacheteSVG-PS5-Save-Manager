@@ -164,9 +164,11 @@ public:
             idx++;
 
         std::string suffix = rel.substr(idx);
+        if (suffix.empty())
+            return false;
         if (suffix == "/data")
             return (source == "/user/data" || source == "/data");
-        if (source == suffix)
+        if (!source.empty() && source == suffix)
             return true;
         if (suffix == "/preinst/common/font" || suffix == "/mnt/disc")
             return true;
@@ -196,6 +198,51 @@ public:
     {
         (void)force;
         std::lock_guard<std::mutex> lock(mutex_);
+        refresh_locked();
+    }
+
+    bool is_blocked(const std::string &title_id, std::string *out_reason)
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        refresh_locked();
+        if (!is_title_valid(title_id) || unknown_)
+        {
+            if (out_reason)
+                *out_reason = unknown_ ? reason_ : "unsupported save title ID";
+            return true;
+        }
+        for (const auto &entry : active_titles_)
+        {
+            if (entry.title_id == title_id)
+            {
+                if (out_reason)
+                    *out_reason = entry.title_id + ": " + entry.origin;
+                return true;
+            }
+        }
+        if (out_reason)
+            out_reason->clear();
+        return false;
+    }
+
+    std::vector<std::string> get_active_ids()
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        refresh_locked();
+        std::vector<std::string> ids;
+        ids.reserve(active_titles_.size());
+        for (const auto &item : active_titles_)
+        {
+            ids.push_back(item.title_id);
+        }
+        return ids;
+    }
+
+private:
+    TitleActivityMonitor() = default;
+
+    void refresh_locked()
+    {
         if (mock_mode_)
         {
             active_titles_ = mock_active_titles_;
@@ -326,6 +373,8 @@ public:
                 if (ent->d_name[0] == '.')
                     continue;
                 std::string entry_name = ent->d_name;
+                if (entry_name == "pfsmnt" || entry_name == "common" || entry_name == "tmp")
+                    continue;
                 std::string full_path = "/mnt/sandbox/" + entry_name;
                 parse_mount_path_locked(full_path);
             }
@@ -353,46 +402,6 @@ public:
         reason_.clear();
 #endif
     }
-
-    bool is_blocked(const std::string &title_id, std::string *out_reason)
-    {
-        refresh();
-        std::lock_guard<std::mutex> lock(mutex_);
-        if (!is_title_valid(title_id) || unknown_)
-        {
-            if (out_reason)
-                *out_reason = unknown_ ? reason_ : "unsupported save title ID";
-            return true;
-        }
-        for (const auto &entry : active_titles_)
-        {
-            if (entry.title_id == title_id)
-            {
-                if (out_reason)
-                    *out_reason = entry.title_id + ": " + entry.origin;
-                return true;
-            }
-        }
-        if (out_reason)
-            out_reason->clear();
-        return false;
-    }
-
-    std::vector<std::string> get_active_ids()
-    {
-        refresh();
-        std::lock_guard<std::mutex> lock(mutex_);
-        std::vector<std::string> ids;
-        ids.reserve(active_titles_.size());
-        for (const auto &item : active_titles_)
-        {
-            ids.push_back(item.title_id);
-        }
-        return ids;
-    }
-
-private:
-    TitleActivityMonitor() = default;
 
     void add_active_title_locked(const std::string &title, const std::string &origin)
     {
@@ -436,6 +445,12 @@ private:
 
         pos += prefix.size();
         std::string sub = path.substr(pos);
+
+        if (sub == "pfsmnt" || sub == "pfsmnt/" || sub == "common" || sub == "common/" ||
+            sub == "tmp" || sub == "tmp/")
+        {
+            return;
+        }
 
         while (!sub.empty())
         {

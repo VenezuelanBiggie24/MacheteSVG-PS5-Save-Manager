@@ -1223,6 +1223,7 @@ constexpr std::string_view kWebUiHtml = R"rawhtml(<!DOCTYPE html>
 
         const isPs4 = g.platform === 'PS4';
         const hasDummy = Boolean(g.has_save_dummy || g.has_save || isPs4);
+        const isChecked = selectedBatchTitleIds.has(g.title_id);
         const crossBadgeHtml = isPs4
           ? `<span class="title-id-badge" style="color:#34d399; border-color:rgba(16,185,129,0.35); background:rgba(16,185,129,0.12);">MODO APOLLO RESIGN</span>`
           : (hasDummy
@@ -1247,7 +1248,7 @@ constexpr std::string_view kWebUiHtml = R"rawhtml(<!DOCTYPE html>
             </div>
             <div class="game-meta">
               <div class="game-badge-row">
-                <input type="checkbox" class="batch-checkbox" data-tid="${escapeAttr(g.title_id)}" onchange="onBatchCheckChanged()" style="width:18px; height:18px; cursor:pointer; accent-color:var(--primary); margin-right:4px;" title="Seleccionar para lote">
+                <input type="checkbox" class="batch-checkbox" data-tid="${escapeAttr(g.title_id)}" onchange="onBatchCheckChanged(event)" ${isChecked ? 'checked' : ''} style="width:18px; height:18px; cursor:pointer; accent-color:var(--primary); margin-right:4px;" title="Seleccionar para lote">
                 <span class="badge ${platformBadgeClass}">${escapeHtml(g.platform)}</span>
                 <span class="title-id-badge">${escapeHtml(g.title_id)}</span>
                 ${crossBadgeHtml}
@@ -1434,18 +1435,32 @@ constexpr std::string_view kWebUiHtml = R"rawhtml(<!DOCTYPE html>
       }
     }
 
+    const selectedBatchTitleIds = new Set();
+
     function getSelectedBatchTitleIds() {
-      const checkboxes = document.querySelectorAll('.batch-checkbox:checked');
-      const tids = [];
-      checkboxes.forEach(cb => {
-        if (cb.dataset.tid) tids.push(cb.dataset.tid);
-      });
-      return tids;
+      return Array.from(selectedBatchTitleIds);
     }
 
-    function onBatchCheckChanged() {
-      const tids = getSelectedBatchTitleIds();
-      const count = tids.length;
+    function onBatchCheckChanged(e) {
+      if (e && e.target && e.target.dataset.tid) {
+        if (e.target.checked) {
+          selectedBatchTitleIds.add(e.target.dataset.tid);
+        } else {
+          selectedBatchTitleIds.delete(e.target.dataset.tid);
+        }
+      } else {
+        document.querySelectorAll('.batch-checkbox').forEach(cb => {
+          if (cb.dataset.tid) {
+            if (cb.checked) selectedBatchTitleIds.add(cb.dataset.tid);
+            else selectedBatchTitleIds.delete(cb.dataset.tid);
+          }
+        });
+      }
+      updateBatchBarState();
+    }
+
+    function updateBatchBarState() {
+      const count = selectedBatchTitleIds.size;
       const countEl = document.getElementById('batch-selected-count');
       if (countEl) countEl.textContent = `${count} seleccionados`;
       const bBackup = document.getElementById('batch-backup-label');
@@ -1455,9 +1470,18 @@ constexpr std::string_view kWebUiHtml = R"rawhtml(<!DOCTYPE html>
     }
 
     function batchSelectAll(select) {
-      const checkboxes = document.querySelectorAll('.batch-checkbox');
-      checkboxes.forEach(cb => { cb.checked = select; });
-      onBatchCheckChanged();
+      if (select) {
+        const checkboxes = document.querySelectorAll('.batch-checkbox');
+        checkboxes.forEach(cb => {
+          cb.checked = true;
+          if (cb.dataset.tid) selectedBatchTitleIds.add(cb.dataset.tid);
+        });
+      } else {
+        selectedBatchTitleIds.clear();
+        const checkboxes = document.querySelectorAll('.batch-checkbox');
+        checkboxes.forEach(cb => { cb.checked = false; });
+      }
+      updateBatchBarState();
     }
 
     function showBatchSummaryModal(summary, operationName) {
@@ -1507,8 +1531,14 @@ constexpr std::string_view kWebUiHtml = R"rawhtml(<!DOCTYPE html>
           body: JSON.stringify({ title_ids: tids })
         });
         const summary = await res.json();
+        if (!res.ok || summary.success === false) {
+          showToast(summary.message || 'Error en respaldo por lote', 'error');
+          return;
+        }
         showToast(`Respaldo de lote finalizado: ${summary.succeeded} exitosos, ${summary.failed} fallidos`);
         showBatchSummaryModal(summary, 'Respaldo por Lote');
+        selectedBatchTitleIds.clear();
+        updateBatchBarState();
         await loadGames();
       } catch (e) {
         showToast('Error de red al ejecutar respaldo por lote', 'error');
@@ -1529,8 +1559,14 @@ constexpr std::string_view kWebUiHtml = R"rawhtml(<!DOCTYPE html>
           body: JSON.stringify({ title_ids: tids })
         });
         const summary = await res.json();
+        if (!res.ok || summary.success === false) {
+          showToast(summary.message || 'Error en restauracion por lote', 'error');
+          return;
+        }
         showToast(`Restauracion de lote finalizada: ${summary.succeeded} exitosos, ${summary.failed} fallidos`);
         showBatchSummaryModal(summary, 'Restauracion por Lote');
+        selectedBatchTitleIds.clear();
+        updateBatchBarState();
         await loadGames();
       } catch (e) {
         showToast('Error de red al ejecutar restauracion por lote', 'error');

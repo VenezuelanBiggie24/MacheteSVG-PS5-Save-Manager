@@ -262,6 +262,156 @@ std::string sanitize_filename(const std::string &name)
     return out.empty() ? "save" : out;
 }
 
+struct BatchJsonRequest
+{
+    bool valid = false;
+    std::string error_message;
+    std::vector<std::string> title_ids;
+    std::string custom_root;
+};
+
+static BatchJsonRequest parse_batch_json_payload(const std::string &body)
+{
+    BatchJsonRequest req;
+
+    const auto l = body.find_first_not_of(" \t\r\n");
+    const auto r = body.find_last_not_of(" \t\r\n");
+    if (l == std::string::npos || r == std::string::npos || l > r)
+    {
+        req.valid = false;
+        req.error_message = "Cuerpo de solicitud vacio o ausente";
+        return req;
+    }
+
+    const std::string_view trimmed(body.data() + l, r - l + 1);
+
+    if (trimmed.front() != '{' || trimmed.back() != '}')
+    {
+        req.valid = false;
+        req.error_message = "Formato JSON malformado: debe ser un objeto JSON que inicie con '{' y finalice con '}'";
+        return req;
+    }
+
+    std::size_t key_pos = body.find("\"title_ids\"");
+    std::string key_used = "title_ids";
+    if (key_pos == std::string::npos)
+    {
+        key_pos = body.find("\"titles\"");
+        key_used = "titles";
+    }
+
+    if (key_pos == std::string::npos)
+    {
+        req.valid = false;
+        req.error_message = "Campo requerido ausente: debe incluir 'title_ids' o 'titles' en el objeto JSON";
+        return req;
+    }
+
+    const std::size_t colon_pos = body.find(':', key_pos + key_used.size() + 2);
+    if (colon_pos == std::string::npos)
+    {
+        req.valid = false;
+        req.error_message = "Sintaxis JSON invalida: dos puntos ':' no encontrados tras la clave de titulos";
+        return req;
+    }
+
+    const std::size_t arr_start = body.find_first_not_of(" \t\r\n", colon_pos + 1);
+    if (arr_start == std::string::npos || body[arr_start] != '[')
+    {
+        req.valid = false;
+        req.error_message = "Tipo invalido: el campo '" + key_used + "' debe ser un array JSON (iniciado con '[')";
+        return req;
+    }
+
+    const std::size_t arr_end = body.find(']', arr_start + 1);
+    if (arr_end == std::string::npos)
+    {
+        req.valid = false;
+        req.error_message = "Formato JSON malformado: corchete de cierre ']' no encontrado para el array '" + key_used + "'";
+        return req;
+    }
+
+    const std::string arr_content = body.substr(arr_start + 1, arr_end - (arr_start + 1));
+    std::size_t p = 0;
+    while (p < arr_content.size())
+    {
+        while (p < arr_content.size() && (arr_content[p] == ' ' || arr_content[p] == '\t' ||
+                                          arr_content[p] == '\r' || arr_content[p] == '\n' ||
+                                          arr_content[p] == ','))
+        {
+            p++;
+        }
+        if (p >= arr_content.size())
+            break;
+
+        if (arr_content[p] != '"')
+        {
+            req.valid = false;
+            req.error_message = "Tipo invalido en array: todos los elementos de '" + key_used + "' deben ser cadenas entre comillas";
+            return req;
+        }
+
+        const std::size_t q2 = arr_content.find('"', p + 1);
+        if (q2 == std::string::npos)
+        {
+            req.valid = false;
+            req.error_message = "Formato JSON malformado: cadena sin cerrar dentro del array '" + key_used + "'";
+            return req;
+        }
+
+        const std::string val = arr_content.substr(p + 1, q2 - (p + 1));
+        if (val.empty() || val.find('/') != std::string::npos || val.find('\\') != std::string::npos ||
+            val.find("..") != std::string::npos)
+        {
+            req.valid = false;
+            req.error_message = "Title ID invalido en la lista: " + (val.empty() ? "(vacio)" : val);
+            return req;
+        }
+
+        req.title_ids.push_back(val);
+        p = q2 + 1;
+    }
+
+    if (req.title_ids.empty())
+    {
+        req.valid = false;
+        req.error_message = "La lista '" + key_used + "' no contiene ningun juego (array vacio o sin elementos validos)";
+        return req;
+    }
+
+    for (const char *rk : {"\"destination_root\"", "\"backup_root\"", "\"root\""})
+    {
+        const std::size_t rk_pos = body.find(rk);
+        if (rk_pos != std::string::npos)
+        {
+            const std::size_t c_pos = body.find(':', rk_pos);
+            if (c_pos != std::string::npos)
+            {
+                const std::size_t q1 = body.find('"', c_pos);
+                if (q1 != std::string::npos)
+                {
+                    const std::size_t q2 = body.find('"', q1 + 1);
+                    if (q2 != std::string::npos)
+                    {
+                        const std::string r_val = body.substr(q1 + 1, q2 - (q1 + 1));
+                        if (r_val.find("..") != std::string::npos)
+                        {
+                            req.valid = false;
+                            req.error_message = "Ruta de directorio invalida (contiene secuencia de escape '..')";
+                            return req;
+                        }
+                        req.custom_root = r_val;
+                        break;
+                    }
+                }
+            }
+        }
+    }
+
+    req.valid = true;
+    return req;
+}
+
 constexpr const char *kStorageRoots[] = {
     "/data/MacheteSVG",
     "/mnt/ext1/MacheteSVG",
@@ -1546,6 +1696,13 @@ void WebServer::handle_client(int client_fd)
                 content_length = static_cast<std::size_t>(std::strtoul(raw_hdrs.c_str() + cl_pos, nullptr, 10));
             }
 
+            if (content_length > 1024 * 1024)
+            {
+                send_string_response(client_fd, 400, "Bad Request", "application/json",
+                                     "{\"success\":false,\"message\":\"Tamano de solicitud demasiado grande (maximo 1 MB)\"}");
+                return;
+            }
+
             const char *body_start = req_buf + hdr_len;
             std::size_t body_in_req = (static_cast<std::size_t>(n) > hdr_len)
                                           ? static_cast<std::size_t>(n) - hdr_len
@@ -1568,48 +1725,17 @@ void WebServer::handle_client(int client_fd)
             }
         }
 
-        // Extraer lista de Title IDs desde el JSON
-        std::vector<std::string> title_ids;
-        std::size_t p = 0;
-        while (p < body.size())
+        auto parsed = parse_batch_json_payload(body);
+        if (!parsed.valid)
         {
-            std::size_t q1 = body.find('"', p);
-            if (q1 == std::string::npos)
-                break;
-            std::size_t q2 = body.find('"', q1 + 1);
-            if (q2 == std::string::npos)
-                break;
-            std::string val = body.substr(q1 + 1, q2 - q1 - 1);
-            if (val != "title_ids" && val != "titles" && val != "destination_root" &&
-                val != "backup_root" && val != "root" && !val.empty())
-            {
-                if (val.find('/') == std::string::npos && val.find('\\') == std::string::npos &&
-                    val.find("..") == std::string::npos)
-                {
-                    title_ids.push_back(val);
-                }
-            }
-            p = q2 + 1;
+            send_string_response(client_fd, 400, "Bad Request", "application/json",
+                                 "{\"success\":false,\"message\":\"" + json_escape(parsed.error_message) + "\"}");
+            return;
         }
 
-        std::string dest_root;
-        std::size_t fpos = body.find("\"destination_root\"");
-        if (fpos == std::string::npos)
-            fpos = body.find("\"root\"");
-        if (fpos != std::string::npos)
-        {
-            std::size_t colon = body.find(':', fpos);
-            if (colon != std::string::npos)
-            {
-                std::size_t q1 = body.find('"', colon);
-                if (q1 != std::string::npos)
-                {
-                    std::size_t q2 = body.find('"', q1 + 1);
-                    if (q2 != std::string::npos)
-                        dest_root = body.substr(q1 + 1, q2 - q1 - 1);
-                }
-            }
-        }
+        std::vector<std::string> title_ids = std::move(parsed.title_ids);
+        std::string dest_root = parsed.custom_root;
+
         if (dest_root.empty() && query_pos != std::string::npos)
         {
             std::string qs = decoded_path.substr(query_pos + 1);
@@ -1681,6 +1807,13 @@ void WebServer::handle_client(int client_fd)
                 content_length = static_cast<std::size_t>(std::strtoul(raw_hdrs.c_str() + cl_pos, nullptr, 10));
             }
 
+            if (content_length > 1024 * 1024)
+            {
+                send_string_response(client_fd, 400, "Bad Request", "application/json",
+                                     "{\"success\":false,\"message\":\"Tamano de solicitud demasiado grande (maximo 1 MB)\"}");
+                return;
+            }
+
             const char *body_start = req_buf + hdr_len;
             std::size_t body_in_req = (static_cast<std::size_t>(n) > hdr_len)
                                           ? static_cast<std::size_t>(n) - hdr_len
@@ -1703,48 +1836,17 @@ void WebServer::handle_client(int client_fd)
             }
         }
 
-        // Extraer lista de Title IDs desde el JSON
-        std::vector<std::string> title_ids;
-        std::size_t p = 0;
-        while (p < body.size())
+        auto parsed = parse_batch_json_payload(body);
+        if (!parsed.valid)
         {
-            std::size_t q1 = body.find('"', p);
-            if (q1 == std::string::npos)
-                break;
-            std::size_t q2 = body.find('"', q1 + 1);
-            if (q2 == std::string::npos)
-                break;
-            std::string val = body.substr(q1 + 1, q2 - q1 - 1);
-            if (val != "title_ids" && val != "titles" && val != "destination_root" &&
-                val != "backup_root" && val != "root" && !val.empty())
-            {
-                if (val.find('/') == std::string::npos && val.find('\\') == std::string::npos &&
-                    val.find("..") == std::string::npos)
-                {
-                    title_ids.push_back(val);
-                }
-            }
-            p = q2 + 1;
+            send_string_response(client_fd, 400, "Bad Request", "application/json",
+                                 "{\"success\":false,\"message\":\"" + json_escape(parsed.error_message) + "\"}");
+            return;
         }
 
-        std::string backup_root;
-        std::size_t fpos = body.find("\"backup_root\"");
-        if (fpos == std::string::npos)
-            fpos = body.find("\"root\"");
-        if (fpos != std::string::npos)
-        {
-            std::size_t colon = body.find(':', fpos);
-            if (colon != std::string::npos)
-            {
-                std::size_t q1 = body.find('"', colon);
-                if (q1 != std::string::npos)
-                {
-                    std::size_t q2 = body.find('"', q1 + 1);
-                    if (q2 != std::string::npos)
-                        backup_root = body.substr(q1 + 1, q2 - q1 - 1);
-                }
-            }
-        }
+        std::vector<std::string> title_ids = std::move(parsed.title_ids);
+        std::string backup_root = parsed.custom_root;
+
         if (backup_root.empty() && query_pos != std::string::npos)
         {
             std::string qs = decoded_path.substr(query_pos + 1);

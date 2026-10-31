@@ -83,6 +83,7 @@ inline SceKernelSendNotificationRequestFn resolve_send_notification_request()
                 s_fn = reinterpret_cast<SceKernelSendNotificationRequestFn>(sym);
                 return s_fn;
             }
+            dlclose(h);
         }
     }
 #endif
@@ -122,6 +123,7 @@ inline SceNotificationSendFn resolve_sce_notification_send()
                 s_fn = reinterpret_cast<SceNotificationSendFn>(sym);
                 return s_fn;
             }
+            dlclose(h);
         }
     }
 #endif
@@ -166,22 +168,53 @@ inline std::string build_rich_notification_payload(const std::string &message,
     }
 
     std::string escaped_title;
+    escaped_title.reserve(title.size() * 2);
     for (unsigned char c : title)
     {
         if (c == '"')
             escaped_title += "\\\"";
         else if (c == '\\')
             escaped_title += "\\\\";
+        else if (c == '\n')
+            escaped_title += "\\n";
+        else if (c == '\r')
+            escaped_title += "\\r";
+        else if (c == '\t')
+            escaped_title += "\\t";
+        else if (c < 0x20)
+        {
+            char buf[8];
+            std::snprintf(buf, sizeof(buf), "\\u%04x", c);
+            escaped_title += buf;
+        }
         else
+        {
             escaped_title += static_cast<char>(c);
+        }
+    }
+
+    std::string escaped_icon;
+    escaped_icon.reserve(icon_path.size() * 2);
+    for (unsigned char c : icon_path)
+    {
+        if (c == '"')
+            escaped_icon += "\\\"";
+        else if (c == '\\')
+            escaped_icon += "\\\\";
+        else
+            escaped_icon += static_cast<char>(c);
     }
 
     char ts_buf[64] = "2026-10-31T02:00:00.000Z";
     std::time_t now = std::time(nullptr);
-    const std::tm *tm_utc = std::gmtime(&now);
-    if (tm_utc)
     {
-        std::strftime(ts_buf, sizeof(ts_buf), "%Y-%m-%dT%H:%M:%S.000Z", tm_utc);
+        static std::mutex s_gmtime_mutex;
+        std::lock_guard<std::mutex> lock(s_gmtime_mutex);
+        const std::tm *p_tm = std::gmtime(&now);
+        if (p_tm)
+        {
+            std::strftime(ts_buf, sizeof(ts_buf), "%Y-%m-%dT%H:%M:%S.000Z", p_tm);
+        }
     }
 
     static std::atomic<unsigned int> s_serial{0};
@@ -199,9 +232,9 @@ inline std::string build_rich_notification_payload(const std::string &message,
     json += "\"isImmediate\":true,";
     json += "\"priority\":100,";
     json += "\"viewData\":{";
-    if (!icon_path.empty())
+    if (!escaped_icon.empty())
     {
-        json += "\"icon\":{\"type\":\"Url\",\"parameters\":{\"url\":\"" + icon_path + "\"}},";
+        json += "\"icon\":{\"type\":\"Url\",\"parameters\":{\"url\":\"" + escaped_icon + "\"}},";
     }
     json += "\"message\":{\"body\":\"" + escaped_msg + "\"},";
     json += "\"subMessage\":{\"body\":\"" + escaped_title + "\"}";

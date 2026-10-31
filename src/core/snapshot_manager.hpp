@@ -76,29 +76,50 @@ inline void set_snapshots_enabled(bool enabled)
     get_snapshots_enabled_atomic().store(enabled);
 }
 
+inline std::string get_date_str_from_time(std::time_t t)
+{
+    static std::mutex s_time_mutex;
+    std::lock_guard<std::mutex> lock(s_time_mutex);
+    const std::tm *lt = std::localtime(&t);
+    if (lt)
+    {
+        char buf[16] = {0};
+        std::snprintf(buf, sizeof(buf), "%04d-%02d-%02d",
+                      lt->tm_year + 1900, lt->tm_mon + 1, lt->tm_mday);
+        return std::string(buf);
+    }
+    return "";
+}
+
 inline std::string get_current_date_str()
 {
     const std::time_t now = std::time(nullptr);
-    const std::tm *lt = std::localtime(&now);
-    char buf[16] = {0};
-    if (lt)
-    {
-        std::snprintf(buf, sizeof(buf), "%04d-%02d-%02d",
-                      lt->tm_year + 1900, lt->tm_mon + 1, lt->tm_mday);
-    }
-    return std::string(buf);
+    return get_date_str_from_time(now);
 }
 
-inline std::string get_date_str_from_time(std::time_t t)
+inline bool is_leap_year(int year) noexcept
 {
-    const std::tm *lt = std::localtime(&t);
-    char buf[16] = {0};
-    if (lt)
+    return (year % 4 == 0 && year % 100 != 0) || (year % 400 == 0);
+}
+
+inline int days_in_month(int year, int month) noexcept
+{
+    switch (month)
     {
-        std::snprintf(buf, sizeof(buf), "%04d-%02d-%02d",
-                      lt->tm_year + 1900, lt->tm_mon + 1, lt->tm_mday);
+        case 1:  return 31;
+        case 2:  return is_leap_year(year) ? 29 : 28;
+        case 3:  return 31;
+        case 4:  return 30;
+        case 5:  return 31;
+        case 6:  return 30;
+        case 7:  return 31;
+        case 8:  return 31;
+        case 9:  return 30;
+        case 10: return 31;
+        case 11: return 30;
+        case 12: return 31;
+        default: return 0;
     }
-    return std::string(buf);
 }
 
 inline bool is_valid_date_str(const std::string& s)
@@ -121,9 +142,39 @@ inline bool is_valid_date_str(const std::string& s)
     const int year = (s[0] - '0') * 1000 + (s[1] - '0') * 100 + (s[2] - '0') * 10 + (s[3] - '0');
     const int month = (s[5] - '0') * 10 + (s[6] - '0');
     const int day = (s[8] - '0') * 10 + (s[9] - '0');
-    if (year < 1970 || year > 2099 || month < 1 || month > 12 || day < 1 || day > 31)
+    if (year < 1970 || year > 2099 || month < 1 || month > 12)
         return false;
+
+    const int max_days = days_in_month(year, month);
+    if (day < 1 || day > max_days)
+        return false;
+
     return true;
+}
+
+inline bool is_temporary_or_internal_file(const char* name) noexcept
+{
+    if (!name || name[0] == '\0')
+        return true;
+    if (std::strcmp(name, ".") == 0 || std::strcmp(name, "..") == 0)
+        return true;
+    if (std::strcmp(name, ".image_stamp") == 0 ||
+        std::strcmp(name, ".ps5save-index") == 0 ||
+        std::strcmp(name, "snapshots") == 0 ||
+        std::strcmp(name, ".DS_Store") == 0)
+        return true;
+
+    const std::size_t len = std::strlen(name);
+    if (len >= 5 && std::strcmp(name + len - 5, ".part") == 0)
+        return true;
+    if (len >= 4 && std::strcmp(name + len - 4, ".tmp") == 0)
+        return true;
+    if (len >= 5 && std::strcmp(name + len - 5, ".temp") == 0)
+        return true;
+    if (len > 0 && name[len - 1] == '~')
+        return true;
+
+    return false;
 }
 
 inline bool is_date_part_name(const std::string& s)
@@ -236,8 +287,11 @@ inline uint64_t calculate_snapshot_size(const std::string& path)
     return total;
 }
 
-inline bool copy_tree_for_snapshot(const std::string& src, const std::string& dst, uint64_t& out_bytes)
+inline bool copy_tree_for_snapshot(const std::string& src, const std::string& dst, uint64_t& out_bytes, int depth = 0)
 {
+    if (depth > 16)
+        return false;
+
     if (!ensure_directories(dst))
         return false;
 
@@ -248,15 +302,7 @@ inline bool copy_tree_for_snapshot(const std::string& src, const std::string& ds
     bool ok = true;
     while (const dirent* dp = readdir(dir))
     {
-        if (std::strcmp(dp->d_name, ".") == 0 || std::strcmp(dp->d_name, "..") == 0)
-            continue;
-
-        const std::size_t len = std::strlen(dp->d_name);
-        // Exclude snapshot directory itself, internal bookkeeping (.image_stamp, .ps5save-index), and partial files
-        if (std::strcmp(dp->d_name, "snapshots") == 0 ||
-            std::strcmp(dp->d_name, ".image_stamp") == 0 ||
-            std::strcmp(dp->d_name, ".ps5save-index") == 0 ||
-            (len > 5 && std::strcmp(dp->d_name + len - 5, ".part") == 0))
+        if (is_temporary_or_internal_file(dp->d_name))
         {
             continue;
         }
@@ -273,7 +319,7 @@ inline bool copy_tree_for_snapshot(const std::string& src, const std::string& ds
 
         if (S_ISDIR(st.st_mode))
         {
-            if (!copy_tree_for_snapshot(spath, dpath, out_bytes))
+            if (!copy_tree_for_snapshot(spath, dpath, out_bytes, depth + 1))
             {
                 ok = false;
                 break;
@@ -362,7 +408,7 @@ inline bool compute_signature_recursive(const std::string& path, FileSignature& 
     {
         sig.size += st.st_size;
         int64_t nsec = 0;
-#if defined(__APPLE__) || defined(__FreeBSD__)
+#if defined(__APPLE__) || defined(__FreeBSD__) || defined(__PROSPERO__) || defined(__Prospero__) || defined(__PS5__)
         nsec = st.st_mtimespec.tv_nsec;
 #else
         nsec = st.st_mtim.tv_nsec;
@@ -389,33 +435,13 @@ inline bool compute_signature_recursive(const std::string& path, FileSignature& 
         sig.device = st.st_dev;
     }
 
-    int64_t dir_nsec = 0;
-#if defined(__APPLE__) || defined(__FreeBSD__)
-    dir_nsec = st.st_mtimespec.tv_nsec;
-#else
-    dir_nsec = st.st_mtim.tv_nsec;
-#endif
-    if (st.st_mtime > sig.mtime_sec || (st.st_mtime == sig.mtime_sec && dir_nsec > sig.mtime_nsec))
-    {
-        sig.mtime_sec = st.st_mtime;
-        sig.mtime_nsec = dir_nsec;
-    }
-
     DIR* dir = opendir(path.c_str());
     if (!dir)
         return false;
 
     while (const dirent* dp = readdir(dir))
     {
-        if (std::strcmp(dp->d_name, ".") == 0 || std::strcmp(dp->d_name, "..") == 0)
-            continue;
-        if (std::strcmp(dp->d_name, ".image_stamp") == 0 ||
-            std::strcmp(dp->d_name, ".ps5save-index") == 0 ||
-            std::strcmp(dp->d_name, "snapshots") == 0)
-            continue;
-
-        const std::size_t len = std::strlen(dp->d_name);
-        if (len > 5 && std::strcmp(dp->d_name + len - 5, ".part") == 0)
+        if (is_temporary_or_internal_file(dp->d_name))
             continue;
 
         const std::string child = path + "/" + dp->d_name;
@@ -616,6 +642,13 @@ inline size_t prune_old_snapshots(const std::string& snapshots_dir, size_t max_s
 
     // Sort descending: newest date first (e.g. 2026-10-31 before 2026-10-30)
     std::sort(valid_dates.begin(), valid_dates.end(), std::greater<std::string>());
+
+    // Do not prune if retention is not exceeded. If retention quota is 0, preserve
+    // at least the single latest snapshot so the only existing backup is not lost.
+    if (max_snapshots_to_keep == 0)
+    {
+        max_snapshots_to_keep = 1;
+    }
 
     size_t pruned_count = 0;
     if (valid_dates.size() > max_snapshots_to_keep)

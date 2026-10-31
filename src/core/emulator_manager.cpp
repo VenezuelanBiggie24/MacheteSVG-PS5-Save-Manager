@@ -9,14 +9,75 @@
 #include <cstdio>
 #include <cstring>
 #include <dirent.h>
+#include <map>
+#include <memory>
+#include <mutex>
 #include <sys/stat.h>
 #include <unistd.h>
 
 namespace machete::emulator
 {
 
+bool is_safe_relative_subpath(const std::string &subpath)
+{
+    if (subpath.empty())
+        return false;
+    if (subpath.front() == '/')
+        return false;
+    for (char c : subpath)
+    {
+        if (static_cast<unsigned char>(c) < 32 || c == '\\')
+            return false;
+    }
+    std::size_t start = 0;
+    while (start < subpath.size())
+    {
+        std::size_t next = subpath.find('/', start);
+        std::string comp = (next == std::string::npos)
+                               ? subpath.substr(start)
+                               : subpath.substr(start, next - start);
+
+        if (comp == ".." || comp == ".")
+            return false;
+
+        if (next == std::string::npos)
+            break;
+        start = next + 1;
+    }
+    return true;
+}
+
 namespace
 {
+
+bool has_traversal_component(const std::string &path)
+{
+    if (path.empty())
+        return false;
+
+    for (char c : path)
+    {
+        if (static_cast<unsigned char>(c) < 32 || c == '\\')
+            return true;
+    }
+
+    std::size_t start = 0;
+    while (start < path.size())
+    {
+        std::size_t next = path.find('/', start);
+        std::string comp = (next == std::string::npos)
+                               ? path.substr(start)
+                               : path.substr(start, next - start);
+
+        if (comp == "..")
+            return true;
+
+        if (next == std::string::npos)
+            break;
+        start = next + 1;
+    }
+    return false;
+}
 
 std::string clean_prefix(const std::string &prefix)
 {
@@ -49,10 +110,11 @@ std::string extract_tail(const std::string &path)
         p.pop_back();
 
     std::size_t slash = p.find_last_of('/');
-    if (slash != std::string::npos)
-        return p.substr(slash + 1);
+    std::string tail = (slash != std::string::npos) ? p.substr(slash + 1) : p;
+    if (tail.empty() || tail == "." || tail == ".." || tail.find('/') != std::string::npos || has_traversal_component(tail))
+        return "";
 
-    return p;
+    return tail;
 }
 
 bool ensure_dir(const std::string &dir_path)
@@ -110,17 +172,26 @@ bool ensure_dir(const std::string &dir_path)
 
 bool copy_single_file(const std::string &src, const std::string &dst)
 {
+    if (has_traversal_component(src) || has_traversal_component(dst))
+        return false;
+
+    struct stat src_st{};
+    if (::lstat(src.c_str(), &src_st) != 0 || S_ISLNK(src_st.st_mode) || !S_ISREG(src_st.st_mode))
+        return false;
+
     std::size_t slash = dst.find_last_of('/');
     if (slash != std::string::npos)
     {
-        ensure_dir(dst.substr(0, slash));
+        if (!ensure_dir(dst.substr(0, slash)))
+            return false;
     }
 
     FILE *in = std::fopen(src.c_str(), "rb");
     if (!in)
         return false;
 
-    FILE *out = std::fopen(dst.c_str(), "wb");
+    const std::string dst_part = dst + ".part";
+    FILE *out = std::fopen(dst_part.c_str(), "wb");
     if (!out)
     {
         std::fclose(in);
@@ -139,25 +210,55 @@ bool copy_single_file(const std::string &src, const std::string &dst)
         }
     }
 
-    std::fflush(out);
+    if (std::ferror(in))
+    {
+        write_ok = false;
+    }
+
+    if (std::fflush(out) != 0)
+    {
+        write_ok = false;
+    }
+
     int fd = fileno(out);
     if (fd >= 0)
     {
-        ::fsync(fd);
+        if (::fsync(fd) != 0)
+        {
+            write_ok = false;
+        }
     }
 
-    std::fclose(out);
+    if (std::fclose(out) != 0)
+    {
+        write_ok = false;
+    }
     std::fclose(in);
 
-    if (write_ok)
+    if (!write_ok)
     {
-        ::chmod(dst.c_str(), 0666);
+        ::unlink(dst_part.c_str());
+        return false;
     }
-    return write_ok;
+
+    if (std::rename(dst_part.c_str(), dst.c_str()) != 0)
+    {
+        ::unlink(dst_part.c_str());
+        return false;
+    }
+
+    ::chmod(dst.c_str(), 0666);
+    return true;
 }
 
-bool copy_dir_recursive(const std::string &src_dir, const std::string &dst_dir, int &copied_count)
+bool copy_dir_recursive(const std::string &src_dir, const std::string &dst_dir, int &copied_count, int depth = 0)
 {
+    if (depth > 16)
+        return false;
+
+    if (has_traversal_component(src_dir) || has_traversal_component(dst_dir))
+        return false;
+
     if (!ensure_dir(dst_dir))
         return false;
 
@@ -171,16 +272,28 @@ bool copy_dir_recursive(const std::string &src_dir, const std::string &dst_dir, 
         if (std::strcmp(ent->d_name, ".") == 0 || std::strcmp(ent->d_name, "..") == 0)
             continue;
 
-        std::string s_item = src_dir + "/" + ent->d_name;
-        std::string d_item = dst_dir + "/" + ent->d_name;
+        const std::string dname = ent->d_name;
+        if (has_traversal_component(dname) || dname.find('/') != std::string::npos)
+            continue;
+
+        // Skip temporary partial files
+        if (dname.size() >= 5 && dname.compare(dname.size() - 5, 5, ".part") == 0)
+            continue;
+
+        std::string s_item = src_dir + "/" + dname;
+        std::string d_item = dst_dir + "/" + dname;
 
         struct stat st{};
-        if (::stat(s_item.c_str(), &st) != 0)
+        if (::lstat(s_item.c_str(), &st) != 0)
+            continue;
+
+        // Never follow symlinks to prevent traversal/escape
+        if (S_ISLNK(st.st_mode))
             continue;
 
         if (S_ISDIR(st.st_mode))
         {
-            if (!copy_dir_recursive(s_item, d_item, copied_count))
+            if (!copy_dir_recursive(s_item, d_item, copied_count, depth + 1))
                 all_ok = false;
         }
         else if (S_ISREG(st.st_mode))
@@ -199,8 +312,14 @@ bool copy_dir_recursive(const std::string &src_dir, const std::string &dst_dir, 
     return all_ok;
 }
 
-std::uint64_t calculate_directory_size_recursive(const std::string &dir_path)
+std::uint64_t calculate_directory_size_recursive(const std::string &dir_path, int depth = 0)
 {
+    if (depth > 16)
+        return 0;
+
+    if (has_traversal_component(dir_path))
+        return 0;
+
     std::uint64_t total = 0;
     DIR *d = ::opendir(dir_path.c_str());
     if (!d)
@@ -211,17 +330,27 @@ std::uint64_t calculate_directory_size_recursive(const std::string &dir_path)
         if (std::strcmp(ent->d_name, ".") == 0 || std::strcmp(ent->d_name, "..") == 0)
             continue;
 
-        std::string item_path = dir_path + "/" + ent->d_name;
+        const std::string dname = ent->d_name;
+        if (has_traversal_component(dname) || dname.find('/') != std::string::npos)
+            continue;
+
+        if (dname.size() >= 5 && dname.compare(dname.size() - 5, 5, ".part") == 0)
+            continue;
+
+        std::string item_path = dir_path + "/" + dname;
         struct stat st{};
-        if (::stat(item_path.c_str(), &st) == 0)
+        if (::lstat(item_path.c_str(), &st) == 0)
         {
+            if (S_ISLNK(st.st_mode))
+                continue;
+
             if (S_ISREG(st.st_mode))
             {
                 total += static_cast<std::uint64_t>(st.st_size);
             }
             else if (S_ISDIR(st.st_mode))
             {
-                total += calculate_directory_size_recursive(item_path);
+                total += calculate_directory_size_recursive(item_path, depth + 1);
             }
         }
     }
@@ -230,6 +359,21 @@ std::uint64_t calculate_directory_size_recursive(const std::string &dir_path)
 }
 
 } // namespace
+
+bool is_safe_emulator_path(const std::string &path)
+{
+    if (path.empty() || path.front() != '/')
+        return false;
+
+    if (has_traversal_component(path))
+        return false;
+
+    // Must be located in /data or under a mock prefix containing /data
+    if (path.rfind("/data/", 0) != 0 && path != "/data" && path.find("/data/") == std::string::npos)
+        return false;
+
+    return true;
+}
 
 std::vector<EmulatorTarget> get_known_emulator_targets(const std::string &root_prefix)
 {
@@ -304,13 +448,27 @@ std::vector<EmulatorTarget> get_known_emulator_targets(const std::string &root_p
 
 const EmulatorTarget *find_emulator_target_by_id(const std::string &id, const std::string &root_prefix)
 {
-    static std::vector<EmulatorTarget> s_cached_targets;
-    s_cached_targets = get_known_emulator_targets(root_prefix);
-    for (const auto &t : s_cached_targets)
+    static std::mutex s_mutex;
+    std::lock_guard<std::mutex> lock(s_mutex);
+    static std::map<std::pair<std::string, std::string>, std::unique_ptr<EmulatorTarget>> s_registry;
+    const auto key = std::make_pair(root_prefix, id);
+    auto it = s_registry.find(key);
+    if (it != s_registry.end())
+        return it->second.get();
+
+    auto known = get_known_emulator_targets(root_prefix);
+    for (auto &target : known)
     {
-        if (t.id == id)
-            return &t;
+        auto k = std::make_pair(root_prefix, target.id);
+        if (s_registry.find(k) == s_registry.end())
+        {
+            s_registry[k] = std::make_unique<EmulatorTarget>(std::move(target));
+        }
     }
+    it = s_registry.find(key);
+    if (it != s_registry.end())
+        return it->second.get();
+
     return nullptr;
 }
 
@@ -336,7 +494,7 @@ std::vector<EmulatorTarget> detect_installed_emulators(const std::string &root_p
         {
             std::string pcsx2_dir = apply_prefix(root_prefix, "/data/PCSX2");
             struct stat st{};
-            if (::stat(pcsx2_dir.c_str(), &st) == 0 && S_ISDIR(st.st_mode))
+            if (!has_traversal_component(pcsx2_dir) && ::stat(pcsx2_dir.c_str(), &st) == 0 && S_ISDIR(st.st_mode))
             {
                 DIR *d = ::opendir(pcsx2_dir.c_str());
                 if (d)
@@ -346,10 +504,16 @@ std::vector<EmulatorTarget> detect_installed_emulators(const std::string &root_p
                         if (entry->d_name[0] == '.')
                             continue;
                         std::string fn = entry->d_name;
+                        if (has_traversal_component(fn) || fn.find('/') != std::string::npos)
+                            continue;
                         if (fn.size() > 4 && fn.substr(fn.size() - 4) == ".ps2")
                         {
                             std::string full = pcsx2_dir + "/" + fn;
-                            if (std::find(existing_paths.begin(), existing_paths.end(), full) == existing_paths.end())
+                            struct stat entry_st{};
+                            if (::lstat(full.c_str(), &entry_st) != 0 || S_ISLNK(entry_st.st_mode) || !S_ISREG(entry_st.st_mode))
+                                continue;
+                            if (is_safe_emulator_path(full) &&
+                                std::find(existing_paths.begin(), existing_paths.end(), full) == existing_paths.end())
                             {
                                 existing_paths.push_back(full);
                             }
@@ -384,11 +548,32 @@ bool backup_emulator_saves(const EmulatorTarget &target,
         return false;
     }
 
+    if (has_traversal_component(destination_root))
+    {
+        if (out_error)
+            *out_error = "Destination root contains invalid traversal components";
+        return false;
+    }
+
+    if (!is_safe_relative_subpath(target.target_backup_subpath))
+    {
+        if (out_error)
+            *out_error = "Unsafe or invalid target backup subpath: " + target.target_backup_subpath;
+        return false;
+    }
+
     std::string dest_base = destination_root;
     while (!dest_base.empty() && dest_base.back() == '/')
         dest_base.pop_back();
 
     std::string target_dest = dest_base + "/" + target.target_backup_subpath;
+    if (has_traversal_component(target_dest))
+    {
+        if (out_error)
+            *out_error = "Resolved target destination contains traversal components";
+        return false;
+    }
+
     if (!ensure_dir(target_dest))
     {
         if (out_error)
@@ -401,8 +586,14 @@ bool backup_emulator_saves(const EmulatorTarget &target,
 
     for (const auto &src : target.source_paths)
     {
+        if (!is_safe_emulator_path(src))
+        {
+            MACHETE_LOG("[EMULATOR]", "Skipping unsafe emulator source path: %s", src.c_str());
+            continue;
+        }
+
         struct stat st{};
-        if (::stat(src.c_str(), &st) != 0)
+        if (::lstat(src.c_str(), &st) != 0 || S_ISLNK(st.st_mode))
             continue;
 
         std::string tail = extract_tail(src);
@@ -422,7 +613,7 @@ bool backup_emulator_saves(const EmulatorTarget &target,
         {
             std::string dst_subdir = target_dest + "/" + tail;
             int dir_copied = 0;
-            if (copy_dir_recursive(src, dst_subdir, dir_copied))
+            if (copy_dir_recursive(src, dst_subdir, dir_copied, 0))
             {
                 total_copied += dir_copied;
                 manifest_entries.emplace_back(tail, src);
@@ -437,9 +628,10 @@ bool backup_emulator_saves(const EmulatorTarget &target,
         return false;
     }
 
-    // Write manifest
+    // Write manifest atomically using temporary .part file
     std::string manifest_path = target_dest + "/.machete_emulator";
-    FILE *mf = std::fopen(manifest_path.c_str(), "w");
+    std::string manifest_part = manifest_path + ".part";
+    FILE *mf = std::fopen(manifest_part.c_str(), "w");
     if (mf)
     {
         std::fprintf(mf, "id=%s\nname=%s\nsubpath=%s\n",
@@ -448,8 +640,22 @@ bool backup_emulator_saves(const EmulatorTarget &target,
         {
             std::fprintf(mf, "entry:%s=%s\n", entry.first.c_str(), entry.second.c_str());
         }
+        std::fflush(mf);
+        int mfd = fileno(mf);
+        if (mfd >= 0)
+        {
+            ::fsync(mfd);
+        }
         std::fclose(mf);
-        ::chmod(manifest_path.c_str(), 0666);
+
+        if (std::rename(manifest_part.c_str(), manifest_path.c_str()) == 0)
+        {
+            ::chmod(manifest_path.c_str(), 0666);
+        }
+        else
+        {
+            ::unlink(manifest_part.c_str());
+        }
     }
 
     MACHETE_LOG("[EMULATOR]", "Backed up %d items for %s into %s",
@@ -467,6 +673,20 @@ bool restore_emulator_saves(const EmulatorTarget &target,
     {
         if (out_error)
             *out_error = "Backup root is empty";
+        return false;
+    }
+
+    if (has_traversal_component(backup_root))
+    {
+        if (out_error)
+            *out_error = "Backup root contains invalid traversal components";
+        return false;
+    }
+
+    if (!is_safe_relative_subpath(target.target_backup_subpath))
+    {
+        if (out_error)
+            *out_error = "Unsafe target backup subpath: " + target.target_backup_subpath;
         return false;
     }
 
@@ -514,7 +734,13 @@ bool restore_emulator_saves(const EmulatorTarget &target,
                 {
                     std::string rel = entry.substr(0, eq);
                     std::string orig = entry.substr(eq + 1);
-                    manifest_entries.emplace_back(rel, orig);
+
+                    // Sanitize rel and orig from manifest
+                    if (!rel.empty() && !has_traversal_component(rel) && rel.front() != '/' &&
+                        rel != "." && rel != "..")
+                    {
+                        manifest_entries.emplace_back(rel, orig);
+                    }
                 }
             }
         }
@@ -528,19 +754,29 @@ bool restore_emulator_saves(const EmulatorTarget &target,
             const std::string &rel_name = me.first;
             std::string src_item = backup_dir + "/" + rel_name;
             struct stat item_st{};
-            if (::stat(src_item.c_str(), &item_st) != 0)
+            if (::lstat(src_item.c_str(), &item_st) != 0 || S_ISLNK(item_st.st_mode))
                 continue;
 
-            // Find matching destination path in target.source_paths (to respect test prefixes or custom configs)
+            // Match destination path: prioritize custom-prefixed target paths or recorded manifest path
             std::string dest_path = me.second;
             for (const auto &sp : target.source_paths)
             {
                 std::string sp_tail = extract_tail(sp);
                 if (sp_tail == rel_name)
                 {
-                    dest_path = sp;
+                    if (dest_path.empty() || !is_safe_emulator_path(dest_path) ||
+                        (sp.rfind("/data/", 0) != 0 && sp != "/data"))
+                    {
+                        dest_path = sp;
+                    }
                     break;
                 }
+            }
+
+            if (!is_safe_emulator_path(dest_path))
+            {
+                MACHETE_LOG("[EMULATOR]", "Skipping restore to unsafe destination path: %s", dest_path.c_str());
+                continue;
             }
 
             if (S_ISREG(item_st.st_mode))
@@ -551,7 +787,7 @@ bool restore_emulator_saves(const EmulatorTarget &target,
             else if (S_ISDIR(item_st.st_mode))
             {
                 int d_copied = 0;
-                if (copy_dir_recursive(src_item, dest_path, d_copied))
+                if (copy_dir_recursive(src_item, dest_path, d_copied, 0))
                     total_restored += d_copied;
             }
         }
@@ -561,13 +797,16 @@ bool restore_emulator_saves(const EmulatorTarget &target,
         // No manifest: match against target.source_paths
         for (const auto &dest_path : target.source_paths)
         {
+            if (!is_safe_emulator_path(dest_path))
+                continue;
+
             std::string tail = extract_tail(dest_path);
             if (tail.empty())
                 continue;
 
             std::string src_candidate = backup_dir + "/" + tail;
             struct stat item_st{};
-            if (::stat(src_candidate.c_str(), &item_st) == 0)
+            if (::lstat(src_candidate.c_str(), &item_st) == 0 && !S_ISLNK(item_st.st_mode))
             {
                 if (S_ISREG(item_st.st_mode))
                 {
@@ -577,7 +816,7 @@ bool restore_emulator_saves(const EmulatorTarget &target,
                 else if (S_ISDIR(item_st.st_mode))
                 {
                     int d_copied = 0;
-                    if (copy_dir_recursive(src_candidate, dest_path, d_copied))
+                    if (copy_dir_recursive(src_candidate, dest_path, d_copied, 0))
                         total_restored += d_copied;
                 }
             }
@@ -585,7 +824,7 @@ bool restore_emulator_saves(const EmulatorTarget &target,
             {
                 // Single-directory target where backup_dir directly holds save files
                 int d_copied = 0;
-                if (copy_dir_recursive(backup_dir, dest_path, d_copied) && d_copied > 0)
+                if (copy_dir_recursive(backup_dir, dest_path, d_copied, 0) && d_copied > 0)
                     total_restored += d_copied;
             }
         }
@@ -610,8 +849,11 @@ std::uint64_t calculate_emulator_saves_size(const EmulatorTarget &target)
     std::uint64_t total = 0;
     for (const auto &src : target.source_paths)
     {
+        if (has_traversal_component(src))
+            continue;
+
         struct stat st{};
-        if (::stat(src.c_str(), &st) != 0)
+        if (::lstat(src.c_str(), &st) != 0 || S_ISLNK(st.st_mode))
             continue;
 
         if (S_ISREG(st.st_mode))
@@ -620,7 +862,7 @@ std::uint64_t calculate_emulator_saves_size(const EmulatorTarget &target)
         }
         else if (S_ISDIR(st.st_mode))
         {
-            total += calculate_directory_size_recursive(src);
+            total += calculate_directory_size_recursive(src, 0);
         }
     }
     return total;

@@ -41,4 +41,10 @@ bool restore_emulator_saves(const EmulatorTarget &target,
 // Calculates total byte size of existing save files for target
 std::uint64_t calculate_emulator_saves_size(const EmulatorTarget &target);
 
+// Validates whether a path is safe from traversal and belongs to allowable emulator storage (/data)
+bool is_safe_emulator_path(const std::string &path);
+
+// Validates whether a backup subpath is safe and relative (no traversal, no absolute path)
+bool is_safe_relative_subpath(const std::string &subpath);
+
 } // namespace machete::emulator

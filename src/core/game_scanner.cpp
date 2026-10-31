@@ -102,6 +102,13 @@ bool is_valid_title_id(const std::string &id)
     return true;
 }
 
+bool is_emulator_wrapper_title_id(const std::string &title_id)
+{
+    // PPSA99303: Wrapper homebrew para RPCS3 (emulador PS3)
+    // PPSA50011: Wrapper homebrew para PS5X360 (emulador Xbox 360)
+    return (title_id == "PPSA99303" || title_id == "PPSA50011");
+}
+
 std::string extract_valid_title_id(const std::string &name)
 {
     if (name.size() < 9)
@@ -1140,7 +1147,7 @@ std::vector<ScannedGame> scan_installed_games_and_saves(bool include_emulators, 
                 continue;
 
             const std::string title_id = extract_valid_title_id(entry->d_name);
-            if (title_id.empty())
+            if (title_id.empty() || is_emulator_wrapper_title_id(title_id))
                 continue;
 
             const std::string entry_path = std::string(meta_base) + "/" + entry->d_name;
@@ -1204,7 +1211,7 @@ std::vector<ScannedGame> scan_installed_games_and_saves(bool include_emulators, 
 
             const std::string entry_name = game_entry->d_name;
             const std::string title_id = extract_valid_title_id(entry_name);
-            if (title_id.empty())
+            if (title_id.empty() || is_emulator_wrapper_title_id(title_id))
                 continue;
 
             const std::string game_save_item = savedata_path + "/" + entry_name;
@@ -1529,6 +1536,8 @@ std::vector<ScannedGame> scan_installed_games_and_saves(bool include_emulators, 
         if (merged_away[i])
             continue;
         auto &game = games[i];
+        if (is_emulator_wrapper_title_id(game.title_id))
+            continue;
         const bool has_saves = (game.total_bytes > 0 || !game.save_path.empty());
         const bool has_real_title = (!game.title.empty() && game.title != game.title_id);
         const bool has_icon = (!game.icon_path.empty());
@@ -1561,6 +1570,20 @@ std::vector<ScannedGame> scan_installed_games_and_saves(bool include_emulators, 
         const auto detected_emus = machete::emulator::detect_installed_emulators(root_prefix);
         for (const auto &emu : detected_emus)
         {
+            if (emu.id.rfind("EMU_", 0) != 0)
+                continue;
+
+            auto it = std::find_if(valid_games.begin(), valid_games.end(),
+                                   [&](const ScannedGame &g) { return g.title_id == emu.id; });
+            if (it != valid_games.end())
+            {
+                it->title = emu.name;
+                it->platform = "EMULATOR";
+                it->total_bytes = machete::emulator::calculate_emulator_saves_size(emu);
+                it->size_str = format_bytes(it->total_bytes);
+                continue;
+            }
+
             ScannedGame eg;
             eg.title = emu.name;
             eg.title_id = emu.id;

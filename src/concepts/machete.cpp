@@ -640,6 +640,9 @@ class Machete final : public app::Concept
     void start_async_backup(const machete::scanner::ScannedGame &game,
                             const machete::storage::StorageDevice &dev)
     {
+        if (is_operating_.load())
+            return;
+
         if (op_thread_.joinable())
             op_thread_.join();
 
@@ -711,6 +714,9 @@ class Machete final : public app::Concept
     void start_async_restore(const machete::scanner::ScannedGame &game,
                              const machete::save::BackupItem &backup)
     {
+        if (is_operating_.load())
+            return;
+
         if (op_thread_.joinable())
             op_thread_.join();
 
@@ -781,6 +787,9 @@ class Machete final : public app::Concept
 
     void start_async_resign(const machete::scanner::ScannedGame &game)
     {
+        if (is_operating_.load())
+            return;
+
         if (op_thread_.joinable())
             op_thread_.join();
 
@@ -835,6 +844,9 @@ class Machete final : public app::Concept
 
     void start_async_batch_backup(const std::vector<std::string> &title_ids, const std::string &dest_root)
     {
+        if (is_operating_.load())
+            return;
+
         if (op_thread_.joinable())
             op_thread_.join();
 
@@ -897,6 +909,9 @@ class Machete final : public app::Concept
 
     void start_async_batch_restore(const std::vector<std::string> &title_ids, const std::string &backup_root)
     {
+        if (is_operating_.load())
+            return;
+
         if (op_thread_.joinable())
             op_thread_.join();
 
@@ -1336,6 +1351,21 @@ class Machete final : public app::Concept
         const ui::Theme &theme = ui::themes()[static_cast<std::size_t>(theme_)];
         const int count = static_cast<int>(ui::themes().size());
 
+        // Proteccion total contra spam y pulsaciones de botones mientras se realiza una operacion en segundo plano
+        if (operating || op_overlay_show_.value > 0.05f)
+        {
+            if (input.is_pressed(Action::confirm) || input.is_pressed(Action::west) ||
+                input.is_pressed(Action::north) || input.is_pressed(Action::back) ||
+                input.is_pressed(Action::page_prev) || input.is_pressed(Action::page_next) ||
+                input.is_pressed(Action::jump_prev) || input.is_pressed(Action::jump_next) ||
+                input.is_pressed(Action::l3) || input.nav != Direction::none)
+            {
+                refuse_.trigger();
+                feedback.play(audio::Cue::error, 1.0f, 0.0f);
+            }
+            return;
+        }
+
         // L1 / R1: Conmutar pestañas de plataforma (PS5 / PS4 / TODOS)
         if (input.is_pressed(Action::page_prev))
         {
@@ -1355,17 +1385,6 @@ class Machete final : public app::Concept
             switch_.start(context_.settings.reduced_motion ? 0.16f : 0.42f);
             feedback.play(audio::Cue::tab, 1.0f, 0.0f);
         }
-        // Protección contra spam de botones mientras se realiza una operación en segundo plano
-        else if (operating || op_overlay_show_.value > 0.05f)
-        {
-            if (input.is_pressed(Action::confirm) || input.is_pressed(Action::west) ||
-                input.is_pressed(Action::north) || input.is_pressed(Action::back) ||
-                input.nav != Direction::none)
-            {
-                refuse_.trigger();
-                feedback.play(audio::Cue::error, 1.0f, 0.0f);
-            }
-        }
         else if (alert_dialog_)
         {
             update_alert_dialog(input, feedback);
@@ -1383,9 +1402,22 @@ class Machete final : public app::Concept
             if (multi_select_mode_)
             {
                 const auto filtered = get_filtered_game_indices();
-                if (selected_title_ids_.size() == filtered.size())
+                bool all_filtered_selected = !filtered.empty();
+                for (int idx : filtered)
                 {
-                    selected_title_ids_.clear();
+                    if (selected_title_ids_.count(games_[static_cast<std::size_t>(idx)].title_id) == 0)
+                    {
+                        all_filtered_selected = false;
+                        break;
+                    }
+                }
+
+                if (all_filtered_selected)
+                {
+                    for (int idx : filtered)
+                    {
+                        selected_title_ids_.erase(games_[static_cast<std::size_t>(idx)].title_id);
+                    }
                 }
                 else
                 {
@@ -1638,26 +1670,26 @@ class Machete final : public app::Concept
                 refuse(feedback, input);
             }
         }
-        // Navegación en el Panel Derecho (Botones de Acción)
+        // Navegacion en el Panel Derecho (Botones de Accion)
         else
         {
-            if (input.nav == Direction::left)
+            if (focus_ == kBtnBackup)
             {
-                if (total_games == 0)
+                if (input.nav == Direction::left)
                 {
-                    const Item target_tab = (current_tab_ == GameTab::PS5) ? kTabPS5 :
-                                            ((current_tab_ == GameTab::PS4) ? kTabPS4 : kTabAll);
-                    move_to(target_tab, feedback);
+                    if (total_games == 0)
+                    {
+                        const Item target_tab = (current_tab_ == GameTab::PS5) ? kTabPS5 :
+                                                ((current_tab_ == GameTab::PS4) ? kTabPS4 : kTabAll);
+                        move_to(target_tab, feedback);
+                    }
+                    else
+                    {
+                        const int visible_idx = std::clamp(selected_game_ - scroll_offset_, 0, std::min(4, total_games - 1));
+                        move_to(kGame0 + visible_idx, feedback);
+                    }
                 }
-                else
-                {
-                    const int visible_idx = std::clamp(selected_game_ - scroll_offset_, 0, std::min(4, total_games - 1));
-                    move_to(kGame0 + visible_idx, feedback);
-                }
-            }
-            else if (focus_ == kBtnBackup)
-            {
-                if (input.nav == Direction::right)
+                else if (input.nav == Direction::right)
                     move_to(kBtnRestore, feedback);
                 else if (input.nav == Direction::down)
                     move_to(kBtnWebServer, feedback);
@@ -1679,10 +1711,28 @@ class Machete final : public app::Concept
             }
             else if (focus_ == kBtnWebServer)
             {
-                if (input.nav == Direction::up)
+                if (input.nav == Direction::left)
+                {
+                    if (total_games == 0)
+                    {
+                        const Item target_tab = (current_tab_ == GameTab::PS5) ? kTabPS5 :
+                                                ((current_tab_ == GameTab::PS4) ? kTabPS4 : kTabAll);
+                        move_to(target_tab, feedback);
+                    }
+                    else
+                    {
+                        const int visible_idx = std::clamp(selected_game_ - scroll_offset_, 0, std::min(4, total_games - 1));
+                        move_to(kGame0 + visible_idx, feedback);
+                    }
+                }
+                else if (input.nav == Direction::up)
                     move_to(kBtnBackup, feedback);
                 else
                     refuse(feedback, input);
+            }
+            else
+            {
+                refuse(feedback, input);
             }
         }
     }
@@ -2411,12 +2461,15 @@ class Machete final : public app::Concept
             // Checkbox / icono de seleccion multiple
             if (multi_select_mode_)
             {
-                const Rect chk_rect{r.x + r.w - 46, r.y + (r.h - 26) / 2, 26, 26};
+                const Rect chk_rect{r.x + r.w - 50, r.y + (r.h - 28) / 2, 28, 28};
                 if (in_batch)
                 {
                     list.rounded_rect(chk_rect, 6.0f, theme.primary);
                     paint.stroke(chk_rect, 6.0f, 1.5f, Color::rgb(0xffffff));
-                    paint.label("[X]", chk_rect.cx(), chk_rect.cy() + 5, 13, Color::rgb(0xffffff), gfx::Align::center);
+                    list.line(chk_rect.cx() - 6.0f, chk_rect.cy(),
+                              chk_rect.cx() - 2.0f, chk_rect.cy() + 5.0f, 2.5f, Color::rgb(0xffffff));
+                    list.line(chk_rect.cx() - 2.0f, chk_rect.cy() + 5.0f,
+                              chk_rect.cx() + 7.0f, chk_rect.cy() - 5.0f, 2.5f, Color::rgb(0xffffff));
                 }
                 else
                 {
