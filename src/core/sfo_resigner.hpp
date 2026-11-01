@@ -64,9 +64,48 @@ struct SfoParamsField
 };
 #pragma pack(pop)
 
+/**
+ * @brief Resuelve y sanea de forma defensiva el user_id local para partidas de PS4 (retrocompatibilidad).
+ *
+ * En PS4, el ID de usuario local es un entero pequeno (1 para el usuario principal, 2 para el segundo usuario, etc.).
+ * Si el valor es 0 o esta contaminado por un ID de 32 bits de PS5 (>= 0x10000, ej. 0x105f615a), se asigna
+ * defensivamente a 1 para evitar errores de corrupcion ("Datos danados") al no coincidir con sceUserServiceGetInitialUser().
+ */
+inline std::uint32_t sanitize_ps4_target_user_id(std::uint32_t dummy_user_id) noexcept
+{
+    if (dummy_user_id != 0 && dummy_user_id < 0x10000)
+    {
+        return dummy_user_id;
+    }
+    if (dummy_user_id >= 0x10000)
+    {
+        MACHETE_LOG("[SFO]", "PS4 dummy traia UID de PS5 0x%08x, forzando indice local 1", dummy_user_id);
+    }
+    return 1;
+}
+
+/**
+ * @brief Extrae el User ID numerico (hexadecimal) a partir de una ruta de guardado (/user/home/<uid>/...).
+ */
+inline std::uint32_t extract_user_id_from_path(const std::string &path) noexcept
+{
+    std::size_t pos = path.find("/user/home/");
+    if (pos != std::string::npos)
+    {
+        std::size_t start = pos + 11;
+        std::size_t end = path.find('/', start);
+        std::string hex_str = (end == std::string::npos) ? path.substr(start) : path.substr(start, end - start);
+        if (!hex_str.empty())
+        {
+            return static_cast<std::uint32_t>(std::strtoul(hex_str.c_str(), nullptr, 16));
+        }
+    }
+    return 0x10000000;
+}
+
 struct ResignParams
 {
-    std::uint32_t target_user_id = 0;    // User ID local de la PS5 (ej. 0x105f615a)
+    std::uint32_t target_user_id = 0;    // User ID local de la consola (1 en PS4 o UID Prospero en PS5)
     std::uint64_t target_account_id = 0; // 64-bit Account ID (0 para cuenta offline no activada)
     bool apply_account_id = true;        // Escribir target_account_id incluso si es 0 (modo Apollo offline)
     const std::uint8_t *psid = nullptr;  // 16 bytes OpenPSID si se conoce
@@ -74,6 +113,7 @@ struct ResignParams
     std::string target_title_id;         // Title ID del juego destino para sincronizar title_id_1 y title_id_2
     bool sync_savedata_list_param = false; // Preservar y sincronizar SAVEDATA_LIST_PARAM
     std::uint32_t target_savedata_list_param = 0; // Valor del SAVEDATA_LIST_PARAM a sincronizar
+    bool is_ps5 = false;                 // Plataforma del guardado (true: nativo PS5, false: PS4 / PS4 BC)
 };
 
 struct SfoSaveMetadata
@@ -425,12 +465,32 @@ inline bool resign_param_sfo_buffer(std::vector<std::uint8_t> &buffer, const Res
             }
 
             // (b) Modificar user_id en PARAMS+0x28
-            if (params.target_user_id != 0)
+            const bool is_ps5_sfo = params.is_ps5 ||
+                                    params.target_title_id.rfind("PPSA", 0) == 0 ||
+                                    params.target_title_id.rfind("PPCX", 0) == 0 ||
+                                    std::strncmp(p->title_id_1, "PPSA", 4) == 0 ||
+                                    std::strncmp(p->title_id_1, "PPCX", 4) == 0;
+
+            if (is_ps5_sfo)
             {
-                p->user_id = params.target_user_id;
-                modified = true;
-                MACHETE_LOG("[SFO]", "Patched PARAMS.user_id -> 0x%08x in %s",
-                            params.target_user_id, log_tag.empty() ? "buffer" : log_tag.c_str());
+                if (params.target_user_id != 0)
+                {
+                    p->user_id = params.target_user_id;
+                    modified = true;
+                    MACHETE_LOG("[SFO]", "Patched PARAMS.user_id -> 0x%08x in %s",
+                                params.target_user_id, log_tag.empty() ? "buffer" : log_tag.c_str());
+                }
+            }
+            else
+            {
+                const std::uint32_t eff_uid = sanitize_ps4_target_user_id(params.target_user_id);
+                if (p->user_id != eff_uid)
+                {
+                    p->user_id = eff_uid;
+                    modified = true;
+                    MACHETE_LOG("[SFO]", "Patched PARAMS.user_id -> 0x%08x (PS4 local index) in %s",
+                                eff_uid, log_tag.empty() ? "buffer" : log_tag.c_str());
+                }
             }
 
             // (c) Sincronizar title_id_1 y title_id_2

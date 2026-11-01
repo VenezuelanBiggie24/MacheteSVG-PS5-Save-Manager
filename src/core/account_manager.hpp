@@ -20,6 +20,16 @@
 namespace machete::account
 {
 
+inline std::uint64_t g_mock_account_id = 0;
+inline void set_mock_account_id(std::uint64_t acc) noexcept
+{
+    g_mock_account_id = acc;
+}
+inline void reset_mock_account_id() noexcept
+{
+    g_mock_account_id = 0;
+}
+
 // Lee un Account ID de 64 bits de un archivo binario si no es 0
 inline std::uint64_t read_account_id_from_file(const std::string &path, off_t offset)
 {
@@ -46,6 +56,11 @@ inline std::uint64_t read_account_id_from_file(const std::string &path, off_t of
 // Busca el Account ID legítimo activo en la consola para el usuario
 inline std::uint64_t detect_active_account_id(std::uint32_t user_id)
 {
+    if (g_mock_account_id != 0)
+    {
+        return g_mock_account_id;
+    }
+
     char uid_hex[32];
     std::snprintf(uid_hex, sizeof(uid_hex), "%x", user_id);
 

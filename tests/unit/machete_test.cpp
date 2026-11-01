@@ -1517,7 +1517,7 @@ TEST(MacheteApolloResignTest, ResignParamSfoUnlocksCopyProtectionAndSetsApolloAc
         0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08,
         0x09, 0x0A, 0x0B, 0x0C, 0x0D, 0x0E, 0x0F, 0x10};
     machete::sfo::ResignParams rp;
-    rp.target_user_id = 0x105f615a;
+    rp.target_user_id = 1;
     rp.target_account_id = 0; // Cuenta offline
     rp.apply_account_id = true;
     rp.psid = test_psid;
@@ -1528,10 +1528,11 @@ TEST(MacheteApolloResignTest, ResignParamSfoUnlocksCopyProtectionAndSetsApolloAc
     machete::sfo::SfoSaveMetadata meta = machete::sfo::read_sfo_metadata(sfo_path);
     EXPECT_TRUE(meta.valid);
     EXPECT_TRUE(meta.has_account_id);
-    const std::uint64_t expected_apollo_acc = machete::sfo::get_apollo_synthetic_account_id(0x105f615a);
+    const std::uint64_t expected_apollo_acc = machete::sfo::get_apollo_synthetic_account_id(1);
     EXPECT_EQ(meta.account_id, expected_apollo_acc);
     EXPECT_NE(meta.account_id, 0ULL);
-    EXPECT_EQ(meta.user_id, 0x105f615au);
+    EXPECT_EQ(meta.user_id, 1u);
+    EXPECT_NE(meta.user_id, 0x105f615au);
     EXPECT_TRUE(meta.has_psid_hmac);
 
     // Limpieza
@@ -1635,6 +1636,251 @@ TEST(MachetePs4BcSaveTest, Ps4SavePreservesLocalUserId1AndPurgesMetaSfo)
     // Limpieza
     (void)std::remove(sfo_path.c_str());
     (void)rmdir(test_dir.c_str());
+}
+
+TEST(MachetePs4UserIdSanitizationTest, DummyWithContaminatedPs5UserIdDefaultsToOne)
+{
+    // 1. Validacion directa de la logica pura de saneamiento defensivo
+    EXPECT_EQ(machete::sfo::sanitize_ps4_target_user_id(0x105f615au), 1u);
+    EXPECT_EQ(machete::sfo::sanitize_ps4_target_user_id(0x10000u), 1u);
+    EXPECT_EQ(machete::sfo::sanitize_ps4_target_user_id(0x20abcdefu), 1u);
+    EXPECT_EQ(machete::sfo::sanitize_ps4_target_user_id(0xA1B2C3D4u), 1u);
+    EXPECT_EQ(machete::sfo::sanitize_ps4_target_user_id(0xFFFFFFFFu), 1u);
+
+    // 2. Validacion a nivel de metadatos SFO de PS4
+    const std::string test_dir = "/tmp/machete_ps4_contaminated_uid_test";
+    (void)mkdir(test_dir.c_str(), 0777);
+    const std::string dummy_sfo_path = test_dir + "/dummy_param.sfo";
+    const std::string target_sfo_path = test_dir + "/target_param.sfo";
+
+    // Sintetizar Save Dummy contaminado con user_id de PS5 (0x105f615a)
+    ASSERT_TRUE(machete::sfo::synthesize_ps4_save_param_sfo(
+        dummy_sfo_path, "CUSA18600", "Book", "Dragon Quest XI S", "Adventure Log", "Slot 1",
+        0x105f615a, 0x37c80d2e21ead98cULL, 325, 0));
+
+    // Sintetizar partida objetivo a restaurar
+    ASSERT_TRUE(machete::sfo::synthesize_ps4_save_param_sfo(
+        target_sfo_path, "CUSA18600", "Book", "Dragon Quest XI S", "Adventure Log", "Slot 1",
+        0, 0, 325, 0));
+
+    machete::sfo::SfoSaveMetadata dummy_meta = machete::sfo::read_sfo_metadata(dummy_sfo_path);
+    ASSERT_TRUE(dummy_meta.valid);
+    EXPECT_EQ(dummy_meta.user_id, 0x105f615au);
+
+    // Resignar aplicando el saneamiento defensivo para retrocompatibilidad PS4
+    machete::sfo::ResignParams rp;
+    rp.target_user_id = machete::sfo::sanitize_ps4_target_user_id(dummy_meta.user_id);
+    rp.target_account_id = dummy_meta.account_id;
+    rp.apply_account_id = true;
+    rp.target_title_id = "CUSA18600";
+
+    EXPECT_EQ(rp.target_user_id, 1u);
+    EXPECT_TRUE(machete::sfo::resign_param_sfo(target_sfo_path, rp));
+
+    // Validar que param.sfo resultante tiene user_id = 1 y nunca el ID contaminado
+    machete::sfo::SfoSaveMetadata target_meta = machete::sfo::read_sfo_metadata(target_sfo_path);
+    EXPECT_TRUE(target_meta.valid);
+    EXPECT_EQ(target_meta.user_id, 1u);
+    EXPECT_NE(target_meta.user_id, 0x105f615au);
+    EXPECT_EQ(target_meta.account_id, 0x37c80d2e21ead98cULL);
+
+    (void)std::remove(dummy_sfo_path.c_str());
+    (void)std::remove(target_sfo_path.c_str());
+    (void)rmdir(test_dir.c_str());
+}
+
+TEST(MachetePs4UserIdSanitizationTest, DummyWithLegitimateLocalUserIdPreservesUserId)
+{
+    // 1. Validacion directa de la logica pura para usuarios secundarios locales legitimos
+    EXPECT_EQ(machete::sfo::sanitize_ps4_target_user_id(2u), 2u);
+    EXPECT_EQ(machete::sfo::sanitize_ps4_target_user_id(1u), 1u);
+    EXPECT_EQ(machete::sfo::sanitize_ps4_target_user_id(3u), 3u);
+    EXPECT_EQ(machete::sfo::sanitize_ps4_target_user_id(16u), 16u);
+
+    // 2. Validacion a nivel de metadatos SFO de PS4
+    const std::string test_dir = "/tmp/machete_ps4_legit_user2_test";
+    (void)mkdir(test_dir.c_str(), 0777);
+    const std::string dummy_sfo_path = test_dir + "/dummy_param.sfo";
+    const std::string target_sfo_path = test_dir + "/target_param.sfo";
+
+    // Sintetizar Save Dummy con user_id local legitimo = 2
+    ASSERT_TRUE(machete::sfo::synthesize_ps4_save_param_sfo(
+        dummy_sfo_path, "CUSA03173", "savedata0", "Bloodborne", "Hunter", "Slot 2",
+        2, 0x1122334455667788ULL, 512, 10));
+
+    ASSERT_TRUE(machete::sfo::synthesize_ps4_save_param_sfo(
+        target_sfo_path, "CUSA03173", "savedata0", "Bloodborne", "Hunter", "Slot 2",
+        0, 0, 512, 10));
+
+    machete::sfo::SfoSaveMetadata dummy_meta = machete::sfo::read_sfo_metadata(dummy_sfo_path);
+    ASSERT_TRUE(dummy_meta.valid);
+    EXPECT_EQ(dummy_meta.user_id, 2u);
+
+    machete::sfo::ResignParams rp;
+    rp.target_user_id = machete::sfo::sanitize_ps4_target_user_id(dummy_meta.user_id);
+    rp.target_account_id = dummy_meta.account_id;
+    rp.apply_account_id = true;
+    rp.target_title_id = "CUSA03173";
+
+    EXPECT_EQ(rp.target_user_id, 2u);
+    EXPECT_TRUE(machete::sfo::resign_param_sfo(target_sfo_path, rp));
+
+    machete::sfo::SfoSaveMetadata target_meta = machete::sfo::read_sfo_metadata(target_sfo_path);
+    EXPECT_TRUE(target_meta.valid);
+    EXPECT_EQ(target_meta.user_id, 2u);
+    EXPECT_EQ(target_meta.account_id, 0x1122334455667788ULL);
+
+    (void)std::remove(dummy_sfo_path.c_str());
+    (void)std::remove(target_sfo_path.c_str());
+    (void)rmdir(test_dir.c_str());
+}
+
+TEST(MachetePs4UserIdSanitizationTest, DummyWithZeroUserIdDefaultsToOne)
+{
+    // 1. Validacion directa de la logica pura para user_id = 0
+    EXPECT_EQ(machete::sfo::sanitize_ps4_target_user_id(0u), 1u);
+
+    // 2. Validacion a nivel de metadatos SFO de PS4
+    const std::string test_dir = "/tmp/machete_ps4_zero_uid_test";
+    (void)mkdir(test_dir.c_str(), 0777);
+    const std::string dummy_sfo_path = test_dir + "/dummy_param.sfo";
+    const std::string target_sfo_path = test_dir + "/target_param.sfo";
+
+    // Sintetizar Save Dummy con user_id = 0
+    ASSERT_TRUE(machete::sfo::synthesize_ps4_save_param_sfo(
+        dummy_sfo_path, "CUSA18600", "Book", "Dragon Quest XI S", "Adventure Log", "Slot 1",
+        0, 0x9988776655443322ULL, 325, 0));
+
+    ASSERT_TRUE(machete::sfo::synthesize_ps4_save_param_sfo(
+        target_sfo_path, "CUSA18600", "Book", "Dragon Quest XI S", "Adventure Log", "Slot 1",
+        999, 0, 325, 0));
+
+    machete::sfo::SfoSaveMetadata dummy_meta = machete::sfo::read_sfo_metadata(dummy_sfo_path);
+    ASSERT_TRUE(dummy_meta.valid);
+    EXPECT_EQ(dummy_meta.user_id, 0u);
+
+    machete::sfo::ResignParams rp;
+    rp.target_user_id = machete::sfo::sanitize_ps4_target_user_id(dummy_meta.user_id);
+    rp.target_account_id = dummy_meta.account_id;
+    rp.apply_account_id = true;
+    rp.target_title_id = "CUSA18600";
+
+    EXPECT_EQ(rp.target_user_id, 1u);
+    EXPECT_TRUE(machete::sfo::resign_param_sfo(target_sfo_path, rp));
+
+    machete::sfo::SfoSaveMetadata target_meta = machete::sfo::read_sfo_metadata(target_sfo_path);
+    EXPECT_TRUE(target_meta.valid);
+    EXPECT_EQ(target_meta.user_id, 1u);
+    EXPECT_EQ(target_meta.account_id, 0x9988776655443322ULL);
+
+    (void)std::remove(dummy_sfo_path.c_str());
+    (void)std::remove(target_sfo_path.c_str());
+    (void)rmdir(test_dir.c_str());
+}
+
+TEST(MacheteOtherConsoleSimulationTest, RestorePs5UsesPs5UidAndRestorePs4MaintainsUserIdOne)
+{
+    // Simulacion de entorno de 'Otra Consola':
+    // Consola con PS5 UID = 0xA1B2C3D4 y Account ID = 0x1122334455667788ULL
+    const std::uint32_t console_ps5_uid = 0xA1B2C3D4u;
+    const std::uint64_t console_account_id = 0x1122334455667788ULL;
+
+    machete::account::set_mock_account_id(console_account_id);
+
+    const std::string test_root = "/tmp/machete_sim_other_console";
+    const std::string ps5_dst_dir = test_root + "/user/home/a1b2c3d4/savedata_prospero/PPSA01411";
+    const std::string ps4_dst_dir = test_root + "/user/home/a1b2c3d4/savedata/CUSA18600";
+
+    // 1. Validar que la extraccion de user_id desde las rutas de la consola resuelve 0xA1B2C3D4
+    EXPECT_EQ(machete::sfo::extract_user_id_from_path(ps5_dst_dir), console_ps5_uid);
+    EXPECT_EQ(machete::sfo::extract_user_id_from_path(ps4_dst_dir), console_ps5_uid);
+    EXPECT_EQ(machete::account::detect_active_account_id(console_ps5_uid), console_account_id);
+
+    // 2. Simulacion Restore PS5:
+    // En PS5, el proceso de resignado y registro usa directamente el UID de 32 bits de PS5 (0xA1B2C3D4)
+    {
+        const bool is_ps5 = true;
+        const std::uint32_t resolved_uid = machete::sfo::extract_user_id_from_path(ps5_dst_dir);
+        const std::uint64_t active_account = machete::account::detect_active_account_id(resolved_uid);
+
+        machete::sfo::ResignParams rp_ps5;
+        if (is_ps5)
+        {
+            rp_ps5.target_user_id = resolved_uid;
+        }
+        else
+        {
+            rp_ps5.target_user_id = machete::sfo::sanitize_ps4_target_user_id(resolved_uid);
+        }
+        rp_ps5.target_account_id = active_account;
+
+        // Restore PS5 usa 0xA1B2C3D4
+        EXPECT_EQ(rp_ps5.target_user_id, console_ps5_uid);
+        EXPECT_EQ(rp_ps5.target_account_id, console_account_id);
+    }
+
+    // 3. Simulacion Restore PS4:
+    // En PS4 (retrocompatibilidad), aunque el path de la consola contenga 0xA1B2C3D4,
+    // el param.sfo generado/mantenido DEBE ser defensivamente user_id = 1 (nunca 0xA1B2C3D4).
+    {
+        (void)mkdir(test_root.c_str(), 0777);
+        (void)mkdir((test_root + "/user").c_str(), 0777);
+        (void)mkdir((test_root + "/user/home").c_str(), 0777);
+        (void)mkdir((test_root + "/user/home/a1b2c3d4").c_str(), 0777);
+        (void)mkdir((test_root + "/user/home/a1b2c3d4/savedata").c_str(), 0777);
+        (void)mkdir(ps4_dst_dir.c_str(), 0777);
+        (void)mkdir((ps4_dst_dir + "/sce_sys").c_str(), 0777);
+
+        const std::string sfo_path = ps4_dst_dir + "/sce_sys/param.sfo";
+        ASSERT_TRUE(machete::sfo::synthesize_ps4_save_param_sfo(
+            sfo_path, "CUSA18600", "Book", "Dragon Quest XI S", "Adventure Log", "Slot 1",
+            console_ps5_uid, 0x99999999ULL, 325, 0));
+
+        const bool is_ps5 = false;
+        const std::uint32_t resolved_uid = machete::sfo::extract_user_id_from_path(ps4_dst_dir);
+        const std::uint64_t active_account = machete::account::detect_active_account_id(resolved_uid);
+
+        machete::sfo::ResignParams rp_ps4;
+        if (is_ps5)
+        {
+            rp_ps4.target_user_id = resolved_uid;
+        }
+        else
+        {
+            // Para PS4 retrocompatible, se sanea defensivamente a 1 (o local legitimo < 0x10000)
+            rp_ps4.target_user_id = machete::sfo::sanitize_ps4_target_user_id(resolved_uid);
+        }
+        rp_ps4.target_account_id = active_account;
+        rp_ps4.apply_account_id = true;
+        rp_ps4.target_title_id = "CUSA18600";
+
+        // Verificar asignacion previa al resignado
+        EXPECT_EQ(rp_ps4.target_user_id, 1u);
+        EXPECT_NE(rp_ps4.target_user_id, console_ps5_uid);
+        EXPECT_EQ(rp_ps4.target_account_id, console_account_id);
+
+        // Ejecutar resignado
+        EXPECT_TRUE(machete::sfo::resign_param_sfo(sfo_path, rp_ps4));
+
+        // Validar metadatos finales en el contenedor PS4
+        machete::sfo::SfoSaveMetadata meta = machete::sfo::read_sfo_metadata(sfo_path);
+        EXPECT_TRUE(meta.valid);
+        EXPECT_EQ(meta.user_id, 1u);
+        EXPECT_NE(meta.user_id, console_ps5_uid);
+        EXPECT_EQ(meta.account_id, console_account_id);
+
+        // Limpieza de archivos de simulacion
+        (void)std::remove(sfo_path.c_str());
+        (void)rmdir((ps4_dst_dir + "/sce_sys").c_str());
+        (void)rmdir(ps4_dst_dir.c_str());
+        (void)rmdir((test_root + "/user/home/a1b2c3d4/savedata").c_str());
+        (void)rmdir((test_root + "/user/home/a1b2c3d4").c_str());
+        (void)rmdir((test_root + "/user/home").c_str());
+        (void)rmdir((test_root + "/user").c_str());
+        (void)rmdir(test_root.c_str());
+    }
+
+    machete::account::reset_mock_account_id();
 }
 
 TEST(MacheteKeystonePriorityTest, InstalledGameKeystoneOverridesForeignBackupKeystone)
@@ -4075,7 +4321,7 @@ TEST(MacheteSfoResignFullTest, FullPs4SfoResignLayoutAndHmac)
 
     // Prepare ResignParams with new user_id, new account_id, target_title_id, local psid, and list param
     machete::sfo::ResignParams rp;
-    rp.target_user_id = 0x20abcdef;
+    rp.target_user_id = 2; // Indice de usuario local valido de PS4
     rp.target_account_id = 0x9988776655443322ULL;
     rp.apply_account_id = true;
     rp.target_title_id = "CUSA18600";
@@ -4092,7 +4338,7 @@ TEST(MacheteSfoResignFullTest, FullPs4SfoResignLayoutAndHmac)
 
     machete::sfo::SfoSaveMetadata meta{};
     EXPECT_TRUE(machete::sfo::read_sfo_metadata(tmp_sfo, meta));
-    EXPECT_EQ(meta.user_id, 0x20abcdef);
+    EXPECT_EQ(meta.user_id, 2u);
     EXPECT_EQ(meta.account_id, 0x9988776655443322ULL);
     EXPECT_EQ(meta.title_id, "CUSA18600");
     EXPECT_EQ(meta.title_id_1, "CUSA18600");

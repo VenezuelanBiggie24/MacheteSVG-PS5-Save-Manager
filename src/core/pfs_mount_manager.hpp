@@ -1892,10 +1892,10 @@ inline PfsRestoreReport inject_and_resign_save(const std::string &title_id,
         else
         {
             // Para juegos de PS4 en retrocompatibilidad, el user_id dentro de param.sfo
-            // es el ID de usuario local de PS4 (1 para el usuario principal, o el del dummy local).
+            // es el ID de usuario local de PS4 (1 para el usuario principal, o el del dummy local si es legitimo).
             // NUNCA debe inyectarse el ID de 32 bits de PS5 (ej. 0x105f615a), pues provoca error de corrupcion "Datos dañados"
             // al no coincidir con sceUserServiceGetInitialUser() (que en la capa de compatibilidad de PS4 devuelve 1).
-            rp.target_user_id = (dummy_sfo_meta.user_id != 0) ? dummy_sfo_meta.user_id : 1;
+            rp.target_user_id = sfo::sanitize_ps4_target_user_id(dummy_sfo_meta.user_id);
         }
         rp.target_account_id = active_account_id;
         rp.apply_account_id = true;
@@ -2150,7 +2150,7 @@ inline PfsRestoreReport inject_and_resign_save(const std::string &title_id,
                         }
                         else
                         {
-                            rp.target_user_id = (dummy_sfo_meta.user_id != 0) ? dummy_sfo_meta.user_id : 1;
+                            rp.target_user_id = sfo::sanitize_ps4_target_user_id(dummy_sfo_meta.user_id);
                         }
                     }
                     const std::string inner_ks = mnt.mount_point() + "/sce_sys/keystone";

@@ -1564,7 +1564,28 @@ void post_process_restored_save(const scanner::ScannedGame &game,
 
         machete::sfo::ResignParams rp;
         // Para PS4 en retrocompatibilidad, el user_id dentro de param.sfo es 1 (el ID de usuario local de PS4)
-        rp.target_user_id = 1;
+        // o el del dummy local preservado si contiene un ID legitimo de PS4 (1..0xffff).
+        std::uint32_t ps4_target_uid = 1;
+        if (had_local_dummy && !preserved_dummy_dir.empty())
+        {
+            for (const std::string &cand_sfo : {
+                     preserved_dummy_dir + "/.meta_dummy/param.sfo",
+                     preserved_dummy_dir + "/.meta_dummy/sce_sys/param.sfo",
+                     preserved_dummy_dir + "/param.sfo",
+                     preserved_dummy_dir + "/sce_sys/param.sfo"})
+            {
+                if (access(cand_sfo.c_str(), R_OK) == 0)
+                {
+                    auto dmeta = machete::sfo::read_sfo_metadata(cand_sfo);
+                    if (dmeta.valid)
+                    {
+                        ps4_target_uid = machete::sfo::sanitize_ps4_target_user_id(dmeta.user_id);
+                        break;
+                    }
+                }
+            }
+        }
+        rp.target_user_id = ps4_target_uid;
         rp.target_account_id = active_account_id;
         rp.apply_account_id = true;
         if (has_psid)
@@ -3293,8 +3314,9 @@ OperationResult resign_local_ps4_save(const scanner::ScannedGame &game,
     const bool has_psid = machete::vault::get_console_open_psid(console_psid);
 
     machete::sfo::ResignParams rp;
-    // Para PS4 en retrocompatibilidad, el user_id dentro de param.sfo es 1 (el ID de usuario local de PS4)
-    rp.target_user_id = 1;
+    // Para PS4 en retrocompatibilidad, el user_id dentro de param.sfo es el ID local (1 por defecto)
+    auto orig_meta = machete::sfo::read_sfo_metadata(save_dir + "/sce_sys/param.sfo");
+    rp.target_user_id = orig_meta.valid ? machete::sfo::sanitize_ps4_target_user_id(orig_meta.user_id) : 1;
     rp.target_account_id = active_account_id;
     rp.apply_account_id = true;
     if (has_psid)
